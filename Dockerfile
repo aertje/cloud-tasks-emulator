@@ -1,4 +1,4 @@
-FROM golang:1.13-alpine
+FROM golang:1.13-alpine as builder
 
 WORKDIR /app
 
@@ -10,6 +10,11 @@ COPY . .
 
 RUN go build -o emulator .
 
-EXPOSE 8123
 
-ENTRYPOINT ["./emulator"]
+FROM alpine:latest
+
+ENTRYPOINT ["/emulator"]
+
+WORKDIR /
+
+COPY --from=builder /app/emulator .

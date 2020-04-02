@@ -24,7 +24,7 @@ import (
 var r *regexp.Regexp
 
 func init() {
-	r = regexp.MustCompile("projects/([a-z0-9-]+)/locations/[a-z0-9-]+/queues/[a-z0-9-]+/tasks/[0-9]+")
+	r = regexp.MustCompile("projects/([a-z0-9-]+)/locations/[a-z0-9-]+/queues/[a-zA-Z0-9-]+/tasks/[0-9]+")
 }
 
 // Task holds all internals for a task

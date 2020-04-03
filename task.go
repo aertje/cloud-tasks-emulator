@@ -21,6 +21,12 @@ import (
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
 )
 
+var r *regexp.Regexp
+
+func init() {
+	r = regexp.MustCompile("projects/([a-z0-9-]+)/locations/[a-z0-9-]+/queues/[a-zA-Z0-9-]+/tasks/[0-9]+")
+}
+
 // Task holds all internals for a task
 type Task struct {
 	queue *Queue
@@ -107,7 +113,6 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 			appEngineHTTPRequest.AppEngineRouting = &tasks.AppEngineRouting{}
 		}
 
-		r := regexp.MustCompile("projects/([a-z0-9-]+)/locations/[a-z0-9-]+/queues/[a-z0-9-]+/tasks/[0-9]+")
 		project := r.FindStringSubmatch(taskState.GetName())[1]
 
 		host := project + ".appspot.com"

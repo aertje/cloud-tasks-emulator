@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -20,7 +21,7 @@ type Queue struct {
 
 	work chan *Task
 
-	ts map[string]*Task
+	ts sync.Map
 
 	tokenBucket chan bool
 
@@ -48,7 +49,7 @@ func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Qu
 		state:                state,
 		fire:                 make(chan *Task),
 		work:                 make(chan *Task),
-		ts:                   make(map[string]*Task),
+		ts:                   sync.Map{},
 		onTaskDone:           onTaskDone,
 		tokenBucket:          make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
 		tokenGenerator:       time.NewTicker(time.Second / time.Duration(state.GetRateLimits().GetMaxDispatchesPerSecond())),
@@ -167,13 +168,13 @@ func (queue *Queue) Run() {
 // NewTask creates a new task on the queue
 func (queue *Queue) NewTask(newTaskState *tasks.Task) (*Task, *tasks.Task) {
 	task := NewTask(queue, newTaskState, func(task *Task) {
-		queue.ts[task.state.GetName()] = nil
+		queue.ts.Store(task.state.GetName(), nil)
 		queue.onTaskDone(task)
 	})
 
 	taskState := proto.Clone(task.state).(*tasks.Task)
 
-	queue.ts[taskState.GetName()] = task
+	queue.ts.Store(taskState.GetName(), task)
 
 	task.Schedule()
 
@@ -196,12 +197,14 @@ func (queue *Queue) Delete() {
 // Purge purges all tasks from the queue
 func (queue *Queue) Purge() {
 	go func() {
-		for _, task := range queue.ts {
+		queue.ts.Range(func(_, v interface{}) bool {
 			// Avoid task firing
-			if task != nil {
+			if v != nil {
+				task := v.(*Task)
 				task.Delete()
 			}
-		}
+			return true
+		})
 	}()
 }
 

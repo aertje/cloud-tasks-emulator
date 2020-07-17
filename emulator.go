@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sync"
 
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
 	v1 "google.golang.org/genproto/googleapis/iam/v1"
@@ -21,15 +22,15 @@ import (
 // NewServer creates a new emulator server with its own task and queue bookkeeping
 func NewServer() *Server {
 	return &Server{
-		qs: make(map[string]*Queue),
-		ts: make(map[string]*Task),
+		qs: sync.Map{},
+		ts: sync.Map{},
 	}
 }
 
 // Server represents the emulator server
 type Server struct {
-	qs map[string]*Queue
-	ts map[string]*Task
+	qs sync.Map
+	ts sync.Map
 }
 
 // ListQueues lists the existing queues
@@ -38,11 +39,13 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 	var queueStates []*tasks.Queue
 
-	for _, queue := range s.qs {
-		if queue != nil {
+	s.qs.Range(func(_, v interface{}) bool {
+		if v != nil {
+			queue := v.(*Queue)
 			queueStates = append(queueStates, queue.state)
 		}
-	}
+		return true;
+	})
 
 	return &tasks.ListQueuesResponse{
 		Queues: queueStates,
@@ -51,7 +54,8 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 // GetQueue returns the requested queue
 func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
-	queue := s.qs[in.GetName()]
+	tmpQ, _ := s.qs.Load(in.GetName())
+	queue := tmpQ.(*Queue)
 
 	// TODO: handle not found
 
@@ -72,9 +76,9 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 	if !parentMatched {
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
 	}
-	queue, ok := s.qs[name]
+	tmpQ, ok := s.qs.Load(name)
 	if ok {
-		if queue != nil {
+		if tmpQ != nil {
 			return nil, status.Errorf(codes.AlreadyExists, "Queue already exists")
 		}
 
@@ -82,15 +86,14 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 	}
 
 	// Make a deep copy so that the original is frozen for the http response
-	queue, queueState = NewQueue(
+	queue, queueState := NewQueue(
 		name,
 		proto.Clone(queueState).(*tasks.Queue),
 		func(task *Task) {
-			// TODO: sync
-			s.ts[task.state.GetName()] = nil
+			s.ts.Store(task.state.GetName(), nil)
 		},
 	)
-	s.qs[name] = queue
+	s.qs.Store(name, queue)
 	queue.Run()
 
 	return queueState, nil
@@ -103,24 +106,25 @@ func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) 
 
 // DeleteQueue removes an existing queue.
 func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*empty.Empty, error) {
-	queue, ok := s.qs[in.GetName()]
+	tmpQ, ok := s.qs.Load(in.GetName())
 
 	// Cloud responds with same error for recently deleted queue
-	if !ok || queue == nil {
+	if !ok || tmpQ == nil {
 		return nil, status.Errorf(codes.NotFound, "Requested entity was not found.")
 	}
 
+	queue := tmpQ.(*Queue)
 	queue.Delete()
 
-	// TODO: Sync
-	s.qs[in.GetName()] = nil
+	s.qs.Store(in.GetName(), nil)
 
 	return &empty.Empty{}, nil
 }
 
 // PurgeQueue purges the specified queue
 func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	tmpQ, _ := s.qs.Load(in.GetName())
+	queue := tmpQ.(*Queue)
 
 	queue.Purge()
 
@@ -129,7 +133,8 @@ func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*
 
 // PauseQueue pauses queue execution
 func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	tmpQ, _ := s.qs.Load(in.GetName())
+	queue := tmpQ.(*Queue)
 
 	queue.Pause()
 
@@ -138,7 +143,8 @@ func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*
 
 // ResumeQueue resumes a paused queue
 func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	tmpQ, _ := s.qs.Load(in.GetName())
+	queue := tmpQ.(*Queue)
 
 	queue.Resume()
 
@@ -163,15 +169,18 @@ func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissio
 // ListTasks lists the tasks in the specified queue
 func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
 	// TODO: Implement pageing of some sort
-	queue, _ := s.qs[in.GetParent()]
+	tmpQ, _ := s.qs.Load(in.GetParent())
+	queue := tmpQ.(*Queue)
 
 	var taskStates []*tasks.Task
 
-	for _, task := range queue.ts {
-		if task != nil {
+	queue.ts.Range(func(_, v interface{}) bool {
+		if v != nil {
+			task := v.(*Task)
 			taskStates = append(taskStates, task.state)
 		}
-	}
+		return true
+	})
 
 	return &tasks.ListTasksResponse{
 		Tasks: taskStates,
@@ -180,14 +189,15 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 
 // GetTask returns the specified task
 func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
-	task, ok := s.ts[in.GetName()]
+	tmpT, ok := s.ts.Load(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
-	if task == nil {
+	if tmpT == nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "The task no longer exists,  though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
+	task := tmpT.(*Task)
 	return task.state, nil
 }
 
@@ -196,30 +206,32 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	// TODO: task name validation
 
 	queueName := in.GetParent()
-	queue, ok := s.qs[queueName]
+	tmpQ, ok := s.qs.Load(queueName)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Queue does not exist.")
 	}
-	if queue == nil {
+	if tmpQ == nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "The queue no longer exists, though a queue with this name existed recently.")
 	}
+	queue := tmpQ.(*Queue)
 
 	task, taskState := queue.NewTask(in.GetTask())
-	s.ts[taskState.GetName()] = task
+	s.ts.Store(taskState.GetName(), task)
 
 	return taskState, nil
 }
 
 // DeleteTask removes an existing task
 func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*empty.Empty, error) {
-	task, ok := s.ts[in.GetName()]
+	tmpT, ok := s.ts.Load(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
-	if task == nil {
+	if tmpT == nil {
 		return nil, status.Errorf(codes.NotFound, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
+	task := tmpT.(*Task)
 	task.Delete()
 
 	return &empty.Empty{}, nil
@@ -227,15 +239,16 @@ func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*
 
 // RunTask executes an existing task immediately
 func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.Task, error) {
-	task, ok := s.ts[in.GetName()]
+	tmpT, ok := s.ts.Load(in.GetName())
 
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
-	if task == nil {
+	if tmpT == nil {
 		return nil, status.Errorf(codes.NotFound, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
+	task := tmpT.(*Task)
 	taskState := task.Run()
 
 	return taskState, nil

@@ -8,7 +8,7 @@ This project is not associated with Google.
 
 ## Status and features
 This project is still in alpha, but it's functional.
-It uses the v2beta3 version of cloud tasks, to support both http and appengine requests.
+It uses the v2 version of cloud tasks, to support both http and appengine requests.
 
 It supports the following:
 - Targeting normal http and appengine endpoints.
@@ -49,11 +49,11 @@ docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123
 Here's a little snippet of python code that you can use to talk to it.
 
 ```
-from google.cloud import tasks_v2beta3
+from google.cloud import tasks_v2
 import grpc
 
 grpc_channel = grpc.insecure_channel('localhost:8123')
-client = tasks_v2beta3.CloudTasksClient(channel=grpc_channel)
+client = tasks_v2.CloudTasksClient(channel=grpc_channel)
 
 parent = client.location_path('my-sandbox', 'us-central1')
 queue_name = parent + '/queues/test'
@@ -74,7 +74,7 @@ In Go it would go something like this.
 import (
 	"context"
 
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
+	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
 )
 

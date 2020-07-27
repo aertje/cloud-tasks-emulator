@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	. "cloud.google.com/go/cloudtasks/apiv2beta3"
+	. "cloud.google.com/go/cloudtasks/apiv2"
 	. "github.com/PwC-Next/cloud-tasks-emulator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/option"
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
+	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
 )
 

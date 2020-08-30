@@ -34,13 +34,22 @@ Fire it up; you can specify host and port (defaults to localhost:8123):
 go run ./ -host localhost -port 8000
 ```
 
+You can also optionally specify one or more queues to create automatically on startup:
+
+```
+go run ./ -host localhost \
+  -port 8000 \
+  -queue projects/dev/locations/here/queues/firstq \
+  -queue projects/dev/locations/here/queues/anotherq
+```
+
 Once running, you connect to it using the standard google cloud tasks GRPC libraries.
 
 ### Docker
 You can use the dockerfile if you don't want to install a Go build environment:
 ```
 docker build ./ -t tasks_emulator
-docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 
+docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -queue projects/dev/locations/here/queues/anotherq
 ```
 
 ## Use it

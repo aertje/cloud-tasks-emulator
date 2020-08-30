@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -21,6 +22,8 @@ type Queue struct {
 	work chan *Task
 
 	ts map[string]*Task
+
+	tsMux sync.Mutex
 
 	tokenBucket chan bool
 
@@ -62,6 +65,16 @@ func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Qu
 	}
 
 	return queue, state
+}
+
+func (queue *Queue) setTask(taskName string, task *Task) {
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
+	queue.ts[taskName] = task
+}
+
+func (queue *Queue) removeTask(taskName string) {
+	queue.setTask(taskName, nil)
 }
 
 func setInitialQueueState(queueState *tasks.Queue) {
@@ -167,13 +180,13 @@ func (queue *Queue) Run() {
 // NewTask creates a new task on the queue
 func (queue *Queue) NewTask(newTaskState *tasks.Task) (*Task, *tasks.Task) {
 	task := NewTask(queue, newTaskState, func(task *Task) {
-		queue.ts[task.state.GetName()] = nil
+		queue.removeTask(task.state.GetName())
 		queue.onTaskDone(task)
 	})
 
 	taskState := proto.Clone(task.state).(*tasks.Task)
 
-	queue.ts[taskState.GetName()] = task
+	queue.setTask(taskState.GetName(), task)
 
 	task.Schedule()
 

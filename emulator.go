@@ -7,6 +7,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
 	v1 "google.golang.org/genproto/googleapis/iam/v1"
@@ -31,6 +32,43 @@ func NewServer() *Server {
 type Server struct {
 	qs map[string]*Queue
 	ts map[string]*Task
+
+	qsMux sync.Mutex
+	tsMux sync.Mutex
+}
+
+func (s *Server) setQueue(queueName string, queue *Queue) {
+	s.qsMux.Lock()
+	defer s.qsMux.Unlock()
+	s.qs[queueName] = queue
+}
+
+func (s *Server) fetchQueue(queueName string) (*Queue, bool) {
+	s.qsMux.Lock()
+	defer s.qsMux.Unlock()
+	queue, ok := s.qs[queueName]
+	return queue, ok
+}
+
+func (s *Server) removeQueue(queueName string) {
+	s.setQueue(queueName, nil)
+}
+
+func (s *Server) setTask(taskName string, task *Task) {
+	s.tsMux.Lock()
+	defer s.tsMux.Unlock()
+	s.ts[taskName] = task
+}
+
+func (s *Server) fetchTask(taskName string) (*Task, bool) {
+	s.tsMux.Lock()
+	defer s.tsMux.Unlock()
+	task, ok := s.ts[taskName]
+	return task, ok
+}
+
+func (s *Server) removeTask(taskName string) {
+	s.setTask(taskName, nil)
 }
 
 // ListQueues lists the existing queues
@@ -73,7 +111,7 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 	if !parentMatched {
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
 	}
-	queue, ok := s.qs[name]
+	queue, ok := s.fetchQueue(name)
 	if ok {
 		if queue != nil {
 			return nil, status.Errorf(codes.AlreadyExists, "Queue already exists")
@@ -87,11 +125,10 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 		name,
 		proto.Clone(queueState).(*tasks.Queue),
 		func(task *Task) {
-			// TODO: sync
-			s.ts[task.state.GetName()] = nil
+			s.removeTask(task.state.GetName())
 		},
 	)
-	s.qs[name] = queue
+	s.setQueue(name, queue)
 	queue.Run()
 
 	return queueState, nil
@@ -104,7 +141,7 @@ func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) 
 
 // DeleteQueue removes an existing queue.
 func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*empty.Empty, error) {
-	queue, ok := s.qs[in.GetName()]
+	queue, ok := s.fetchQueue(in.GetName())
 
 	// Cloud responds with same error for recently deleted queue
 	if !ok || queue == nil {
@@ -113,15 +150,14 @@ func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) 
 
 	queue.Delete()
 
-	// TODO: Sync
-	s.qs[in.GetName()] = nil
+	s.removeQueue(in.GetName())
 
 	return &empty.Empty{}, nil
 }
 
 // PurgeQueue purges the specified queue
 func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	queue, _ := s.fetchQueue(in.GetName())
 
 	queue.Purge()
 
@@ -130,7 +166,7 @@ func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*
 
 // PauseQueue pauses queue execution
 func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	queue, _ := s.fetchQueue(in.GetName())
 
 	queue.Pause()
 
@@ -139,7 +175,7 @@ func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*
 
 // ResumeQueue resumes a paused queue
 func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.qs[in.GetName()]
+	queue, _ := s.fetchQueue(in.GetName())
 
 	queue.Resume()
 
@@ -164,7 +200,7 @@ func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissio
 // ListTasks lists the tasks in the specified queue
 func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
 	// TODO: Implement pageing of some sort
-	queue, _ := s.qs[in.GetParent()]
+	queue, _ := s.fetchQueue(in.GetParent())
 
 	var taskStates []*tasks.Task
 
@@ -181,7 +217,7 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 
 // GetTask returns the specified task
 func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
-	task, ok := s.ts[in.GetName()]
+	task, ok := s.fetchTask(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
@@ -197,7 +233,7 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	// TODO: task name validation
 
 	queueName := in.GetParent()
-	queue, ok := s.qs[queueName]
+	queue, ok := s.fetchQueue(queueName)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Queue does not exist.")
 	}
@@ -206,14 +242,15 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	}
 
 	task, taskState := queue.NewTask(in.GetTask())
-	s.ts[taskState.GetName()] = task
+
+	s.setTask(taskState.GetName(), task)
 
 	return taskState, nil
 }
 
 // DeleteTask removes an existing task
 func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*empty.Empty, error) {
-	task, ok := s.ts[in.GetName()]
+	task, ok := s.fetchTask(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
@@ -221,6 +258,7 @@ func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*
 		return nil, status.Errorf(codes.NotFound, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
+	// The removal of the task from the server struct is handled in the queue callback
 	task.Delete()
 
 	return &empty.Empty{}, nil
@@ -228,7 +266,7 @@ func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*
 
 // RunTask executes an existing task immediately
 func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.Task, error) {
-	task, ok := s.ts[in.GetName()]
+	task, ok := s.fetchTask(in.GetName())
 
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
@@ -258,17 +296,17 @@ func (i *arrayFlags) Set(value string) error {
 func createInitialQueue(emulatorServer *Server, name string) {
 	print(fmt.Sprintf("Creating initial queue %s\n", name))
 
-	r          := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
+	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
 	parentName := r.ReplaceAllString(name, "")
 
 	queue := &tasks.Queue{Name: name}
-	req   := &tasks.CreateQueueRequest{
+	req := &tasks.CreateQueueRequest{
 		Parent: parentName,
 		Queue:  queue,
 	}
 
-	_,err := emulatorServer.CreateQueue(context.TODO(), req)
-	if (err != nil) {
+	_, err := emulatorServer.CreateQueue(context.TODO(), req)
+	if err != nil {
 		panic(err)
 	}
 }
@@ -289,7 +327,7 @@ func main() {
 
 	print(fmt.Sprintf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port))
 
-	grpcServer     := grpc.NewServer()
+	grpcServer := grpc.NewServer()
 	emulatorServer := NewServer()
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 

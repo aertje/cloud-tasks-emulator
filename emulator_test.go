@@ -84,7 +84,7 @@ func TestCreateTask(t *testing.T) {
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
-			PayloadType: &taskspb.Task_HttpRequest{
+			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://www.google.com",
 				},
@@ -120,7 +120,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
-			PayloadType: &taskspb.Task_HttpRequest{
+			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://localhost:5000/success",
 				},
@@ -165,7 +165,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
-			PayloadType: &taskspb.Task_HttpRequest{
+			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://localhost:5000/not_found",
 				},

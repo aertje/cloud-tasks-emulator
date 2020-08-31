@@ -93,7 +93,7 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 // GetQueue returns the requested queue
 func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
-	queue := s.qs[in.GetName()]
+	queue, _ := s.fetchQueue(in.GetName())
 
 	// TODO: handle not found
 

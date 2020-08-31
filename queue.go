@@ -209,6 +209,10 @@ func (queue *Queue) Delete() {
 // Purge purges all tasks from the queue
 func (queue *Queue) Purge() {
 	go func() {
+
+		queue.tsMux.Lock()
+		defer queue.tsMux.Unlock()
+
 		for _, task := range queue.ts {
 			// Avoid task firing
 			if task != nil {

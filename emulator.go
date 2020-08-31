@@ -77,6 +77,9 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 	var queueStates []*tasks.Queue
 
+	s.qsMux.Lock()
+	defer s.qsMux.Unlock()
+
 	for _, queue := range s.qs {
 		if queue != nil {
 			queueStates = append(queueStates, queue.state)
@@ -203,6 +206,9 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 	queue, _ := s.fetchQueue(in.GetParent())
 
 	var taskStates []*tasks.Task
+
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
 
 	for _, task := range queue.ts {
 		if task != nil {

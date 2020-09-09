@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
+	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	v1 "google.golang.org/genproto/googleapis/iam/v1"
 
 	codes "google.golang.org/grpc/codes"

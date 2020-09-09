@@ -1,10 +1,10 @@
 from google.auth.credentials import AnonymousCredentials
-from google.cloud import tasks_v2beta3
+from google.cloud import tasks_v2
 import grpc
 
 grpc_channel = grpc.insecure_channel('localhost:8123')
 
-client = tasks_v2beta3.CloudTasksClient(channel=grpc_channel)
+client = tasks_v2.CloudTasksClient(channel=grpc_channel)
 
 parent = client.location_path('aert-sandbox', 'us-central1')
 

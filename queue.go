@@ -8,7 +8,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	pduration "github.com/golang/protobuf/ptypes/duration"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2beta3"
+	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 )
 
 // Queue holds all internals for a task queue

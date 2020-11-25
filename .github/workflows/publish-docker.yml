@@ -16,7 +16,18 @@ jobs:
         uses: actions/checkout@v1
 
       - name: Build image
-        run: docker build . --file Dockerfile --tag cloud-tasks-emulator
+        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+
+      - name: Cache smoketest dependencies
+        uses: actions/cache@v2
+        with:
+          path: /tmp/smoketest-packages
+          key:  smoketests-pkgs-${{ hashFiles('docker-smoketests/go.*') }}
+          restore-keys: |
+            smoketests-pkgs
+
+      - name: Run container smoketests
+        run:  EMULATOR_DOCKER_IMAGE=$IMAGE_NAME docker-smoketests/smoketests.sh
 
       # Only attempt to publish the image if this is triggered by a `push` (e.g. direct to the repo by a collaborator,
       # not an external pull request). This step would anyway fail on a pull_request workflow because the required

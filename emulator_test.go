@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -125,6 +127,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/my-test-task",
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://localhost:5000/success",
@@ -146,6 +149,21 @@ func TestSuccessTaskExecution(t *testing.T) {
 
 	// Validate that the call was actually made properly
 	assert.NotNil(t, receivedRequest, "Request was received")
+
+	// Simple predictable headers
+	expectHeaders := map[string]string{
+		"X-CloudTasks-TaskExecutionCount": "0",
+		"X-CloudTasks-TaskRetryCount":     "0",
+		"X-CloudTasks-TaskName":           "my-test-task",
+		"X-CloudTasks-QueueName":          "test",
+	}
+	actualHeaders := make(map[string]string)
+	for hdr := range expectHeaders {
+		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
+	}
+
+	assert.Equal(t, expectHeaders, actualHeaders)
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskEta"))
 
 	srv.Shutdown(context.Background())
 }
@@ -207,6 +225,22 @@ func formatQueueName(formattedParent, name string) string {
 
 func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
+}
+
+func assertIsRecentTimestamp(t *testing.T, etaString string) {
+	assert.Regexp(t, "^[0-9]+\\.[0-9]+$", etaString)
+	float, err := strconv.ParseFloat(etaString, 64)
+	require.NoError(t, err)
+	seconds, fraction := math.Modf(float)
+	etaTime := time.Unix(int64(seconds), int64(fraction*1e9))
+
+	assert.WithinDuration(
+		t,
+		time.Now(),
+		etaTime,
+		2*time.Second,
+		"task eta should be within last few seconds",
+	)
 }
 
 func startTestServer(successCallback serverRequestCallback, notFoundCallback serverRequestCallback) *http.Server {

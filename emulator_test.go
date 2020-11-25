@@ -22,6 +22,8 @@ import (
 
 var formattedParent = formatParent("TestProject", "TestLocation")
 
+type serverRequestCallback = func(req *http.Request)
+
 func TestMain(m *testing.M) {
 	flag.Parse()
 
@@ -105,8 +107,11 @@ func TestSuccessTaskExecution(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	called := false
-	srv := startTestServer(func() { called = true }, func() {})
+	var receivedRequest *http.Request
+	srv := startTestServer(
+		func(req *http.Request) { receivedRequest = req },
+		func(req *http.Request) {},
+	)
 
 	queue := newQueue(formattedParent, "test")
 	createQueueRequest := taskspb.CreateQueueRequest{
@@ -140,7 +145,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 	assert.Nil(t, gettedTask)
 
 	// Validate that the call was actually made properly
-	assert.Equal(t, true, called)
+	assert.NotNil(t, receivedRequest, "Request was received")
 
 	srv.Shutdown(context.Background())
 }
@@ -150,7 +155,10 @@ func TestErrorTaskExecution(t *testing.T) {
 	defer tearDown(t, serv)
 
 	called := 0
-	srv := startTestServer(func() {}, func() { called++ })
+	srv := startTestServer(
+		func(req *http.Request) {},
+		func(req *http.Request) { called++ },
+	)
 
 	queue := newQueue(formattedParent, "test")
 
@@ -201,14 +209,14 @@ func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
 }
 
-func startTestServer(successCallback func(), notFoundCallback func()) *http.Server {
+func startTestServer(successCallback serverRequestCallback, notFoundCallback serverRequestCallback) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/success", func(w http.ResponseWriter, r *http.Request) {
-		successCallback()
+		successCallback(r)
 		w.WriteHeader(200)
 	})
 	mux.HandleFunc("/not_found", func(w http.ResponseWriter, r *http.Request) {
-		notFoundCallback()
+		notFoundCallback(r)
 		w.WriteHeader(404)
 	})
 

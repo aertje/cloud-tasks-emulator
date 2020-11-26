@@ -7,8 +7,7 @@ As of this writing, Google does not provide a Cloud Tasks emulator, which makes 
 This project is not associated with Google.
 
 ## Status and features
-This project is still in alpha, but it's functional.
-It uses the v2 version of cloud tasks, to support both http and appengine requests.
+This project uses the v2 version of cloud tasks, to support both http and appengine requests.
 
 It supports the following:
 - Targeting normal http and appengine endpoints.
@@ -17,10 +16,8 @@ It supports the following:
 
 It also has a few outstanding things to address;
 - Updating of queues
-- Proper locking of task and queue deletes
 - Use of context / cleaning up of the signaling
-
-So don't be too surprised if it crashes on you.
+- Certain headers and response formats.
 
 ## Setup
 If you want to use it to make calls to a local appengine emulator instance, you'll need to set the appropriate environment variable, e.g.:  
@@ -52,17 +49,29 @@ docker build ./ -t tasks_emulator
 docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -queue projects/dev/locations/here/queues/anotherq
 ```
 
+### Docker image
+Or even easier (thanks @acoulton!) - pull and run it directly from GitHub Container Registry:
+```
+docker run ghcr.io/aertje/cloud-tasks-emulator:master
+```
+
 ## Use it
 
 ### Python example
 Here's a little snippet of python code that you can use to talk to it.
 
 ```
-from google.cloud import tasks_v2
 import grpc
+from google.cloud.tasks_v2 import CloudTasksClient
+from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
 
-grpc_channel = grpc.insecure_channel('localhost:8123')
-client = tasks_v2.CloudTasksClient(channel=grpc_channel)
+channel = grpc.insecure_channel('localhost:8123')
+
+# Before v2.0.0 of the client
+# client = CloudTasksClient(channel=grpc_channel)
+
+transport = CloudTasksGrpcTransport(channel=channel)
+client = CloudTasksClient(transport=transport)
 
 parent = client.location_path('my-sandbox', 'us-central1')
 queue_name = parent + '/queues/test'

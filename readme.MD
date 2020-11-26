@@ -13,6 +13,7 @@ It supports the following:
 - Targeting normal http and appengine endpoints.
 - Rate limiting and honors rate limiting configuration (max burst, max concurrent, and dispatch rate)
 - Retries and honors retry configuration (max attempts, max doublings, backoff)
+- Self-signed, verifiable, OIDC authentication tokens for HTTP requests
 
 It also has a few outstanding things to address;
 - Updating of queues
@@ -54,6 +55,37 @@ Or even easier (thanks @acoulton!) - pull and run it directly from GitHub Contai
 ```
 docker run ghcr.io/aertje/cloud-tasks-emulator:master
 ```
+
+### OIDC authentication
+The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
+authentication for HTTP target tasks. Tokens will be issued and signed by the
+emulator's (insecure) private key. The emulator will accept, and issue tokens
+for, **any** ServiceAccountEmail provided by the client.
+
+By default, the JWT `iss` (issuer) field is "http://cloud-tasks-emulator".
+
+Optionally, the emulator can host an HTTP OIDC discovery endpoint. This allows
+your application to verify tokens at runtime with the full online flow.
+To enable this, specify an issuer value at startup:
+
+```
+go run ./ -openid-issuer http://localhost:8980
+```
+
+With this flag:
+
+* JWTs will have an `iss` field of `http://localhost:8980`
+* The [discovery document](https://developers.google.com/identity/protocols/oauth2/openid-connect#discovery)
+  will be available at `http://localhost:8980/.well-known/openid-configuration`
+* The emulator's public key(s) (in JWK format) will be available at
+  `http://localhost:8980/jwks`
+
+The `-openid-issuer` URL can be any `http://hostname:port` value that your
+application code can route to. The endpoint listens on `0.0.0.0` for easy
+use in docker / k8s environments.
+
+You can, of course, export the content of the `/jwks` url if you prefer to
+hardcode the public keys in your application.
 
 ## Use it
 

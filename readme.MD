@@ -68,7 +68,7 @@ from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpc
 channel = grpc.insecure_channel('localhost:8123')
 
 # Before v2.0.0 of the client
-# client = CloudTasksClient(channel=grpc_channel)
+# client = CloudTasksClient(channel=channel)
 
 transport = CloudTasksGrpcTransport(channel=channel)
 client = CloudTasksClient(transport=transport)

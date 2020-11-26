@@ -1,0 +1,59 @@
+name: Publish Docker image
+
+on:
+  push:
+  pull_request:
+
+env:
+  IMAGE_NAME: cloud-tasks-emulator
+
+jobs:
+  Build-and-Push-Docker-Image:
+    runs-on: ubuntu-latest
+    name: Docker Build, Tag, Push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+
+      - name: Build image
+        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+
+      - name: Cache smoketest dependencies
+        uses: actions/cache@v2
+        with:
+          path: /tmp/smoketest-packages
+          key:  smoketests-pkgs-${{ hashFiles('docker-smoketests/go.*') }}
+          restore-keys: |
+            smoketests-pkgs
+
+      - name: Run container smoketests
+        run:  EMULATOR_DOCKER_IMAGE=$IMAGE_NAME docker-smoketests/smoketests.sh
+
+      # Only attempt to publish the image if this is triggered by a `push` (e.g. direct to the repo by a collaborator,
+      # not an external pull request). This step would anyway fail on a pull_request workflow because the required
+      # secret would not be available.
+      - name: Publish to GitHub Container Registry
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          set -o errexit
+          set -o nounset
+
+          # Login to Github registry
+          # Needs a PAT with `read:packages` and `write:packages` scopes, be *very* careful not to grant `repo` scope
+          # or anyone with push access on this repo can hijack your GH account!
+          echo "${{ secrets.GH_CR_IMG_PUSH_PAT }}" | docker login https://ghcr.io -u ${{ github.actor }} --password-stdin
+          IMAGE_ID=ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME
+
+          # Change all uppercase to lowercase
+          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+
+          # Strip git ref prefix from version
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+
+          # Strip "v" prefix from tag name
+          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
+
+          # Push to the remote repo
+          echo "Publishing $IMAGE_ID:$VERSION"
+          docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
+          docker push $IMAGE_ID:$VERSION

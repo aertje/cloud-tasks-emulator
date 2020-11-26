@@ -23,7 +23,25 @@ import (
 var r *regexp.Regexp
 
 func init() {
-	r = regexp.MustCompile("projects/([a-z0-9-]+)/locations/[a-z0-9-]+/queues/[a-zA-Z0-9-]+/tasks/[0-9]+")
+	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
+	r = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
+}
+
+func parseTaskName(task *tasks.Task) TaskNameParts {
+	matches := r.FindStringSubmatch(task.GetName())
+	return TaskNameParts{
+		project:  matches[1],
+		location: matches[2],
+		queueId:  matches[3],
+		taskId:   matches[4],
+	}
+}
+
+type TaskNameParts struct {
+	project  string
+	location string
+	queueId  string
+	taskId   string
 }
 
 // Task holds all internals for a task
@@ -113,9 +131,8 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 		}
 
 		if appEngineHTTPRequest.GetAppEngineRouting().Host == "" {
-			project := r.FindStringSubmatch(taskState.GetName())[1]
 
-			host := project + ".appspot.com"
+			host := parseTaskName(taskState).project + ".appspot.com"
 			emulatorHost := os.Getenv("APP_ENGINE_EMULATOR_HOST")
 			if emulatorHost != "" {
 				host = emulatorHost
@@ -283,6 +300,16 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+
+	nameParts := parseTaskName(taskState)
+
+	// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
+	scheduled, _ := ptypes.Timestamp(taskState.GetScheduleTime())
+	req.Header.Set("X-CloudTasks-QueueName", nameParts.queueId)
+	req.Header.Set("X-CloudTasks-TaskName", nameParts.taskId)
+	req.Header.Set("X-CloudTasks-TaskExecutionCount", fmt.Sprintf("%v", taskState.GetResponseCount()))
+	req.Header.Set("X-CloudTasks-TaskRetryCount", fmt.Sprintf("%v", taskState.GetDispatchCount()-1))
+	req.Header.Set("X-CloudTasks-TaskEta", fmt.Sprintf("%f", float64(scheduled.UnixNano())/1e9))
 
 	resp, err := client.Do(req)
 	if err != nil {

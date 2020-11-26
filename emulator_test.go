@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,6 +23,8 @@ import (
 )
 
 var formattedParent = formatParent("TestProject", "TestLocation")
+
+type serverRequestCallback = func(req *http.Request)
 
 func TestMain(m *testing.M) {
 	flag.Parse()
@@ -105,8 +109,11 @@ func TestSuccessTaskExecution(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	called := false
-	srv := startTestServer(func() { called = true }, func() {})
+	var receivedRequest *http.Request
+	srv := startTestServer(
+		func(req *http.Request) { receivedRequest = req },
+		func(req *http.Request) {},
+	)
 
 	queue := newQueue(formattedParent, "test")
 	createQueueRequest := taskspb.CreateQueueRequest{
@@ -120,6 +127,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/my-test-task",
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://localhost:5000/success",
@@ -140,7 +148,22 @@ func TestSuccessTaskExecution(t *testing.T) {
 	assert.Nil(t, gettedTask)
 
 	// Validate that the call was actually made properly
-	assert.Equal(t, true, called)
+	assert.NotNil(t, receivedRequest, "Request was received")
+
+	// Simple predictable headers
+	expectHeaders := map[string]string{
+		"X-CloudTasks-TaskExecutionCount": "0",
+		"X-CloudTasks-TaskRetryCount":     "0",
+		"X-CloudTasks-TaskName":           "my-test-task",
+		"X-CloudTasks-QueueName":          "test",
+	}
+	actualHeaders := make(map[string]string)
+	for hdr := range expectHeaders {
+		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
+	}
+
+	assert.Equal(t, expectHeaders, actualHeaders)
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskEta"))
 
 	srv.Shutdown(context.Background())
 }
@@ -150,7 +173,10 @@ func TestErrorTaskExecution(t *testing.T) {
 	defer tearDown(t, serv)
 
 	called := 0
-	srv := startTestServer(func() {}, func() { called++ })
+	srv := startTestServer(
+		func(req *http.Request) {},
+		func(req *http.Request) { called++ },
+	)
 
 	queue := newQueue(formattedParent, "test")
 
@@ -201,14 +227,30 @@ func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
 }
 
-func startTestServer(successCallback func(), notFoundCallback func()) *http.Server {
+func assertIsRecentTimestamp(t *testing.T, etaString string) {
+	assert.Regexp(t, "^[0-9]+\\.[0-9]+$", etaString)
+	float, err := strconv.ParseFloat(etaString, 64)
+	require.NoError(t, err)
+	seconds, fraction := math.Modf(float)
+	etaTime := time.Unix(int64(seconds), int64(fraction*1e9))
+
+	assert.WithinDuration(
+		t,
+		time.Now(),
+		etaTime,
+		2*time.Second,
+		"task eta should be within last few seconds",
+	)
+}
+
+func startTestServer(successCallback serverRequestCallback, notFoundCallback serverRequestCallback) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/success", func(w http.ResponseWriter, r *http.Request) {
-		successCallback()
+		successCallback(r)
 		w.WriteHeader(200)
 	})
 	mux.HandleFunc("/not_found", func(w http.ResponseWriter, r *http.Request) {
-		notFoundCallback()
+		notFoundCallback(r)
 		w.WriteHeader(404)
 	})
 

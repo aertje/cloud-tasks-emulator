@@ -20,6 +20,8 @@ import (
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
+	grpcCodes "google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 )
 
 var formattedParent = formatParent("TestProject", "TestLocation")
@@ -103,6 +105,42 @@ func TestCreateTask(t *testing.T) {
 	assert.Equal(t, "http://www.google.com", createdTask.GetHttpRequest().GetUrl())
 	assert.Equal(t, taskspb.HttpMethod_POST, createdTask.GetHttpRequest().GetHttpMethod())
 	assert.EqualValues(t, 0, createdTask.GetDispatchCount())
+}
+
+func TestCreateTaskRejectsInvalidName(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	queue := newQueue(formattedParent, "test")
+	createQueueRequest := taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	}
+
+	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
+	require.NoError(t, err)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: "is-this-a-name",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://www.google.com",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, createdTask)
+	if assert.Error(t, err, "Should return error") {
+		rsp, ok := grpcStatus.FromError(err)
+		assert.True(t, ok, "Should be grpc error")
+		assert.Regexp(t, "^Task name must be formatted", rsp.Message())
+		assert.Equal(t, grpcCodes.InvalidArgument, rsp.Code())
+	}
 }
 
 func TestSuccessTaskExecution(t *testing.T) {

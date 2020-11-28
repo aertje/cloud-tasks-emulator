@@ -236,7 +236,6 @@ func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.
 
 // CreateTask creates a new task
 func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*tasks.Task, error) {
-	// TODO: task name validation
 
 	queueName := in.GetParent()
 	queue, ok := s.fetchQueue(queueName)
@@ -245,6 +244,10 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	}
 	if queue == nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "The queue no longer exists, though a queue with this name existed recently.")
+	}
+
+	if (in.Task.Name != "") && !isValidTaskName(in.Task.Name) {
+		return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
 	}
 
 	task, taskState := queue.NewTask(in.GetTask())

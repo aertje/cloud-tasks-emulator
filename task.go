@@ -37,6 +37,10 @@ func parseTaskName(task *tasks.Task) TaskNameParts {
 	}
 }
 
+func isValidTaskName(name string) bool {
+	return r.MatchString(name)
+}
+
 type TaskNameParts struct {
 	project  string
 	location string

@@ -114,6 +114,60 @@ func TestCreateTask(t *testing.T) {
 	assert.EqualValues(t, 0, createdTask.GetDispatchCount())
 }
 
+func TestCreateTaskRejectsDuplicateName(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/dedupe-this-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// First creation worked OK
+
+	dupeTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, dupeTask)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
+
+	// Wait for it to perform the http request
+	_, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
+
+	// Check the task has been removed now (to ensure state is valid for the
+	// recreate-even-after-executed-and-removed case following)
+	getTaskRequest := taskspb.GetTaskRequest{
+		Name: createdTask.GetName(),
+	}
+	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
+	assert.Error(t, err)
+	assert.Nil(t, gettedTask)
+
+	// Check still can't create even after removal
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
+
+	// Verify that it only sent the original HTTP request, nothing after that
+	_, err = awaitHttpRequestWithTimeout(receivedRequests, 1*time.Second)
+	assert.Error(t, err, "Should not receive any further HTTP requests within timeout")
+}
+
 func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)

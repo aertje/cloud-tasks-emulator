@@ -27,7 +27,7 @@ type Queue struct {
 
 	tokenBucket chan bool
 
-	tokenGenerator *time.Ticker
+	maxDispatchesPerSecond float64
 
 	cancelTokenGenerator chan bool
 
@@ -47,17 +47,17 @@ func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Qu
 	setInitialQueueState(state)
 
 	queue := &Queue{
-		name:                 name,
-		state:                state,
-		fire:                 make(chan *Task),
-		work:                 make(chan *Task),
-		ts:                   make(map[string]*Task),
-		onTaskDone:           onTaskDone,
-		tokenBucket:          make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
-		tokenGenerator:       time.NewTicker(time.Second / time.Duration(state.GetRateLimits().GetMaxDispatchesPerSecond())),
-		cancelTokenGenerator: make(chan bool, 1),
-		cancelDispatcher:     make(chan bool, 1),
-		cancelWorkers:        make(chan bool, 1),
+		name:                   name,
+		state:                  state,
+		fire:                   make(chan *Task),
+		work:                   make(chan *Task),
+		ts:                     make(map[string]*Task),
+		onTaskDone:             onTaskDone,
+		tokenBucket:            make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
+		maxDispatchesPerSecond: state.GetRateLimits().GetMaxDispatchesPerSecond(),
+		cancelTokenGenerator:   make(chan bool, 1),
+		cancelDispatcher:       make(chan bool, 1),
+		cancelWorkers:          make(chan bool, 1),
 	}
 	// Fill the token bucket
 	for i := 0; i < int(state.GetRateLimits().GetMaxBurstSize()); i++ {
@@ -134,17 +134,14 @@ func (queue *Queue) runWorker() {
 }
 
 func (queue *Queue) runTokenGenerator() {
-	defer queue.tokenGenerator.Stop()
+	period := time.Second / time.Duration(queue.maxDispatchesPerSecond)
 
 	for {
+		// Use sleep since time.Ticker is utilizing high cpu especially in Docker due to small period
+		time.Sleep(period)
 		select {
-		case <-queue.tokenGenerator.C:
-			select {
-			case queue.tokenBucket <- true:
-				// Added token
-			default:
-				// Bucket is full (fall through)
-			}
+		case queue.tokenBucket <- true:
+			// Added token
 		case <-queue.cancelTokenGenerator:
 			return
 		}

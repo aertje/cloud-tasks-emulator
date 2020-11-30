@@ -246,8 +246,14 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 		return nil, status.Errorf(codes.FailedPrecondition, "The queue no longer exists, though a queue with this name existed recently.")
 	}
 
-	if (in.Task.Name != "") && !isValidTaskName(in.Task.Name) {
-		return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+	if in.Task.Name != "" {
+		// If a name is specified, it must be valid and it must be unique
+		if !isValidTaskName(in.Task.Name) {
+			return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+		}
+		if _, exists := s.fetchTask(in.Task.Name); exists {
+			return nil, status.Errorf(codes.AlreadyExists, "Requested entity already exists")
+		}
 	}
 
 	task, taskState := queue.NewTask(in.GetTask())

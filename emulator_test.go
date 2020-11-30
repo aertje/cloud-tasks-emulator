@@ -78,17 +78,10 @@ func TestCreateTask(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	testQueue := createTestQueue(t, client, "test")
 
 	createTaskRequest := taskspb.CreateTaskRequest{
-		Parent: createdQueue.GetName(),
+		Parent: testQueue.GetName(),
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
@@ -107,21 +100,76 @@ func TestCreateTask(t *testing.T) {
 	assert.EqualValues(t, 0, createdTask.GetDispatchCount())
 }
 
+func TestCreateTaskRejectsDuplicateName(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	testQueue := createTestQueue(t, client, "test")
+
+	var receivedCount = 0
+	srv := startTestServer(
+		func(req *http.Request) { receivedCount++ },
+		func(req *http.Request) {},
+	)
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: testQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: testQueue.GetName() + "/tasks/dedupe-this-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// First creation worked OK
+
+	dupeTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, dupeTask)
+	if assert.Error(t, err, "Should return error") {
+		rsp, ok := grpcStatus.FromError(err)
+		assert.True(t, ok, "Should be grpc error")
+		assert.Regexp(t, "^Requested entity already exists", rsp.Message())
+		assert.Equal(t, grpcCodes.AlreadyExists, rsp.Code())
+	}
+
+	// Need to give it a chance to make the actual call
+	time.Sleep(100 * time.Millisecond)
+	// Validate that the call was actually made once
+	assert.Equal(t, 1, receivedCount, "Request was received once only")
+
+	// Check the task has been removed now (to ensure state is valid for the
+	// recreate-even-after-executed-and-removed case following)
+	getTaskRequest := taskspb.GetTaskRequest{
+		Name: createdTask.GetName(),
+	}
+	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
+	assert.Error(t, err)
+	assert.Nil(t, gettedTask)
+
+	// Check still can't create even after removal
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	if assert.Error(t, err, "Should still give error after task executes") {
+		rsp, _ := grpcStatus.FromError(err)
+		assert.Equal(t, grpcCodes.AlreadyExists, rsp.Code())
+	}
+}
+
 func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	testQueue := createTestQueue(t, client, "test")
 
 	createTaskRequest := taskspb.CreateTaskRequest{
-		Parent: createdQueue.GetName(),
+		Parent: testQueue.GetName(),
 		Task: &taskspb.Task{
 			Name: "is-this-a-name",
 			MessageType: &taskspb.Task_HttpRequest{
@@ -153,19 +201,12 @@ func TestSuccessTaskExecution(t *testing.T) {
 		func(req *http.Request) {},
 	)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	testQueue := createTestQueue(t, client, "test")
 
 	createTaskRequest := taskspb.CreateTaskRequest{
-		Parent: createdQueue.GetName(),
+		Parent: testQueue.GetName(),
 		Task: &taskspb.Task{
-			Name: createdQueue.GetName() + "/tasks/my-test-task",
+			Name: testQueue.GetName() + "/tasks/my-test-task",
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					Url: "http://localhost:5000/success",
@@ -216,18 +257,10 @@ func TestErrorTaskExecution(t *testing.T) {
 		func(req *http.Request) { called++ },
 	)
 
-	queue := newQueue(formattedParent, "test")
-
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	testQueue := createTestQueue(t, client, "test")
 
 	createTaskRequest := taskspb.CreateTaskRequest{
-		Parent: createdQueue.GetName(),
+		Parent: testQueue.GetName(),
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
@@ -251,6 +284,19 @@ func TestErrorTaskExecution(t *testing.T) {
 	assert.Equal(t, 4, called)
 
 	srv.Shutdown(context.Background())
+}
+
+func createTestQueue(t *testing.T, client *Client, qName string) *taskspb.Queue {
+	queue := newQueue(formattedParent, "test")
+	createQueueRequest := taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	}
+
+	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
+	require.NoError(t, err)
+
+	return createdQueue
 }
 
 func newQueue(formattedParent, name string) *taskspb.Queue {

@@ -135,14 +135,23 @@ func (queue *Queue) runWorker() {
 
 func (queue *Queue) runTokenGenerator() {
 	period := time.Second / time.Duration(queue.maxDispatchesPerSecond)
+	// Use Timer with Reset() in place of time.Ticker as the latter was causing high CPU usage in Docker
+	t := time.NewTimer(period)
 
 	for {
-		// Use sleep since time.Ticker is utilizing high cpu especially in Docker due to small period
-		time.Sleep(period)
 		select {
-		case queue.tokenBucket <- true:
-			// Added token
+		case <-t.C:
+			select {
+			case queue.tokenBucket <- true:
+				// Added token
+				t.Reset(period)
+			case <-queue.cancelTokenGenerator:
+				return
+			}
 		case <-queue.cancelTokenGenerator:
+			if !t.Stop() {
+				<-t.C
+			}
 			return
 		}
 	}

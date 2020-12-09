@@ -289,6 +289,11 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		req, _ = http.NewRequest(method, httpRequest.GetUrl(), bytes.NewBuffer(httpRequest.GetBody()))
 
 		headers = httpRequest.GetHeaders()
+
+		if auth := httpRequest.GetOidcToken(); auth != nil {
+			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl())
+			headers["Authorization"] = "Bearer " + tokenStr
+		}
 	} else if appEngineHTTPRequest != nil {
 		method := toHTTPMethod(appEngineHTTPRequest.GetHttpMethod())
 

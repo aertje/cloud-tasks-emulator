@@ -16,12 +16,14 @@ docker run \
   --rm \
   -d \
   -p 8930:8930 \
+  -p 8050:8050 \
   --name cloud-tasks-emulator \
   --network $network_name \
   "$EMULATOR_DOCKER_IMAGE" \
   -host 0.0.0.0 \
   -queue projects/test-project/locations/us-central1/queues/test \
-  -port 8930
+  -port 8930 \
+  -openid-issuer http://cloud-tasks-emulator:8050
 
 echo ""
 echo "-------------------"
@@ -55,4 +57,3 @@ docker kill cloud-tasks-emulator
 docker network rm "$network_name"
 
 exit $test_result
-

@@ -325,9 +325,19 @@ func main() {
 
 	host := flag.String("host", "localhost", "The host name")
 	port := flag.String("port", "8123", "The port")
+	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
+
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
 	flag.Parse()
+
+	if *openidIssuer != "" {
+		srv, err := configureOpenIdIssuer(*openidIssuer)
+		if err != nil {
+			panic(err)
+		}
+		defer srv.Shutdown(context.Background())
+	}
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("%v:%v", *host, *port))
 	if err != nil {

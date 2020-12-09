@@ -4,12 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/dgrijalva/jwt-go"
 	"log"
 	"math"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,6 +251,67 @@ func TestErrorTaskExecution(t *testing.T) {
 	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
 	assert.EqualValues(t, 4, gettedTask.GetDispatchCount())
 	assert.Equal(t, 4, called)
+
+	srv.Shutdown(context.Background())
+}
+
+func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	OpenIDConfig.IssuerURL = "http://localhost:8980"
+
+	var receivedRequest *http.Request
+	srv := startTestServer(
+		func(req *http.Request) { receivedRequest = req },
+		func(req *http.Request) {},
+	)
+
+	queue := newQueue(formattedParent, "test")
+	createQueueRequest := taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	}
+
+	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
+	require.NoError(t, err)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success?foo=bar",
+					AuthorizationHeader: &taskspb.HttpRequest_OidcToken{
+						OidcToken: &taskspb.OidcToken{
+							ServiceAccountEmail: "emulator@service.test",
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Need to give it a chance to make the actual call
+	time.Sleep(100 * time.Millisecond)
+
+	// Validate that the call was actually made properly
+	assert.NotNil(t, receivedRequest, "Request was received")
+	authHeader := receivedRequest.Header.Get("Authorization")
+	assert.NotNil(t, authHeader, "Has Authorization header")
+	assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
+	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
+
+	// Full token validation is done in the docker smoketests and the oidc internal tests
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	require.NoError(t, err)
+
+	claims := token.Claims.(*OpenIDConnectClaims)
+	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
+	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
+	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
 
 	srv.Shutdown(context.Background())
 }

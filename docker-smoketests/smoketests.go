@@ -3,8 +3,12 @@ package main
 import (
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	"context"
+	"crypto/rsa"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/dgrijalva/jwt-go"
+	"github.com/lestrrat-go/jwx/jwk"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
@@ -14,8 +18,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 )
+
+// Duplicated from app source to avoid having to import the project code
+type OpenIDConnectClaims struct {
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	jwt.StandardClaims
+}
 
 func runTaskHttpServer(listenAddr string) <-chan *http.Request {
 	receivedRequests := make(chan *http.Request)
@@ -71,6 +83,11 @@ func createTask(client *cloudtasks.Client, queuePath string, httpHandlerUrl stri
 					Url: httpHandlerUrl,
 					Headers: map[string]string{
 						"X-My-Header": "isThis",
+					},
+					AuthorizationHeader: &taskspb.HttpRequest_OidcToken{
+						OidcToken: &taskspb.OidcToken{
+							ServiceAccountEmail: "emulator@service.test",
+						},
 					},
 					Body: []byte("Here is a body for you"),
 				},
@@ -132,6 +149,53 @@ func readRequestBody(req *http.Request) string {
 	return string(body)
 }
 
+func getUnverifiedIssuerFromJWT(tokenStr string) string {
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &jwt.StandardClaims{})
+	fatalIfError(err)
+	claims := token.Claims.(*jwt.StandardClaims)
+	return claims.Issuer
+}
+
+func parseOpenIDConnectToken(tokenStr string, keySet *jwk.Set) (*jwt.Token, *OpenIDConnectClaims) {
+
+	token, err := new(jwt.Parser).ParseWithClaims(
+		tokenStr,
+		&OpenIDConnectClaims{},
+		func(token *jwt.Token) (interface{}, error) {
+			keyId := token.Header["kid"].(string)
+			keys := keySet.LookupKeyID(keyId)
+
+			var key rsa.PublicKey
+			err := keys[0].Raw(&key)
+
+			return &key, err
+		},
+	)
+
+	fatalIfError(err)
+	return token, token.Claims.(*OpenIDConnectClaims)
+}
+
+func fetchJsonFromUrl(url string) map[string]interface{} {
+	client := http.Client{
+		Timeout: time.Second * 1,
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	fatalIfError(err)
+
+	res, err := client.Do(req)
+	fatalIfError(err)
+
+	body, err := ioutil.ReadAll(res.Body)
+	fatalIfError(err)
+
+	var parsedBody map[string]interface{}
+	err = json.Unmarshal(body, &parsedBody)
+	fatalIfError(err)
+
+	return parsedBody
+}
+
 func main() {
 	emulatorHost := flag.String("emulator-host", "cloud-tasks-emulator", "The hostname for the emulator")
 	emulatorPort := flag.String("emulator-port", "8123", "The port for the emulator")
@@ -160,6 +224,30 @@ func main() {
 	assertEqual("isThis", request.Header.Get("X-My-Header"))
 	assertEqual("/handler-test?param=foo", request.URL.String())
 	log.Println("HTTP request matched expectations")
+
+	log.Println("Verifying OIDC Authentication and discovery")
+	authHeader := request.Header.Get("Authorization")
+	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
+
+	// So far, so good. Now check token can be verified using http discovery
+	// Note - this is *never* how you would usually do this, you should *always*
+	// start from a whitelist of issuers and pre-load their certs to your app.
+	issuer := getUnverifiedIssuerFromJWT(tokenStr)
+	log.Printf("Got token issued by %v", issuer)
+	discovery := fetchJsonFromUrl(issuer + "/.well-known/openid-configuration")
+
+	jwks_uri := discovery["jwks_uri"].(string)
+	keySet, err := jwk.Fetch(jwks_uri)
+	fatalIfError(err)
+	log.Printf("Retrieved issuer keys from %v", jwks_uri)
+
+	// Basic validation, values are fully validated in oidc_internal_test
+	token, claims := parseOpenIDConnectToken(tokenStr, keySet)
+	if !token.Valid {
+		log.Fatal("Auth token was not valid")
+	}
+	assertEqual("emulator@service.test", claims.Email)
+	log.Printf("Validated auth token from %v for %v", claims.Audience, claims.Issuer)
 
 	log.Println("Verifying dispatched tasks are removed from the list")
 	queuedTasks := listTasks(client, *queuePath)

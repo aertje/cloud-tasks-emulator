@@ -105,16 +105,16 @@ channel = grpc.insecure_channel('localhost:8123')
 transport = CloudTasksGrpcTransport(channel=channel)
 client = CloudTasksClient(transport=transport)
 
-parent = client.location_path('my-sandbox', 'us-central1')
+parent = '/projects/my-sandbox/locations/us-central1'
 queue_name = parent + '/queues/test'
-client.create_queue(parent, {'name': queue_name})
+client.create_queue(queue={'name': queue_name}, parent=parent)
 
 # Create a normal http task that should succeed
-client.create_task(queue_name, {'http_request': {'http_method': 'GET', 'url': 'https://www.google.com'}}) # 200
+client.create_task(task={'http_request': {'http_method': 'GET', 'url': 'https://www.google.com'}}, parent=queue_name) # 200
 # Create a normal http task that will throw 405s and will get retried
-client.create_task(queue_name, {'http_request': {'http_method': 'POST', 'url': 'https://www.google.com'}}) # 405
+client.create_task(task={'http_request': {'http_method': 'POST', 'url': 'https://www.google.com'}}, parent=queue_name) # 405
 # Create an appengine task that will target `/`
-client.create_task(queue_name, {'app_engine_http_request': {}})
+client.create_task(task={'app_engine_http_request': {}}, parent=queue_name)
 ```
 
 ### Go example

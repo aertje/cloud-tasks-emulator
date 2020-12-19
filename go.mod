@@ -1,4 +1,4 @@
-module github.com/PwC-Next/cloud-tasks-emulator
+module github.com/aertje/cloud-tasks-emulator
 
 go 1.13
 

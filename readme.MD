@@ -56,6 +56,18 @@ Or even easier (thanks @acoulton!) - pull and run it directly from GitHub Contai
 docker run ghcr.io/aertje/cloud-tasks-emulator:master
 ```
 
+### Docker Compose
+If you are planning on using docker-compose the above configuration translates to :
+```
+  gcloud-tasks-emulator:
+    image: ghcr.io/aertje/cloud-tasks-emulator:master
+    command: -host 0.0.0.0 -port 8123 -queue "projects/dev/locations/here/queues/anotherq"
+    ports:
+      - "${TASKS_PORT:-8123}:8123"
+    environment:
+      APP_ENGINE_EMULATOR_HOST: http://localhost:8080
+```
+
 ### OIDC authentication
 The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
 authentication for HTTP target tasks. Tokens will be issued and signed by the

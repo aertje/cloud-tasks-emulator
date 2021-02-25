@@ -37,6 +37,8 @@ type Server struct {
 	tsMux sync.Mutex
 }
 
+var autoCreateQueueOnNewTask = true
+
 func (s *Server) setQueue(queueName string, queue *Queue) {
 	s.qsMux.Lock()
 	defer s.qsMux.Unlock()
@@ -239,6 +241,13 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 
 	queueName := in.GetParent()
 	queue, ok := s.fetchQueue(queueName)
+
+	// If auto create queue is on we try to create queue if not existing.
+	if !ok && autoCreateQueueOnNewTask {
+		createInitialQueue(s, queueName)
+		queue, ok = s.fetchQueue(queueName)
+	}
+
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Queue does not exist.")
 	}
@@ -326,6 +335,7 @@ func main() {
 	host := flag.String("host", "localhost", "The host name")
 	port := flag.String("port", "8123", "The port")
 	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
+	flag.BoolVar(&autoCreateQueueOnNewTask, "auto-create-queue", false, "Set to create automatically queue when not existing")
 
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 

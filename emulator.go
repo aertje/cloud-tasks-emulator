@@ -23,9 +23,15 @@ import (
 // NewServer creates a new emulator server with its own task and queue bookkeeping
 func NewServer() *Server {
 	return &Server{
-		qs: make(map[string]*Queue),
-		ts: make(map[string]*Task),
+		qs:      make(map[string]*Queue),
+		ts:      make(map[string]*Task),
+		options: ServerOptions{false},
 	}
+}
+
+// ServerOptions represents the emulator server options
+type ServerOptions struct {
+	autoCreateQueueOnNewTask bool
 }
 
 // Server represents the emulator server
@@ -33,11 +39,10 @@ type Server struct {
 	qs map[string]*Queue
 	ts map[string]*Task
 
-	qsMux sync.Mutex
-	tsMux sync.Mutex
+	qsMux   sync.Mutex
+	tsMux   sync.Mutex
+	options ServerOptions
 }
-
-var autoCreateQueueOnNewTask = true
 
 func (s *Server) setQueue(queueName string, queue *Queue) {
 	s.qsMux.Lock()
@@ -243,7 +248,7 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	queue, ok := s.fetchQueue(queueName)
 
 	// If auto create queue is on we try to create queue if not existing.
-	if !ok && autoCreateQueueOnNewTask {
+	if !ok && s.options.autoCreateQueueOnNewTask {
 		createInitialQueue(s, queueName)
 		queue, ok = s.fetchQueue(queueName)
 	}
@@ -335,7 +340,7 @@ func main() {
 	host := flag.String("host", "localhost", "The host name")
 	port := flag.String("port", "8123", "The port")
 	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
-	flag.BoolVar(&autoCreateQueueOnNewTask, "auto-create-queue", false, "Set to create automatically queue when not existing")
+	autoCreateQueueOnNewTask := flag.Bool("auto-create-queue", false, "Set to create non-existing queue automatically on task creation")
 
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
@@ -358,6 +363,7 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	emulatorServer := NewServer()
+	emulatorServer.options.autoCreateQueueOnNewTask = *autoCreateQueueOnNewTask
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {

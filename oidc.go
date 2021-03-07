@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
 const jwksUriPath = "/jwks"
@@ -114,7 +115,8 @@ func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Dura
 		return
 	}
 
-	expires := time.Now().Add(expiresAfter).Format(http.TimeFormat)
+	utc, _ := time.LoadLocation("UTC")
+	expires := time.Now().In(utc).Add(expiresAfter).Format(http.TimeFormat)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public")
 	w.Header().Set("Expires", expires)

@@ -20,13 +20,7 @@ It also has a few outstanding things to address;
 - Use of context / cleaning up of the signaling
 - Certain headers and response formats.
 
-## Setup
-If you want to use it to make calls to a local appengine emulator instance, you'll need to set the appropriate environment variable, e.g.:  
-```
-APP_ENGINE_EMULATOR_HOST=http://localhost:8080
-```
-
-## Run it
+## Running the emulator
 Fire it up; you can specify host and port (defaults to localhost:8123):
 ```
 go run ./ -host localhost -port 8000
@@ -68,13 +62,29 @@ If you are planning on using docker-compose the above configuration translates t
       APP_ENGINE_EMULATOR_HOST: http://localhost:8080
 ```
 
-### OIDC authentication
+
+## App Engine
+If you want to use it to make calls to a local [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server) instance, you'll need to set the appropriate environment variable, e.g.:  
+```
+APP_ENGINE_EMULATOR_HOST=http://localhost:8080
+```
+
+### Targeting services
+Since the App Engine emulator runs services on individual localhost ports (e.g. `default` on `http://localhost:8080`, `worker` on `http://localhost:8081`), and the task emulator targets subdomains when specified (e.g. `http://worker.localhost:8080`), you can use one of these workarounds:
+- Use a proxy that will map the subdomain to the right destination, and set the `APP_ENGINE_EMULATOR_HOST` to match the proxy. A straightforward way is to leverage the docker-compose networking to route the task emulator traffic through an nginx instance and pass the traffic on to the container(s) running the AppEngine service(s). I.e. target `http://worker.my-proxy`.
+- Update your code to use `relative_uri` instead of the `service`, and include a `dispatch.yaml` in your AppEngine configuration. I.e. target `http://localhost:8080/worker`.
+
+The following methods will also work, but are not recommended as they will likely result in different code for your local testing and cloud deployment:
+- If you are only targeting one App Engine service with the cloud tasks emulator, update the `APP_ENGINE_EMULATOR_HOST` to match that service. I.e. target `http://localhost:8081`.
+- Use `http_request` instead of `app_engine_http_request` and simply specify the target URL. I.e. target `http://localhost:8081`.
+
+## OIDC authentication
 The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
 authentication for HTTP target tasks. Tokens will be issued and signed by the
 emulator's (insecure) private key. The emulator will accept, and issue tokens
 for, **any** ServiceAccountEmail provided by the client.
 
-By default, the JWT `iss` (issuer) field is "http://cloud-tasks-emulator".
+By default, the JWT `iss` (issuer) field is `http://cloud-tasks-emulator`.
 
 Optionally, the emulator can host an HTTP OIDC discovery endpoint. This allows
 your application to verify tokens at runtime with the full online flow.
@@ -99,10 +109,10 @@ use in docker / k8s environments.
 You can, of course, export the content of the `/jwks` url if you prefer to
 hardcode the public keys in your application.
 
-## Use it
+## Examples
 
 ### Python example
-Here's a little snippet of python code that you can use to talk to it.
+Here's a little snippet of python code that you can use to talk to the emulator.
 
 ```
 import grpc

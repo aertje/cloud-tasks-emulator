@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -135,24 +136,38 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 		}
 
 		if appEngineHTTPRequest.GetAppEngineRouting().Host == "" {
+			var host, domainSeparator string
 
-			host := parseTaskName(taskState).project + ".appspot.com"
 			emulatorHost := os.Getenv("APP_ENGINE_EMULATOR_HOST")
-			if emulatorHost != "" {
+
+			if emulatorHost == "" {
+				// TODO: the new route format for appengine is <PROJECT_ID>.<REGION_ID>.r.appspot.com
+				// TODO: support custom domains
+				// https://cloud.google.com/appengine/docs/standard/python/how-requests-are-routed
+				host = "https://" + parseTaskName(taskState).project + ".appspot.com"
+				domainSeparator = "-dot-"
+			} else {
 				host = emulatorHost
+				domainSeparator = "."
+			}
+
+			hostURL, err := url.Parse(host)
+
+			if err != nil {
+				panic(err)
 			}
 
 			if appEngineHTTPRequest.GetAppEngineRouting().GetService() != "" {
-				host = appEngineHTTPRequest.GetAppEngineRouting().GetService() + "." + host
+				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetService() + domainSeparator + hostURL.Host
 			}
 			if appEngineHTTPRequest.GetAppEngineRouting().GetVersion() != "" {
-				host = appEngineHTTPRequest.GetAppEngineRouting().GetVersion() + "." + host
+				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetVersion() + domainSeparator + hostURL.Host
 			}
 			if appEngineHTTPRequest.GetAppEngineRouting().GetInstance() != "" {
-				host = appEngineHTTPRequest.GetAppEngineRouting().GetInstance() + "." + host
+				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetInstance() + domainSeparator + hostURL.Host
 			}
 
-			appEngineHTTPRequest.GetAppEngineRouting().Host = host
+			appEngineHTTPRequest.GetAppEngineRouting().Host = hostURL.String()
 		}
 
 		if appEngineHTTPRequest.GetRelativeUri() == "" {

@@ -81,14 +81,7 @@ func TestCreateTask(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	createdQueue := createTestQueue(t, client)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -114,14 +107,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	createdQueue := createTestQueue(t, client)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -156,14 +142,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 		func(req *http.Request) {},
 	)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	createdQueue := createTestQueue(t, client)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -219,15 +198,7 @@ func TestErrorTaskExecution(t *testing.T) {
 		func(req *http.Request) { called++ },
 	)
 
-	queue := newQueue(formattedParent, "test")
-
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	createdQueue := createTestQueue(t, client)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -268,14 +239,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 		func(req *http.Request) {},
 	)
 
-	queue := newQueue(formattedParent, "test")
-	createQueueRequest := taskspb.CreateQueueRequest{
-		Parent: formattedParent,
-		Queue:  queue,
-	}
-
-	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
-	require.NoError(t, err)
+	createdQueue := createTestQueue(t, client)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -292,7 +256,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 			},
 		},
 	}
-	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	_, err := client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 
 	// Need to give it a chance to make the actual call
@@ -343,6 +307,20 @@ func assertIsRecentTimestamp(t *testing.T, etaString string) {
 		2*time.Second,
 		"task eta should be within last few seconds",
 	)
+}
+
+func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
+	queue := newQueue(formattedParent, "test")
+
+	createQueueRequest := taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	}
+
+	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
+	require.NoError(t, err)
+
+	return createdQueue
 }
 
 func startTestServer(successCallback serverRequestCallback, notFoundCallback serverRequestCallback) *http.Server {

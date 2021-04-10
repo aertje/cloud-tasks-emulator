@@ -183,9 +183,63 @@ func TestSuccessTaskExecution(t *testing.T) {
 	}
 
 	assert.Equal(t, expectHeaders, actualHeaders)
-	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskEta"))
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
 
 	srv.Shutdown(context.Background())
+}
+
+func TestSuccessAppEngineTaskExecution(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	defer os.Unsetenv("APP_ENGINE_EMULATOR_HOST")
+	os.Setenv("APP_ENGINE_EMULATOR_HOST", "http://localhost:5000")
+
+	var receivedRequest *http.Request
+
+	srv := startTestServer(
+		func(req *http.Request) { receivedRequest = req },
+		func(req *http.Request) {},
+	)
+
+	defer srv.Shutdown(context.Background())
+
+	createdQueue := createTestQueue(t, client)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/my-test-task",
+			MessageType: &taskspb.Task_AppEngineHttpRequest{
+				AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+					RelativeUri: "/success",
+				},
+			},
+		},
+	}
+
+	createdTask, _ := client.CreateTask(context.Background(), &createTaskRequest)
+
+	// Need to give it a chance to make the actual call
+	time.Sleep(100 * time.Millisecond)
+
+	assert.NotNil(t, createdTask)
+
+	expectHeaders := map[string]string{
+		"X-AppEngine-TaskExecutionCount": "0",
+		"X-AppEngine-TaskRetryCount":     "0",
+		"X-AppEngine-TaskName":           "my-test-task",
+		"X-AppEngine-QueueName":          "test",
+	}
+	actualHeaders := make(map[string]string)
+
+	for hdr := range expectHeaders {
+		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
+	}
+
+	assert.Equal(t, expectHeaders, actualHeaders)
+
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
 
 func TestErrorTaskExecution(t *testing.T) {

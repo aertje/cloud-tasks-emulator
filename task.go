@@ -79,8 +79,6 @@ func NewTask(queue *Queue, taskState *tasks.Task, onDone func(task *Task)) *Task
 }
 
 func setInitialTaskState(taskState *tasks.Task, queueName string) {
-	// TODO: more header stuff like X-Appengine-* setting
-
 	if taskState.GetName() == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		taskState.Name = queueName + "/tasks/" + taskID
@@ -298,6 +296,15 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 	httpRequest := taskState.GetHttpRequest()
 	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
 
+	scheduled, _ := ptypes.Timestamp(taskState.GetScheduleTime())
+	nameParts := parseTaskName(taskState)
+
+	headerQueueName := nameParts.queueId
+	headerTaskName := nameParts.taskId
+	headerTaskRetryCount := fmt.Sprintf("%v", taskState.GetDispatchCount()-1)
+	headerTaskExecutionCount := fmt.Sprintf("%v", taskState.GetResponseCount())
+	headerTaskETA := fmt.Sprintf("%f", float64(scheduled.UnixNano())/1e9)
+
 	if httpRequest != nil {
 		method := toHTTPMethod(httpRequest.GetHttpMethod())
 
@@ -309,6 +316,14 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl())
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
+
+		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
+		// TODO: optional headers
+		req.Header.Set("X-CloudTasks-QueueName", headerQueueName)
+		req.Header.Set("X-CloudTasks-TaskName", headerTaskName)
+		req.Header.Set("X-CloudTasks-TaskExecutionCount", headerTaskExecutionCount)
+		req.Header.Set("X-CloudTasks-TaskRetryCount", headerTaskRetryCount)
+		req.Header.Set("X-CloudTasks-TaskETA", headerTaskETA)
 	} else if appEngineHTTPRequest != nil {
 		method := toHTTPMethod(appEngineHTTPRequest.GetHttpMethod())
 
@@ -319,21 +334,19 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		req, _ = http.NewRequest(method, url, bytes.NewBuffer(appEngineHTTPRequest.GetBody()))
 
 		headers = appEngineHTTPRequest.GetHeaders()
+
+		// These headers are only set on dispatch, see https://cloud.google.com/tasks/docs/reference/rpc/google.cloud.tasks.v2#google.cloud.tasks.v2.AppEngineHttpRequest
+		// TODO: optional headers
+		headers["X-AppEngine-QueueName"] = headerQueueName
+		headers["X-AppEngine-TaskName"] = headerTaskName
+		headers["X-AppEngine-TaskRetryCount"] = headerTaskRetryCount
+		headers["X-AppEngine-TaskExecutionCount"] = headerTaskExecutionCount
+		headers["X-AppEngine-TaskETA"] = headerTaskETA
 	}
 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-
-	nameParts := parseTaskName(taskState)
-
-	// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
-	scheduled, _ := ptypes.Timestamp(taskState.GetScheduleTime())
-	req.Header.Set("X-CloudTasks-QueueName", nameParts.queueId)
-	req.Header.Set("X-CloudTasks-TaskName", nameParts.taskId)
-	req.Header.Set("X-CloudTasks-TaskExecutionCount", fmt.Sprintf("%v", taskState.GetResponseCount()))
-	req.Header.Set("X-CloudTasks-TaskRetryCount", fmt.Sprintf("%v", taskState.GetDispatchCount()-1))
-	req.Header.Set("X-CloudTasks-TaskEta", fmt.Sprintf("%f", float64(scheduled.UnixNano())/1e9))
 
 	resp, err := client.Do(req)
 	if err != nil {

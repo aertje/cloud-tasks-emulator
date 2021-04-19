@@ -1,23 +1,45 @@
-name: Publish Docker image
-
+name: CI/CD
 on:
   push:
   pull_request:
-
 env:
   IMAGE_NAME: cloud-tasks-emulator
-
 jobs:
-  Build-and-Push-Docker-Image:
+  test:
     runs-on: ubuntu-latest
-    name: Docker Build, Tag, Push
+    steps:
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.13
+        id: go
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Get dependencies
+        run: |
+          go get -v -t -d ./...
+          if [ -f Gopkg.toml ]; then
+              curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+              dep ensure
+          fi
+      - name: Build
+        run: go build -v .
+      - name: Test
+        run: go test -v .
+  docker-smoke-test:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
-
+        uses: actions/checkout@v2
       - name: Build image
         run: docker build . --file Dockerfile --tag $IMAGE_NAME
-
       - name: Cache smoketest dependencies
         uses: actions/cache@v2
         with:
@@ -25,15 +47,18 @@ jobs:
           key:  smoketests-pkgs-${{ hashFiles('docker-smoketests/go.*') }}
           restore-keys: |
             smoketests-pkgs
-
       - name: Run container smoketests
         run:  EMULATOR_DOCKER_IMAGE=$IMAGE_NAME docker-smoketests/smoketests.sh
-
-      # Only attempt to publish the image if this is triggered by a `push` (e.g. direct to the repo by a collaborator,
-      # not an external pull request). This step would anyway fail on a pull_request workflow because the required
-      # secret would not be available.
-      - name: Publish to GitHub Container Registry
-        if: ${{ github.event_name == 'push' }}
+  docker-publish:
+    runs-on: ubuntu-latest
+    needs: [test, docker-smoke-test]
+    if:  ${{ github.event_name == 'push' && startsWith('refs/tags/v', github.ref) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Build image
+        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+      - name: Publish to Github Packages
         run: |
           set -o errexit
           set -o nounset

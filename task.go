@@ -319,11 +319,11 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 
 		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
 		// TODO: optional headers
-		req.Header.Set("X-CloudTasks-QueueName", headerQueueName)
-		req.Header.Set("X-CloudTasks-TaskName", headerTaskName)
-		req.Header.Set("X-CloudTasks-TaskExecutionCount", headerTaskExecutionCount)
-		req.Header.Set("X-CloudTasks-TaskRetryCount", headerTaskRetryCount)
-		req.Header.Set("X-CloudTasks-TaskETA", headerTaskETA)
+		headers["X-CloudTasks-QueueName"] = headerQueueName
+		headers["X-CloudTasks-TaskName"] = headerTaskName
+		headers["X-CloudTasks-TaskExecutionCount"] = headerTaskExecutionCount
+		headers["X-CloudTasks-TaskRetryCount"] = headerTaskRetryCount
+		headers["X-CloudTasks-TaskETA"] = headerTaskETA
 	} else if appEngineHTTPRequest != nil {
 		method := toHTTPMethod(appEngineHTTPRequest.GetHttpMethod())
 

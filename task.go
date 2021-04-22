@@ -345,7 +345,9 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 	}
 
 	for k, v := range headers {
-		req.Header.Set(k, v)
+		// Uses a direct set to maintain capitalization
+		// TODO: figure out a way to test these, as the Go net/http client lib overrides the incoming header capitalization
+		req.Header[k] = []string{v}
 	}
 
 	resp, err := client.Do(req)

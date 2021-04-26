@@ -23,7 +23,9 @@ import (
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	grpcCodes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	grpcStatus "google.golang.org/grpc/status"
 )
 
@@ -130,6 +132,62 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 		assert.Regexp(t, "^Task name must be formatted", rsp.Message())
 		assert.Equal(t, grpcCodes.InvalidArgument, rsp.Code())
 	}
+}
+
+func TestGetQueueExists(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+
+	getQueueRequest := taskspb.GetQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+
+	gettedQueue, err := client.GetQueue(context.Background(), &getQueueRequest)
+
+	assert.NoError(t, err)
+	assert.Equal(t, createdQueue.GetName(), gettedQueue.GetName())
+}
+
+func TestGetQueueNeverExisted(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	getQueueRequest := taskspb.GetQueueRequest{
+		Name: "hello_q",
+	}
+
+	gettedQueue, err := client.GetQueue(context.Background(), &getQueueRequest)
+
+	assert.Nil(t, gettedQueue)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestGetQueuePreviouslyExisted(t *testing.T) {
+	serv, client := setUp(t)
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+
+	deleteQueueRequest := taskspb.DeleteQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+
+	err := client.DeleteQueue(context.Background(), &deleteQueueRequest)
+
+	assert.NoError(t, err)
+
+	getQueueRequest := taskspb.GetQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+
+	gettedQueue, err := client.GetQueue(context.Background(), &getQueueRequest)
+
+	assert.Nil(t, gettedQueue)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.NotFound, st.Code())
 }
 
 func TestSuccessTaskExecution(t *testing.T) {

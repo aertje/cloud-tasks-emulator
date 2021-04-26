@@ -93,9 +93,12 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 // GetQueue returns the requested queue
 func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
-	queue, _ := s.fetchQueue(in.GetName())
+	queue, ok := s.fetchQueue(in.GetName())
 
-	// TODO: handle not found
+	// Cloud responds with the same error message whether the queue was recently deleted or never existed
+	if !ok || queue == nil {
+		return nil, status.Errorf(codes.NotFound, "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.")
+	}
 
 	return queue.state, nil
 }

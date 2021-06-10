@@ -127,7 +127,7 @@ channel = grpc.insecure_channel('localhost:8123')
 transport = CloudTasksGrpcTransport(channel=channel)
 client = CloudTasksClient(transport=transport)
 
-parent = '/projects/my-sandbox/locations/us-central1'
+parent = 'projects/my-sandbox/locations/us-central1'
 queue_name = parent + '/queues/test'
 client.create_queue(queue={'name': queue_name}, parent=parent)
 

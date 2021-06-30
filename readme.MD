@@ -176,7 +176,7 @@ createdTaskResp, _ := client.CreateTask(context.Background(), &createTaskRequest
 ```
 
 ### PHP example
-PHP example looks like this.
+The following example can be used for PHP.
 ```php
 <?php
 

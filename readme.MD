@@ -178,7 +178,6 @@ createdTaskResp, _ := client.CreateTask(context.Background(), &createTaskRequest
 ### PHP example
 The following example can be used for PHP.
 ```php
-
 use Grpc\ChannelCredentials;
 use Google\Cloud\Tasks\V2\Task;
 use Google\Cloud\Tasks\V2\HttpMethod;

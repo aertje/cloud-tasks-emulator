@@ -174,3 +174,35 @@ createTaskRequest := taskspb.CreateTaskRequest{
 }
 createdTaskResp, _ := client.CreateTask(context.Background(), &createTaskRequest)
 ```
+
+### PHP example
+The following example can be used for PHP.
+```php
+use Grpc\ChannelCredentials;
+use Google\Cloud\Tasks\V2\Task;
+use Google\Cloud\Tasks\V2\HttpMethod;
+use Google\Cloud\Tasks\V2\HttpRequest;
+use Google\Cloud\Tasks\V2\CloudTasksClient;
+
+$client = new CloudTasksClient([
+            'apiEndpoint' => 'localhost:8123',
+            'transport' => 'grpc',
+            'transportConfig' => [
+                'grpc' => [
+                    'stubOpts' => [
+                        'credentials' => ChannelCredentials::createInsecure()
+                    ]
+                ]
+            ]
+        ]);
+	
+$http = new HttpRequest();
+$http->setHttpMethod(HttpMethod::GET)->setUrl('https://google.com');
+
+$task = new Task();
+
+$task->setHttpRequest($http);
+$queuePath = $client->queueName('dev', 'here', 'tasks');
+
+$response = $this->client->createTask($queuePath, $task);
+```

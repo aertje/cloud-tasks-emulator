@@ -35,6 +35,14 @@ go run ./ -host localhost \
   -queue projects/dev/locations/here/queues/anotherq
 ```
 
+You can also request queue to be created on the fly when a task arrived for an unknown queue:
+
+```
+go run ./ -host localhost \
+  -port 8000 \
+  -auto-create-queue
+```
+
 Once running, you connect to it using the standard google cloud tasks GRPC libraries.
 
 ### Docker

@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/dgrijalva/jwt-go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {

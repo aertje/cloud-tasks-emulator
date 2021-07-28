@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt"
 
 	. "cloud.google.com/go/cloudtasks/apiv2"
 	. "github.com/aertje/cloud-tasks-emulator"

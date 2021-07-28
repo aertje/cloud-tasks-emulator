@@ -1,18 +1,11 @@
 package main
 
 import (
-	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
-	"github.com/lestrrat-go/jwx/jwk"
-	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
-	"google.golang.org/grpc"
 	"io/ioutil"
 	"log"
 	"net"
@@ -20,6 +13,14 @@ import (
 	"net/http/httputil"
 	"strings"
 	"time"
+
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+	"github.com/golang-jwt/jwt"
+	"github.com/lestrrat-go/jwx/jwk"
+	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
+	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	"google.golang.org/grpc"
 )
 
 // Duplicated from app source to avoid having to import the project code

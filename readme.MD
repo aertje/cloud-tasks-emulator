@@ -206,3 +206,31 @@ $queuePath = $client->queueName('dev', 'here', 'tasks');
 
 $response = $this->client->createTask($queuePath, $task);
 ```
+
+### JavaScript example
+The following example can be used for JavaScript.
+```js
+import { CloudTasksClient } from '@google-cloud/tasks';
+import { credentials } from '@grpc/grpc-js';
+
+const client = new CloudTasksClient({
+  port: 8123,
+  servicePath: 'localhost',
+  sslCreds: credentials.createInsecure(),
+});
+
+const parent = 'projects/my-sandbox/locations/us-central1';
+const queueName = `${parent}/queues/test`;
+tasksClient.createQueue({ parent, queue: { name: queueName } });
+
+// Create a normal http task that should succeed
+await tasks.createTask({
+  parent: queueName,
+  task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
+});
+// Create a normal http task that will throw 405s and will get retried
+await tasks.createTask({
+  parent: queueName,
+  task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
+});
+```

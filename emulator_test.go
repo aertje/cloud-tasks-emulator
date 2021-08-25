@@ -64,6 +64,16 @@ func tearDown(t *testing.T, serv *grpc.Server) {
 	serv.Stop()
 }
 
+func tearDownQueue(t *testing.T, client *Client, queue *taskspb.Queue) {
+	deleteQueueRequest := taskspb.DeleteQueueRequest{
+		Name: queue.GetName(),
+	}
+	err := client.DeleteQueue(context.Background(), &deleteQueueRequest)
+	require.NoError(t, err)
+	// Wait a moment for the queue to delete and all tasks to definitely be done & not going to fire again
+	time.Sleep(100 * time.Millisecond)
+}
+
 func TestCloudTasksCreateQueue(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
@@ -84,6 +94,7 @@ func TestCreateTask(t *testing.T) {
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -110,6 +121,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -201,6 +213,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 	)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -264,6 +277,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	defer srv.Shutdown(context.Background())
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -313,6 +327,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -355,6 +370,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),

@@ -240,22 +240,22 @@ func TestSuccessTaskExecution(t *testing.T) {
 	assert.Nil(t, gettedTask)
 
 	// Validate that the call was actually made properly
-	assert.NotNil(t, receivedRequest, "Request was received")
+	if assert.NotNil(t, receivedRequest, "Request was received") {
+		// Simple predictable headers
+		expectHeaders := map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+			"X-CloudTasks-TaskName":           "my-test-task",
+			"X-CloudTasks-QueueName":          "test",
+		}
+		actualHeaders := make(map[string]string)
+		for hdr := range expectHeaders {
+			actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
+		}
 
-	// Simple predictable headers
-	expectHeaders := map[string]string{
-		"X-CloudTasks-TaskExecutionCount": "0",
-		"X-CloudTasks-TaskRetryCount":     "0",
-		"X-CloudTasks-TaskName":           "my-test-task",
-		"X-CloudTasks-QueueName":          "test",
+		assert.Equal(t, expectHeaders, actualHeaders)
+		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
 	}
-	actualHeaders := make(map[string]string)
-	for hdr := range expectHeaders {
-		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-	}
-
-	assert.Equal(t, expectHeaders, actualHeaders)
-	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
 
 	srv.Shutdown(context.Background())
 }
@@ -299,21 +299,23 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 
 	assert.NotNil(t, createdTask)
 
-	expectHeaders := map[string]string{
-		"X-AppEngine-TaskExecutionCount": "0",
-		"X-AppEngine-TaskRetryCount":     "0",
-		"X-AppEngine-TaskName":           "my-test-task",
-		"X-AppEngine-QueueName":          "test",
+	if assert.NotNil(t, receivedRequest, "Request was received") {
+		expectHeaders := map[string]string{
+			"X-AppEngine-TaskExecutionCount": "0",
+			"X-AppEngine-TaskRetryCount":     "0",
+			"X-AppEngine-TaskName":           "my-test-task",
+			"X-AppEngine-QueueName":          "test",
+		}
+		actualHeaders := make(map[string]string)
+
+		for hdr := range expectHeaders {
+			actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
+		}
+
+		assert.Equal(t, expectHeaders, actualHeaders)
+
+		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 	}
-	actualHeaders := make(map[string]string)
-
-	for hdr := range expectHeaders {
-		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-	}
-
-	assert.Equal(t, expectHeaders, actualHeaders)
-
-	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
 
 func TestErrorTaskExecution(t *testing.T) {
@@ -394,20 +396,21 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Validate that the call was actually made properly
-	assert.NotNil(t, receivedRequest, "Request was received")
-	authHeader := receivedRequest.Header.Get("Authorization")
-	assert.NotNil(t, authHeader, "Has Authorization header")
-	assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
-	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
+	if assert.NotNil(t, receivedRequest, "Request was received") {
+		authHeader := receivedRequest.Header.Get("Authorization")
+		assert.NotNil(t, authHeader, "Has Authorization header")
+		assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
+		tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
 
-	// Full token validation is done in the docker smoketests and the oidc internal tests
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
-	require.NoError(t, err)
+		// Full token validation is done in the docker smoketests and the oidc internal tests
+		token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+		require.NoError(t, err)
 
-	claims := token.Claims.(*OpenIDConnectClaims)
-	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
-	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
-	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
+		claims := token.Claims.(*OpenIDConnectClaims)
+		assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
+		assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
+		assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
+	}
 
 	srv.Shutdown(context.Background())
 }

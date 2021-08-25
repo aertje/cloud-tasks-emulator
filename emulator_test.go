@@ -214,6 +214,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 		},
 	}
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
 
 	getTaskRequest := taskspb.GetTaskRequest{
 		Name: createdTask.GetName(),
@@ -276,7 +277,8 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 		},
 	}
 
-	createdTask, _ := client.CreateTask(context.Background(), &createTaskRequest)
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
 
 	// Need to give it a chance to make the actual call
 	time.Sleep(100 * time.Millisecond)
@@ -323,6 +325,7 @@ func TestErrorTaskExecution(t *testing.T) {
 		},
 	}
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
 
 	getTaskRequest := taskspb.GetTaskRequest{
 		Name: createdTask.GetName(),

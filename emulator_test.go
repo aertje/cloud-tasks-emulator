@@ -238,18 +238,16 @@ func TestSuccessTaskExecution(t *testing.T) {
 	// Validate that the call was actually made properly
 	if assert.NotNil(t, receivedRequest, "Request was received") {
 		// Simple predictable headers
-		expectHeaders := map[string]string{
-			"X-CloudTasks-TaskExecutionCount": "0",
-			"X-CloudTasks-TaskRetryCount":     "0",
-			"X-CloudTasks-TaskName":           "my-test-task",
-			"X-CloudTasks-QueueName":          "test",
-		}
-		actualHeaders := make(map[string]string)
-		for hdr := range expectHeaders {
-			actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-		}
-
-		assert.Equal(t, expectHeaders, actualHeaders)
+		assertHeadersMatch(
+			t,
+			map[string]string{
+				"X-CloudTasks-TaskExecutionCount": "0",
+				"X-CloudTasks-TaskRetryCount":     "0",
+				"X-CloudTasks-TaskName":           "my-test-task",
+				"X-CloudTasks-QueueName":          "test",
+			},
+			receivedRequest,
+		)
 		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
 	}
 
@@ -289,19 +287,16 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	if assert.NotNil(t, receivedRequest, "Request was received") {
-		expectHeaders := map[string]string{
-			"X-AppEngine-TaskExecutionCount": "0",
-			"X-AppEngine-TaskRetryCount":     "0",
-			"X-AppEngine-TaskName":           "my-test-task",
-			"X-AppEngine-QueueName":          "test",
-		}
-		actualHeaders := make(map[string]string)
-
-		for hdr := range expectHeaders {
-			actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-		}
-
-		assert.Equal(t, expectHeaders, actualHeaders)
+		assertHeadersMatch(
+			t,
+			map[string]string{
+				"X-AppEngine-TaskExecutionCount": "0",
+				"X-AppEngine-TaskRetryCount":     "0",
+				"X-AppEngine-TaskName":           "my-test-task",
+				"X-AppEngine-QueueName":          "test",
+			},
+			receivedRequest,
+		)
 
 		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 	}
@@ -335,21 +330,53 @@ func TestErrorTaskExecution(t *testing.T) {
 
 	// With the default retry backoff, we expect 4 calls within the first second:
 	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
-	_, err = awaitHttpRequest(receivedRequests)
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
 	require.NoError(t, err)
 	log.Println("Got 1 request")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+		},
+		receivedRequest,
+	)
 
-	_, err = awaitHttpRequest(receivedRequests)
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
 	require.NoError(t, err)
 	log.Println("Got 2 requests")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "1",
+			"X-CloudTasks-TaskRetryCount":     "1",
+		},
+		receivedRequest,
+	)
 
-	_, err = awaitHttpRequest(receivedRequests)
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
 	require.NoError(t, err)
-
 	log.Println("Got 3 requests")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "2",
+			"X-CloudTasks-TaskRetryCount":     "2",
+		},
+		receivedRequest,
+	)
 
-	_, err = awaitHttpRequest(receivedRequests)
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
 	require.NoError(t, err)
+	log.Println("Got 4 requests")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "3",
+			"X-CloudTasks-TaskRetryCount":     "3",
+		},
+		receivedRequest,
+	)
 
 	expectedCompleteBy := start.Add(700 * time.Millisecond)
 	assert.WithinDuration(
@@ -431,6 +458,16 @@ func formatQueueName(formattedParent, name string) string {
 
 func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
+}
+
+func assertHeadersMatch(t *testing.T, expectHeaders map[string]string, request *http.Request) {
+	actualHeaders := make(map[string]string)
+
+	for hdr := range expectHeaders {
+		actualHeaders[hdr] = request.Header.Get(hdr)
+	}
+
+	assert.Equal(t, expectHeaders, actualHeaders)
 }
 
 func assertIsRecentTimestamp(t *testing.T, etaString string) {

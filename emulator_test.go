@@ -20,6 +20,7 @@ import (
 	. "github.com/aertje/cloud-tasks-emulator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
@@ -37,9 +38,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func setUp(t *testing.T) (*grpc.Server, *Client) {
+func setUp(t *testing.T, options ServerOptions) (*grpc.Server, *Client) {
 	serv := grpc.NewServer()
-	taskspb.RegisterCloudTasksServer(serv, NewServer())
+	emulatorServer := NewServer()
+	emulatorServer.Options = options
+	taskspb.RegisterCloudTasksServer(serv, emulatorServer)
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -73,7 +76,7 @@ func tearDownQueue(t *testing.T, client *Client, queue *taskspb.Queue) {
 }
 
 func TestCloudTasksCreateQueue(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 	queue := newQueue(formattedParent, "testCloudTasksCreateQueue")
 	request := taskspb.CreateQueueRequest{
@@ -88,7 +91,7 @@ func TestCloudTasksCreateQueue(t *testing.T) {
 }
 
 func TestCreateTask(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -115,7 +118,7 @@ func TestCreateTask(t *testing.T) {
 }
 
 func TestCreateTaskRejectsDuplicateName(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -169,7 +172,7 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 }
 
 func TestCreateTaskRejectsInvalidName(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -194,7 +197,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 }
 
 func TestGetQueueExists(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -210,7 +213,7 @@ func TestGetQueueExists(t *testing.T) {
 }
 
 func TestGetQueueNeverExisted(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	getQueueRequest := taskspb.GetQueueRequest{
@@ -225,7 +228,7 @@ func TestGetQueueNeverExisted(t *testing.T) {
 }
 
 func TestGetQueuePreviouslyExisted(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -249,8 +252,117 @@ func TestGetQueuePreviouslyExisted(t *testing.T) {
 	assert.Equal(t, codes.NotFound, st.Code())
 }
 
+func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/any-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					// Use the not_found handler to prove that purge stops any further retries
+					Url: "http://localhost:5000/not_found",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Task was created OK, verify that the first HTTP request was sent
+	_, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
+
+	// Now purge the queue
+	purgeQueueRequest := taskspb.PurgeQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	require.NoError(t, err)
+
+	// Wait a moment for that to work, then verify nothing in the list and cannot retrieve by name
+	time.Sleep(100 * time.Millisecond)
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.FailedPrecondition, client, createdTask.GetName())
+
+	// BUT - Verify that the task name is still not available for new tasks
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
+
+	// Verify that it only sent the original HTTP request, it purged before the retries
+	_, err = awaitHttpRequestWithTimeout(receivedRequests, 1*time.Second)
+	assert.Error(t, err, "Should not receive any further HTTP requests within timeout")
+}
+
+func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/any-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					// Use the not_found handler to prove that purge stops any further retries
+					Url: "http://localhost:5000/not_found",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Task was created OK, verify that the first HTTP request was sent
+	_, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
+
+	// Now purge the queue
+	purgeQueueRequest := taskspb.PurgeQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	require.NoError(t, err)
+
+	// In this mode, purging the queue is synchronous so we should be in the empty state straight away
+	time.Sleep(1 * time.Second)
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+
+	// And verify that we can now create the task with that name again and it will fire again
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Verify that it has now sent the request from the new task
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	require.NotNil(t, receivedRequest, "Request was received")
+	// Note that the execution count is reset to 0
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+		},
+		receivedRequest,
+	)
+}
+
 func TestSuccessTaskExecution(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	srv, receivedRequests := startTestServer()
@@ -302,7 +414,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	defer os.Unsetenv("APP_ENGINE_EMULATOR_HOST")
@@ -350,7 +462,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 }
 
 func TestErrorTaskExecution(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	srv, receivedRequests := startTestServer()
@@ -440,7 +552,7 @@ func TestErrorTaskExecution(t *testing.T) {
 }
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
-	serv, client := setUp(t)
+	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
 
 	OpenIDConfig.IssuerURL = "http://localhost:8980"
@@ -534,6 +646,29 @@ func assertIsGrpcError(t *testing.T, expectMessageRegexp string, expectCode grpc
 	require.True(t, ok, "Should be grpc error")
 	assert.Regexp(t, expectMessageRegexp, rsp.Message())
 	assert.Equal(t, expectCode, rsp.Code(), "Expected code %s, got %s", expectCode.String(), rsp.Code().String())
+}
+
+func assertTaskListIsEmpty(t *testing.T, client *Client, queue *taskspb.Queue) {
+	listTasksRequest := taskspb.ListTasksRequest{
+		Parent: queue.GetName(),
+	}
+	tasksIterator := client.ListTasks(context.Background(), &listTasksRequest)
+	firstTask, err := tasksIterator.Next()
+	assert.Nil(t, firstTask, "Should not get a task in the tasks list")
+	assert.Same(t, iterator.Done, err, "task iterator should be done")
+}
+
+func assertGetTaskFails(t *testing.T, expectCode grpcCodes.Code, client *Client, name string) {
+	getTaskRequest := taskspb.GetTaskRequest{
+		Name: name,
+	}
+	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
+	if assert.Error(t, err) {
+		rsp, ok := grpcStatus.FromError(err)
+		assert.True(t, ok, "Should be grpc error")
+		assert.Equal(t, expectCode, rsp.Code())
+	}
+	assert.Nil(t, gettedTask)
 }
 
 func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {

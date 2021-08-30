@@ -109,6 +109,27 @@ use in docker / k8s environments.
 You can, of course, export the content of the `/jwks` url if you prefer to
 hardcode the public keys in your application.
 
+## Flushing task state
+
+By default, the emulator tracks the names of every task created since the emulator launched. The list
+of task names survives task completion, deletion, and purge queue operations. Completed / removed tasks
+do not appear in ListTasks, but calling GetTask or CreateTask with a name that has been used in the
+past will return an error. This mirrors the behaviour of Cloud Tasks - although note that unlike
+Cloud Tasks the emulator does not attempt to garbage collect the list of task names over time.
+
+For some usecases, you may want to completely reset the list of task names without restarting the
+emulator - e.g. between each scenario in a test run.
+
+The optional `hard-reset-on-purge-queue` flag configures the emulator so that calling `PurgeQueue`
+will remove all record of past tasks. It also switches `PurgeQueue` to be a synchronous operation
+which only returns once all tasks have been cancelled and the queue is empty. Queued tasks may, of
+course, still fire during the PurgeQueue operation - but they cannot fire after PurgeQueue has
+returned.
+
+```
+go run ./ --hard-reset-on-purge-queue
+```
+
 ## Examples
 
 ### Python example

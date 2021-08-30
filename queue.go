@@ -213,8 +213,13 @@ func (queue *Queue) Delete() {
 }
 
 // Purge purges all tasks from the queue
-func (queue *Queue) Purge() {
+// - Normally this is a fire-and-forget operation, but it returns a WaitGroup to allow HardReset to wait for completion
+func (queue *Queue) Purge() *sync.WaitGroup {
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(1)
+
 	go func() {
+		defer waitGroup.Done()
 
 		queue.tsMux.Lock()
 		defer queue.tsMux.Unlock()
@@ -226,6 +231,37 @@ func (queue *Queue) Purge() {
 			}
 		}
 	}()
+
+	return &waitGroup
+}
+
+// Goes beyond `Purge` behaviour to synchronously delete all tasks and their name handles
+func (queue *Queue) HardReset(s *Server) {
+	waitGroup := queue.Purge()
+	waitGroup.Wait()
+
+	// This is still a bit awkward - we can't *guarantee* the task is fully deleted even after the WaitGroup because:
+	// - Purge() calls task.Delete()
+	// - task.Delete() writes to a buffered `cancel` channel
+	// - task.Schedule() reads from that buffered channel in a separate goroutine
+	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
+	//
+	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
+	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
+	// period to allow the tasks' internal goroutines to fire first.
+	time.Sleep(10 * time.Millisecond)
+
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
+	for taskName, task := range queue.ts {
+		if task != nil {
+			// The naive "sleep till it deletes" approach described above is too naive...
+			panic("Expected task to be deleted by now!")
+		}
+
+		delete(queue.ts, taskName)
+		s.hardDeleteTask(taskName)
+	}
 }
 
 // Pause pauses the queue

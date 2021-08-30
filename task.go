@@ -57,6 +57,8 @@ type Task struct {
 
 	cancel chan bool
 
+	isDone bool
+
 	onDone func(*Task)
 
 	stateMutex sync.Mutex
@@ -71,6 +73,7 @@ func NewTask(queue *Queue, taskState *tasks.Task, onDone func(task *Task)) *Task
 	task := &Task{
 		queue:  queue,
 		state:  taskState,
+		isDone: false,
 		onDone: onDone,
 		cancel: make(chan bool, 1), // Buffered in case cancel comes when task is not scheduled
 	}
@@ -267,10 +270,17 @@ func updateStateAfterDispatch(task *Task, statusCode int) *tasks.Task {
 	return frozenTaskState
 }
 
+func (task *Task) markDone() {
+	task.stateMutex.Lock()
+	defer task.stateMutex.Unlock()
+	task.isDone = true
+	task.onDone(task)
+}
+
 func (task *Task) reschedule(retry bool, statusCode int) {
 	if statusCode >= 200 && statusCode <= 299 {
 		log.Println("Task done")
-		task.onDone(task)
+		task.markDone()
 	} else {
 		log.Println("Task exec error with status " + strconv.Itoa(statusCode))
 		if retry {
@@ -377,9 +387,14 @@ func (task *Task) Attempt() {
 // Run runs the task outside of the normal queueing mechanism.
 // This method is called directly by request.
 func (task *Task) Run() *tasks.Task {
+	// Update the schedule time so that retries are calculated correctly
+	task.stateMutex.Lock()
+	task.state.ScheduleTime = ptypes.TimestampNow()
+	task.stateMutex.Unlock()
+
 	taskState := updateStateForDispatch(task)
 
-	go task.doDispatch(false)
+	go task.doDispatch(true)
 
 	return taskState
 }
@@ -402,10 +417,14 @@ func (task *Task) Schedule() {
 	go func() {
 		select {
 		case <-time.After(fromNow):
-			task.queue.fire <- task
+			// It's possible the task might already be `done` if e.g. it was called by RunTask before the originally
+			// scheduled execution time. In that case this is a no-op, otherwise, run the task.
+			if !task.isDone {
+				task.queue.fire <- task
+			}
 			return
 		case <-task.cancel:
-			task.onDone(task)
+			task.markDone()
 			return
 		}
 	}()

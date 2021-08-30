@@ -270,9 +270,17 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	}
 
 	if in.Task.Name != "" {
-		// If a name is specified, it must be valid and it must be unique
+		// If a name is specified, it must be valid, it must be unique, and it must belong to this queue
 		if !isValidTaskName(in.Task.Name) {
 			return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+		}
+		if !strings.HasPrefix(in.Task.Name, queueName+"/tasks/") {
+			return nil, status.Errorf(
+				codes.InvalidArgument,
+				"The queue name from request ('%s') must be the same as the queue name in the named task ('%s').",
+				in.Task.Name,
+				queueName,
+			)
 		}
 		if _, exists := s.fetchTask(in.Task.Name); exists {
 			return nil, status.Errorf(codes.AlreadyExists, "Requested entity already exists")

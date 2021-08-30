@@ -277,26 +277,24 @@ func (task *Task) markDone() {
 	task.onDone(task)
 }
 
-func (task *Task) reschedule(retry bool, statusCode int) {
+func (task *Task) reschedule(statusCode int) {
 	if statusCode >= 200 && statusCode <= 299 {
 		log.Println("Task done")
 		task.markDone()
 	} else {
 		log.Println("Task exec error with status " + strconv.Itoa(statusCode))
-		if retry {
-			retryConfig := task.queue.state.GetRetryConfig()
+		retryConfig := task.queue.state.GetRetryConfig()
 
-			if task.state.DispatchCount >= retryConfig.GetMaxAttempts() {
-				log.Println("Ran out of attempts")
-			} else {
-				updateStateForReschedule(task)
-				task.Schedule()
-			}
+		if task.state.DispatchCount >= retryConfig.GetMaxAttempts() {
+			log.Println("Ran out of attempts")
+		} else {
+			updateStateForReschedule(task)
+			task.Schedule()
 		}
 	}
 }
 
-func dispatch(retry bool, taskState *tasks.Task) int {
+func dispatch(taskState *tasks.Task) int {
 	client := &http.Client{}
 	client.Timeout, _ = ptypes.Duration(taskState.GetDispatchDeadline())
 
@@ -370,18 +368,18 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 	return resp.StatusCode
 }
 
-func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, task.state)
+func (task *Task) doDispatch() {
+	respCode := dispatch(task.state)
 
 	updateStateAfterDispatch(task, respCode)
-	task.reschedule(retry, respCode)
+	task.reschedule(respCode)
 }
 
 // Attempt tries to execute a task
 func (task *Task) Attempt() {
 	updateStateForDispatch(task)
 
-	task.doDispatch(true)
+	task.doDispatch()
 }
 
 // Run runs the task outside of the normal queueing mechanism.
@@ -394,7 +392,7 @@ func (task *Task) Run() *tasks.Task {
 
 	taskState := updateStateForDispatch(task)
 
-	go task.doDispatch(true)
+	go task.doDispatch()
 
 	return taskState
 }

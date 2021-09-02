@@ -324,8 +324,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	// With the default retry backoff, we expect 4 calls within the first second:
 	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
 	receivedRequest, err := awaitHttpRequest(receivedRequests)
-	require.NoError(t, err)
-	log.Println("Got 1 request")
+	require.NoError(t, err, "Should have received request 1")
 	assertHeadersMatch(
 		t,
 		map[string]string{
@@ -336,8 +335,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	)
 
 	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err)
-	log.Println("Got 2 requests")
+	require.NoError(t, err, "Should have received request 2")
 	assertHeadersMatch(
 		t,
 		map[string]string{
@@ -348,8 +346,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	)
 
 	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err)
-	log.Println("Got 3 requests")
+	require.NoError(t, err, "Should have received request 3")
 	assertHeadersMatch(
 		t,
 		map[string]string{
@@ -360,8 +357,7 @@ func TestErrorTaskExecution(t *testing.T) {
 	)
 
 	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err)
-	log.Println("Got 4 requests")
+	require.NoError(t, err, "Should have received request 4")
 	assertHeadersMatch(
 		t,
 		map[string]string{

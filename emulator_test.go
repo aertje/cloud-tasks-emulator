@@ -136,12 +136,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 
 	assert.Nil(t, createdTask)
-	if assert.Error(t, err, "Should return error") {
-		rsp, ok := grpcStatus.FromError(err)
-		assert.True(t, ok, "Should be grpc error")
-		assert.Regexp(t, "^Task name must be formatted", rsp.Message())
-		assert.Equal(t, grpcCodes.InvalidArgument, rsp.Code())
-	}
+	assertIsGrpcError(t, "^Task name must be formatted", grpcCodes.InvalidArgument, err)
 }
 
 func TestGetQueueExists(t *testing.T) {
@@ -236,21 +231,20 @@ func TestSuccessTaskExecution(t *testing.T) {
 	assert.Nil(t, gettedTask)
 
 	// Validate that the call was actually made properly
-	if assert.NotNil(t, receivedRequest, "Request was received") {
-		// Simple predictable headers
-		assertHeadersMatch(
-			t,
-			map[string]string{
-				"X-CloudTasks-TaskExecutionCount": "0",
-				"X-CloudTasks-TaskRetryCount":     "0",
-				"X-CloudTasks-TaskName":           "my-test-task",
-				"X-CloudTasks-QueueName":          "test",
-			},
-			receivedRequest,
-		)
-		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
-	}
+	require.NotNil(t, receivedRequest, "Request was received")
 
+	// Simple predictable headers
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+			"X-CloudTasks-TaskName":           "my-test-task",
+			"X-CloudTasks-QueueName":          "test",
+		},
+		receivedRequest,
+	)
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
@@ -286,20 +280,19 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	receivedRequest, err := awaitHttpRequest(receivedRequests)
 	require.NoError(t, err)
 
-	if assert.NotNil(t, receivedRequest, "Request was received") {
-		assertHeadersMatch(
-			t,
-			map[string]string{
-				"X-AppEngine-TaskExecutionCount": "0",
-				"X-AppEngine-TaskRetryCount":     "0",
-				"X-AppEngine-TaskName":           "my-test-task",
-				"X-AppEngine-QueueName":          "test",
-			},
-			receivedRequest,
-		)
+	require.NotNil(t, receivedRequest, "Request was received")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-AppEngine-TaskExecutionCount": "0",
+			"X-AppEngine-TaskRetryCount":     "0",
+			"X-AppEngine-TaskName":           "my-test-task",
+			"X-AppEngine-QueueName":          "test",
+		},
+		receivedRequest,
+	)
 
-		assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
-	}
+	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
 
 func TestErrorTaskExecution(t *testing.T) {
@@ -431,21 +424,20 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate that the call was actually made properly
-	if assert.NotNil(t, receivedRequest, "Request was received") {
-		authHeader := receivedRequest.Header.Get("Authorization")
-		assert.NotNil(t, authHeader, "Has Authorization header")
-		assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
-		tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
+	require.NotNil(t, receivedRequest, "Request was received")
+	authHeader := receivedRequest.Header.Get("Authorization")
+	assert.NotNil(t, authHeader, "Has Authorization header")
+	assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
+	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
 
-		// Full token validation is done in the docker smoketests and the oidc internal tests
-		token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
-		require.NoError(t, err)
+	// Full token validation is done in the docker smoketests and the oidc internal tests
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	require.NoError(t, err)
 
-		claims := token.Claims.(*OpenIDConnectClaims)
-		assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
-		assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
-		assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
-	}
+	claims := token.Claims.(*OpenIDConnectClaims)
+	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
+	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
+	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
 }
 
 func newQueue(formattedParent, name string) *taskspb.Queue {
@@ -484,6 +476,14 @@ func assertIsRecentTimestamp(t *testing.T, etaString string) {
 		2*time.Second,
 		"task eta should be within last few seconds",
 	)
+}
+
+func assertIsGrpcError(t *testing.T, expectMessageRegexp string, expectCode grpcCodes.Code, err error) {
+	require.Error(t, err, "Should return error")
+	rsp, ok := grpcStatus.FromError(err)
+	require.True(t, ok, "Should be grpc error")
+	assert.Regexp(t, expectMessageRegexp, rsp.Message())
+	assert.Equal(t, expectCode, rsp.Code(), "Expected code %s, got %s", expectCode.String(), rsp.Code().String())
 }
 
 func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {

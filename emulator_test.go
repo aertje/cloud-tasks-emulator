@@ -31,8 +31,6 @@ import (
 
 var formattedParent = formatParent("TestProject", "TestLocation")
 
-type serverRequestCallback = func(req *http.Request)
-
 func TestMain(m *testing.M) {
 	flag.Parse()
 
@@ -64,6 +62,16 @@ func tearDown(t *testing.T, serv *grpc.Server) {
 	serv.Stop()
 }
 
+func tearDownQueue(t *testing.T, client *Client, queue *taskspb.Queue) {
+	deleteQueueRequest := taskspb.DeleteQueueRequest{
+		Name: queue.GetName(),
+	}
+	err := client.DeleteQueue(context.Background(), &deleteQueueRequest)
+	require.NoError(t, err)
+	// Wait a moment for the queue to delete and all tasks to definitely be done & not going to fire again
+	time.Sleep(100 * time.Millisecond)
+}
+
 func TestCloudTasksCreateQueue(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
@@ -84,6 +92,7 @@ func TestCreateTask(t *testing.T) {
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -110,6 +119,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -126,12 +136,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 
 	assert.Nil(t, createdTask)
-	if assert.Error(t, err, "Should return error") {
-		rsp, ok := grpcStatus.FromError(err)
-		assert.True(t, ok, "Should be grpc error")
-		assert.Regexp(t, "^Task name must be formatted", rsp.Message())
-		assert.Equal(t, grpcCodes.InvalidArgument, rsp.Code())
-	}
+	assertIsGrpcError(t, "^Task name must be formatted", grpcCodes.InvalidArgument, err)
 }
 
 func TestGetQueueExists(t *testing.T) {
@@ -194,13 +199,11 @@ func TestSuccessTaskExecution(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	var receivedRequest *http.Request
-	srv := startTestServer(
-		func(req *http.Request) { receivedRequest = req },
-		func(req *http.Request) {},
-	)
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -214,36 +217,34 @@ func TestSuccessTaskExecution(t *testing.T) {
 		},
 	}
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
 
 	getTaskRequest := taskspb.GetTaskRequest{
 		Name: createdTask.GetName(),
 	}
 
-	// Need to give it a chance to make the actual call
-	time.Sleep(100 * time.Millisecond)
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
+
 	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
 	assert.Error(t, err)
 	assert.Nil(t, gettedTask)
 
 	// Validate that the call was actually made properly
-	assert.NotNil(t, receivedRequest, "Request was received")
+	require.NotNil(t, receivedRequest, "Request was received")
 
 	// Simple predictable headers
-	expectHeaders := map[string]string{
-		"X-CloudTasks-TaskExecutionCount": "0",
-		"X-CloudTasks-TaskRetryCount":     "0",
-		"X-CloudTasks-TaskName":           "my-test-task",
-		"X-CloudTasks-QueueName":          "test",
-	}
-	actualHeaders := make(map[string]string)
-	for hdr := range expectHeaders {
-		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-	}
-
-	assert.Equal(t, expectHeaders, actualHeaders)
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+			"X-CloudTasks-TaskName":           "my-test-task",
+			"X-CloudTasks-QueueName":          "test",
+		},
+		receivedRequest,
+	)
 	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-CloudTasks-TaskETA"))
-
-	srv.Shutdown(context.Background())
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
@@ -253,16 +254,11 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	defer os.Unsetenv("APP_ENGINE_EMULATOR_HOST")
 	os.Setenv("APP_ENGINE_EMULATOR_HOST", "http://localhost:5000")
 
-	var receivedRequest *http.Request
-
-	srv := startTestServer(
-		func(req *http.Request) { receivedRequest = req },
-		func(req *http.Request) {},
-	)
-
+	srv, receivedRequests := startTestServer()
 	defer srv.Shutdown(context.Background())
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -276,26 +272,25 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 		},
 	}
 
-	createdTask, _ := client.CreateTask(context.Background(), &createTaskRequest)
-
-	// Need to give it a chance to make the actual call
-	time.Sleep(100 * time.Millisecond)
-
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
 	assert.NotNil(t, createdTask)
 
-	expectHeaders := map[string]string{
-		"X-AppEngine-TaskExecutionCount": "0",
-		"X-AppEngine-TaskRetryCount":     "0",
-		"X-AppEngine-TaskName":           "my-test-task",
-		"X-AppEngine-QueueName":          "test",
-	}
-	actualHeaders := make(map[string]string)
+	// Wait for it to perform the http request
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
 
-	for hdr := range expectHeaders {
-		actualHeaders[hdr] = receivedRequest.Header.Get(hdr)
-	}
-
-	assert.Equal(t, expectHeaders, actualHeaders)
+	require.NotNil(t, receivedRequest, "Request was received")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-AppEngine-TaskExecutionCount": "0",
+			"X-AppEngine-TaskRetryCount":     "0",
+			"X-AppEngine-TaskName":           "my-test-task",
+			"X-AppEngine-QueueName":          "test",
+		},
+		receivedRequest,
+	)
 
 	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
@@ -304,13 +299,11 @@ func TestErrorTaskExecution(t *testing.T) {
 	serv, client := setUp(t)
 	defer tearDown(t, serv)
 
-	called := 0
-	srv := startTestServer(
-		func(req *http.Request) {},
-		func(req *http.Request) { called++ },
-	)
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -322,21 +315,74 @@ func TestErrorTaskExecution(t *testing.T) {
 			},
 		},
 	}
-	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 
+	start := time.Now()
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// With the default retry backoff, we expect 4 calls within the first second:
+	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	require.NoError(t, err, "Should have received request 1")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "0",
+			"X-CloudTasks-TaskRetryCount":     "0",
+		},
+		receivedRequest,
+	)
+
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err, "Should have received request 2")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "1",
+			"X-CloudTasks-TaskRetryCount":     "1",
+		},
+		receivedRequest,
+	)
+
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err, "Should have received request 3")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "2",
+			"X-CloudTasks-TaskRetryCount":     "2",
+		},
+		receivedRequest,
+	)
+
+	receivedRequest, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err, "Should have received request 4")
+	assertHeadersMatch(
+		t,
+		map[string]string{
+			"X-CloudTasks-TaskExecutionCount": "3",
+			"X-CloudTasks-TaskRetryCount":     "3",
+		},
+		receivedRequest,
+	)
+
+	expectedCompleteBy := start.Add(700 * time.Millisecond)
+	assert.WithinDuration(
+		t,
+		expectedCompleteBy,
+		time.Now(),
+		200*time.Millisecond,
+		"4 retries should take roughly 0.7 seconds",
+	)
+
+	// Check the state of the task has been updated with the number of dispatches
 	getTaskRequest := taskspb.GetTaskRequest{
 		Name: createdTask.GetName(),
 	}
-
-	time.Sleep(time.Second)
 	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
 	require.NoError(t, err)
-
-	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
 	assert.EqualValues(t, 4, gettedTask.GetDispatchCount())
-	assert.Equal(t, 4, called)
-
-	srv.Shutdown(context.Background())
 }
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
@@ -345,13 +391,11 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 
 	OpenIDConfig.IssuerURL = "http://localhost:8980"
 
-	var receivedRequest *http.Request
-	srv := startTestServer(
-		func(req *http.Request) { receivedRequest = req },
-		func(req *http.Request) {},
-	)
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
 
 	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -371,11 +415,12 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	_, err := client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 
-	// Need to give it a chance to make the actual call
-	time.Sleep(100 * time.Millisecond)
+	// Wait for it to perform the http request
+	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	require.NoError(t, err)
 
 	// Validate that the call was actually made properly
-	assert.NotNil(t, receivedRequest, "Request was received")
+	require.NotNil(t, receivedRequest, "Request was received")
 	authHeader := receivedRequest.Header.Get("Authorization")
 	assert.NotNil(t, authHeader, "Has Authorization header")
 	assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
@@ -389,8 +434,6 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
 	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
-
-	srv.Shutdown(context.Background())
 }
 
 func newQueue(formattedParent, name string) *taskspb.Queue {
@@ -403,6 +446,16 @@ func formatQueueName(formattedParent, name string) string {
 
 func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
+}
+
+func assertHeadersMatch(t *testing.T, expectHeaders map[string]string, request *http.Request) {
+	actualHeaders := make(map[string]string)
+
+	for hdr := range expectHeaders {
+		actualHeaders[hdr] = request.Header.Get(hdr)
+	}
+
+	assert.Equal(t, expectHeaders, actualHeaders)
 }
 
 func assertIsRecentTimestamp(t *testing.T, etaString string) {
@@ -421,6 +474,14 @@ func assertIsRecentTimestamp(t *testing.T, etaString string) {
 	)
 }
 
+func assertIsGrpcError(t *testing.T, expectMessageRegexp string, expectCode grpcCodes.Code, err error) {
+	require.Error(t, err, "Should return error")
+	rsp, ok := grpcStatus.FromError(err)
+	require.True(t, ok, "Should be grpc error")
+	assert.Regexp(t, expectMessageRegexp, rsp.Message())
+	assert.Equal(t, expectCode, rsp.Code(), "Expected code %s, got %s", expectCode.String(), rsp.Code().String())
+}
+
 func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
 	queue := newQueue(formattedParent, "test")
 
@@ -435,20 +496,37 @@ func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
 	return createdQueue
 }
 
-func startTestServer(successCallback serverRequestCallback, notFoundCallback serverRequestCallback) *http.Server {
+func awaitHttpRequest(receivedRequests <-chan *http.Request) (*http.Request, error) {
+	return awaitHttpRequestWithTimeout(receivedRequests, 1*time.Second)
+}
+
+func awaitHttpRequestWithTimeout(receivedRequests <-chan *http.Request, timeout time.Duration) (*http.Request, error) {
+	select {
+	case request := <-receivedRequests:
+		// Wait a few ticks for the emulator to receive & process the http response (the request
+		// was written to the channel before we sent the response back)
+		time.Sleep(20 * time.Millisecond)
+		return request, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("Timed out waiting for HTTP request after %s", timeout)
+	}
+}
+
+func startTestServer() (*http.Server, <-chan *http.Request) {
 	mux := http.NewServeMux()
+	requestChannel := make(chan *http.Request, 1)
 	mux.HandleFunc("/success", func(w http.ResponseWriter, r *http.Request) {
-		successCallback(r)
 		w.WriteHeader(200)
+		requestChannel <- r
 	})
 	mux.HandleFunc("/not_found", func(w http.ResponseWriter, r *http.Request) {
-		notFoundCallback(r)
 		w.WriteHeader(404)
+		requestChannel <- r
 	})
 
 	srv := &http.Server{Addr: "localhost:5000", Handler: mux}
 
 	go srv.ListenAndServe()
 
-	return srv
+	return srv, requestChannel
 }

@@ -25,7 +25,14 @@ func NewServer() *Server {
 	return &Server{
 		qs: make(map[string]*Queue),
 		ts: make(map[string]*Task),
+		Options: ServerOptions{
+			HardResetOnPurgeQueue: false,
+		},
 	}
+}
+
+type ServerOptions struct {
+	HardResetOnPurgeQueue bool
 }
 
 // Server represents the emulator server
@@ -33,8 +40,9 @@ type Server struct {
 	qs map[string]*Queue
 	ts map[string]*Task
 
-	qsMux sync.Mutex
-	tsMux sync.Mutex
+	qsMux   sync.Mutex
+	tsMux   sync.Mutex
+	Options ServerOptions
 }
 
 func (s *Server) setQueue(queueName string, queue *Queue) {
@@ -69,6 +77,12 @@ func (s *Server) fetchTask(taskName string) (*Task, bool) {
 
 func (s *Server) removeTask(taskName string) {
 	s.setTask(taskName, nil)
+}
+
+func (s *Server) hardDeleteTask(taskName string) {
+	s.tsMux.Lock()
+	defer s.tsMux.Unlock()
+	delete(s.ts, taskName)
 }
 
 // ListQueues lists the existing queues
@@ -165,7 +179,13 @@ func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) 
 func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
 	queue, _ := s.fetchQueue(in.GetName())
 
-	queue.Purge()
+	if s.Options.HardResetOnPurgeQueue {
+		// Use the development environment behaviour - synchronously purge the queue and release all task names
+		queue.HardReset(s)
+	} else {
+		// Mirror production behaviour - spin off an asynchronous purge operation and return
+		queue.Purge()
+	}
 
 	return queue.state, nil
 }
@@ -249,8 +269,14 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 		return nil, status.Errorf(codes.FailedPrecondition, "The queue no longer exists, though a queue with this name existed recently.")
 	}
 
-	if (in.Task.Name != "") && !isValidTaskName(in.Task.Name) {
-		return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+	if in.Task.Name != "" {
+		// If a name is specified, it must be valid and it must be unique
+		if !isValidTaskName(in.Task.Name) {
+			return nil, status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+		}
+		if _, exists := s.fetchTask(in.Task.Name); exists {
+			return nil, status.Errorf(codes.AlreadyExists, "Requested entity already exists")
+		}
 	}
 
 	task, taskState := queue.NewTask(in.GetTask())
@@ -329,6 +355,7 @@ func main() {
 	host := flag.String("host", "localhost", "The host name")
 	port := flag.String("port", "8123", "The port")
 	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
+	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
 
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
@@ -351,6 +378,7 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	emulatorServer := NewServer()
+	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {

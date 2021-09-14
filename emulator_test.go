@@ -404,6 +404,48 @@ func TestPurgeQueueHardResetWaitsForRunningTask(t *testing.T) {
 	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
 }
 
+func TestPurgeQueueHardResetTimesOutWithSlowTask(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/any-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/slow_running?latency=4s",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Now purge the queue - first time will time out after 3 seconds because the task request takes 4 seconds
+	purgeQueueRequest := taskspb.PurgeQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	assertIsGrpcError(t, "^Timed out waiting for tasks to be purged", grpcCodes.DeadlineExceeded, err)
+
+	// We can retry - this will succeed because the task completes within our timeout
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	require.NoError(t, err, "Purge should succeed after request")
+
+	// And we should now be in the empty state, with the request already executed
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+	receivedRequest, err := awaitHttpRequestWithTimeout(receivedRequests, 5*time.Millisecond)
+	require.NotNil(t, receivedRequest, "Request was received")
+}
+
 func TestSuccessTaskExecution(t *testing.T) {
 	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)

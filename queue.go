@@ -9,6 +9,8 @@ import (
 	pduration "github.com/golang/protobuf/ptypes/duration"
 
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
 )
 
 // Queue holds all internals for a task queue
@@ -236,7 +238,7 @@ func (queue *Queue) Purge() *sync.WaitGroup {
 }
 
 // Goes beyond `Purge` behaviour to synchronously delete all tasks and their name handles
-func (queue *Queue) HardReset(s *Server) {
+func (queue *Queue) HardReset(s *Server) error {
 	waitGroup := queue.Purge()
 	waitGroup.Wait()
 
@@ -245,22 +247,53 @@ func (queue *Queue) HardReset(s *Server) {
 	// - task.Delete() writes to a buffered `cancel` channel
 	// - task.Schedule() reads from that buffered channel in a separate goroutine
 	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
+	// - Additionally, if a task has already been dispatched then task.Delete() has no effect until after the current
+	//   execution, which depends entirely on the response time of the task's target.
 	//
 	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
-	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
-	// period to allow the tasks' internal goroutines to fire first.
-	time.Sleep(10 * time.Millisecond)
+	// be reinserted with the nil value.
+	isReadyChannel := make(chan bool, 1)
+	tryDeleteTasks := func() {
+		queue.tsMux.Lock()
+		defer queue.tsMux.Unlock()
 
-	queue.tsMux.Lock()
-	defer queue.tsMux.Unlock()
-	for taskName, task := range queue.ts {
-		if task != nil {
-			// The naive "sleep till it deletes" approach described above is too naive...
-			panic("Expected task to be deleted by now!")
+		hasAnyPending := false
+		for taskName, task := range queue.ts {
+			if task == nil {
+				// Task has already been deleted / ran to completion - safe to remove
+				delete(queue.ts, taskName)
+				s.hardDeleteTask(taskName)
+			} else {
+				// Task is still running (or the `cancel` channel has not fired) - will need to wait and retry
+				hasAnyPending = true
+			}
 		}
+		isReadyChannel <- !hasAnyPending
+	}
 
-		delete(queue.ts, taskName)
-		s.hardDeleteTask(taskName)
+	// The timeout applies across all iterations of the for loop.
+	// It is intentionally relatively short, because the internal retry interval is rapid.
+	// If calling code expects some task requests to last longer, it should handle the DEADLINE_EXCEEDED error and retry
+	// on a schedule to suit the application.
+	timeout := time.After(3 * time.Second)
+
+	go tryDeleteTasks()
+
+	for {
+		select {
+		case isReady := <-isReadyChannel:
+			if isReady {
+				// All tasks have been purged
+				return nil
+			} else {
+				// One or more tasks is not yet deleted, wait and retry.
+				time.Sleep(5 * time.Millisecond)
+				go tryDeleteTasks()
+			}
+		case <-timeout:
+			log.Println("HardReset timed out waiting for tasks to clear")
+			return status.Errorf(codes.DeadlineExceeded, "Timed out waiting for tasks to be purged")
+		}
 	}
 }
 

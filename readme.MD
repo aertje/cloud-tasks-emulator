@@ -122,9 +122,14 @@ emulator - e.g. between each scenario in a test run.
 
 The optional `hard-reset-on-purge-queue` flag configures the emulator so that calling `PurgeQueue`
 will remove all record of past tasks. It also switches `PurgeQueue` to be a synchronous operation
-which only returns once all tasks have been cancelled and the queue is empty. Queued tasks may, of
-course, still fire during the PurgeQueue operation - but they cannot fire after PurgeQueue has
-returned.
+which only returns when:
+
+* any tasks that are already running have completed,
+* any tasks that are not yet running have been cancelled,
+* and the queue is empty.
+
+In this mode, `PurgeQueue` may fail with a `DEADLINE_EXCEEDED` error if a running task has not
+completed within a few seconds. Your application code should handle this and retry as appropriate.
 
 ```
 go run ./ --hard-reset-on-purge-queue

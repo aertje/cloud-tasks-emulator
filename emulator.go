@@ -181,7 +181,10 @@ func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*
 
 	if s.Options.HardResetOnPurgeQueue {
 		// Use the development environment behaviour - synchronously purge the queue and release all task names
-		queue.HardReset(s)
+		err := queue.HardReset(s)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		// Mirror production behaviour - spin off an asynchronous purge operation and return
 		queue.Purge()

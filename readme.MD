@@ -22,13 +22,13 @@ It also has a few outstanding things to address;
 
 ## Running the emulator
 Fire it up; you can specify host and port (defaults to localhost:8123):
-```
+```sh
 go run ./ -host localhost -port 8000
 ```
 
 You can also optionally specify one or more queues to create automatically on startup:
 
-```
+```sh
 go run ./ -host localhost \
   -port 8000 \
   -queue projects/dev/locations/here/queues/firstq \
@@ -39,34 +39,34 @@ Once running, you connect to it using the standard google cloud tasks GRPC libra
 
 ### Docker
 You can use the dockerfile if you don't want to install a Go build environment:
-```
+```sh
 docker build ./ -t tasks_emulator
 docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -queue projects/dev/locations/here/queues/anotherq
 ```
 
 ### Docker image
 Or even easier - pull and run it directly from GitHub Container Registry:
-```
+```sh
 docker run ghcr.io/aertje/cloud-tasks-emulator:latest
 ```
 
 ### Docker Compose
 If you are planning on using docker-compose the above configuration translates to :
-```
-  gcloud-tasks-emulator:
-    image: ghcr.io/aertje/cloud-tasks-emulator:latest
-    command: -host 0.0.0.0 -port 8123 -queue "projects/dev/locations/here/queues/anotherq"
-    ports:
-      - "${TASKS_PORT:-8123}:8123"
-    environment:
-      APP_ENGINE_EMULATOR_HOST: http://localhost:8080
+```yml
+gcloud-tasks-emulator:
+  image: ghcr.io/aertje/cloud-tasks-emulator:latest
+  command: -host 0.0.0.0 -port 8123 -queue "projects/dev/locations/here/queues/anotherq"
+  ports:
+    - "${TASKS_PORT:-8123}:8123"
+  environment:
+    APP_ENGINE_EMULATOR_HOST: http://localhost:8080
 ```
 
 
 ## App Engine
 If you want to use it to make calls to a local [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server) instance, you'll need to set the appropriate environment variable, e.g.:  
-```
-APP_ENGINE_EMULATOR_HOST=http://localhost:8080
+```sh
+export APP_ENGINE_EMULATOR_HOST=http://localhost:8080
 ```
 
 ### Targeting services
@@ -90,7 +90,7 @@ Optionally, the emulator can host an HTTP OIDC discovery endpoint. This allows
 your application to verify tokens at runtime with the full online flow.
 To enable this, specify an issuer value at startup:
 
-```
+```sh
 go run ./ -openid-issuer http://localhost:8980
 ```
 
@@ -126,7 +126,7 @@ which only returns once all tasks have been cancelled and the queue is empty. Qu
 course, still fire during the PurgeQueue operation - but they cannot fire after PurgeQueue has
 returned.
 
-```
+```sh
 go run ./ --hard-reset-on-purge-queue
 ```
 
@@ -135,7 +135,7 @@ go run ./ --hard-reset-on-purge-queue
 ### Python example
 Here's a little snippet of python code that you can use to talk to the emulator.
 
-```
+```python
 import grpc
 from google.cloud.tasks_v2 import CloudTasksClient
 from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
@@ -163,7 +163,7 @@ client.create_task(task={'app_engine_http_request': {}}, parent=queue_name)
 ### Go example
 In Go it would go something like this.
 
-```
+```go
 import (
 	"context"
 

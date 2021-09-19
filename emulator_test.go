@@ -196,6 +196,31 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	assertIsGrpcError(t, "^Task name must be formatted", grpcCodes.InvalidArgument, err)
 }
 
+func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: "projects/TestProject/locations/TestLocation/queues/SomeOtherQueue/tasks/valid-name",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://www.google.com",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, createdTask)
+	assertIsGrpcError(t, "^The queue name from request", grpcCodes.InvalidArgument, err)
+}
+
 func TestGetQueueExists(t *testing.T) {
 	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)

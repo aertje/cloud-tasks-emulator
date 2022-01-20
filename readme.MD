@@ -245,7 +245,7 @@ const queueName = `${parent}/queues/test`;
 client.createQueue({ parent, queue: { name: queueName } });
 
 // Create a normal http task that should succeed
-await tasks.createTask({
+await client.createTask({
   parent: queueName,
   task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
 });

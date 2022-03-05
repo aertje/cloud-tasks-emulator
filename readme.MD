@@ -242,10 +242,10 @@ const client = new CloudTasksClient({
 
 const parent = 'projects/my-sandbox/locations/us-central1';
 const queueName = `${parent}/queues/test`;
-tasksClient.createQueue({ parent, queue: { name: queueName } });
+client.createQueue({ parent, queue: { name: queueName } });
 
 // Create a normal http task that should succeed
-await tasks.createTask({
+await client.createTask({
   parent: queueName,
   task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
 });

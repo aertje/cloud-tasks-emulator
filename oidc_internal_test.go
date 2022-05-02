@@ -67,7 +67,7 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 
-	expires, err := time.Parse(http.TimeFormat, resp.HeaderMap.Get("Expires"))
+	expires, err := time.Parse(http.TimeFormat, resp.Result().Header.Get("Expires"))
 	require.NoError(t, err)
 	assertRoughTimestamp(t, 24*time.Hour, expires.Unix(), "Expect future expires")
 
@@ -133,7 +133,7 @@ func assertRoughTimestamp(t *testing.T, expectOffset time.Duration, timestamp in
 }
 
 func parseJSONResponse(t *testing.T, resp *httptest.ResponseRecorder) map[string]interface{} {
-	assert.Equal(t, "application/json", resp.HeaderMap.Get("Content-Type"))
+	assert.Equal(t, "application/json", resp.Result().Header.Get("Content-Type"))
 
 	var body map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &body)
@@ -151,5 +151,4 @@ func performRequest(method string, url string, handler func(w http.ResponseWrite
 	http.HandlerFunc(handler).ServeHTTP(resp, req)
 
 	return resp
-
 }

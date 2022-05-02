@@ -150,7 +150,6 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 			}
 
 			hostURL, err := url.Parse(host)
-
 			if err != nil {
 				panic(err)
 			}
@@ -397,7 +396,7 @@ func (task *Task) Delete() {
 func (task *Task) Schedule() {
 	scheduled, _ := ptypes.Timestamp(task.state.GetScheduleTime())
 
-	fromNow := scheduled.Sub(time.Now())
+	fromNow := time.Until(scheduled)
 
 	go func() {
 		select {

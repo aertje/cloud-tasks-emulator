@@ -24,9 +24,7 @@ import (
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	grpcCodes "google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	grpcStatus "google.golang.org/grpc/status"
 )
 
@@ -57,6 +55,9 @@ func setUp(t *testing.T, options ServerOptions) (*grpc.Server, *Client) {
 	clientOpt := option.WithGRPCConn(conn)
 
 	client, err := NewClient(context.Background(), clientOpt)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	return serv, client
 }
@@ -248,8 +249,8 @@ func TestGetQueueNeverExisted(t *testing.T) {
 	gettedQueue, err := client.GetQueue(context.Background(), &getQueueRequest)
 
 	assert.Nil(t, gettedQueue)
-	st, _ := status.FromError(err)
-	assert.Equal(t, codes.NotFound, st.Code())
+	st, _ := grpcStatus.FromError(err)
+	assert.Equal(t, grpcCodes.NotFound, st.Code())
 }
 
 func TestGetQueuePreviouslyExisted(t *testing.T) {
@@ -273,8 +274,8 @@ func TestGetQueuePreviouslyExisted(t *testing.T) {
 	gettedQueue, err := client.GetQueue(context.Background(), &getQueueRequest)
 
 	assert.Nil(t, gettedQueue)
-	st, _ := status.FromError(err)
-	assert.Equal(t, codes.NotFound, st.Code())
+	st, _ := grpcStatus.FromError(err)
+	assert.Equal(t, grpcCodes.NotFound, st.Code())
 }
 
 func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
@@ -375,6 +376,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	// Verify that it has now sent the request from the new task
 	receivedRequest, err := awaitHttpRequest(receivedRequests)
 	require.NotNil(t, receivedRequest, "Request was received")
+	require.NoError(t, err)
 	// Note that the execution count is reset to 0
 	assertHeadersMatch(
 		t,

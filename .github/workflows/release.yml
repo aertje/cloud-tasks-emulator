@@ -4,9 +4,6 @@ on:
   release:
     types: [created]
 
-permissions:
-  contents: write
-
 jobs:
   releases-matrix:
     name: Release Go Binary

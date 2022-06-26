@@ -56,8 +56,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Build image
-        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
       - name: Publish to Github Packages
         run: |
           set -o errexit
@@ -81,7 +81,4 @@ jobs:
           # Push to the remote repo
           # This assumes a higher version will always be tagged later
           echo "Publishing $IMAGE_ID:$VERSION"
-          docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
-          docker tag $IMAGE_NAME $IMAGE_ID:latest
-          docker push $IMAGE_ID:$VERSION
-          docker push $IMAGE_ID:latest
+          docker buildx build . --platform linux/amd64,linux/arm64 --tag $IMAGE_ID:$VERSION --tag $IMAGE_ID:latest --push

@@ -23,13 +23,21 @@ import (
 
 var r *regexp.Regexp
 
+const (
+	TASK_NAME_FORMAT = "projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)"
+)
+
 func init() {
 	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
-	r = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
+	r = regexp.MustCompile(TASK_NAME_FORMAT)
 }
 
 func parseTaskName(task *tasks.Task) TaskNameParts {
 	matches := r.FindStringSubmatch(task.GetName())
+	if len(matches) != 5 {
+		panic(fmt.Sprintf("task name was invalid it must comply with the format: %s", TASK_NAME_FORMAT))
+
+	}
 	return TaskNameParts{
 		project:  matches[1],
 		location: matches[2],

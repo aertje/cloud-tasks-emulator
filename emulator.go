@@ -251,7 +251,7 @@ func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
 	}
 	if task == nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "The task no longer exists,  though a task with this name existed recently. The task either successfully completed or was deleted.")
+		return nil, status.Errorf(codes.FailedPrecondition, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
 	return task.state, nil

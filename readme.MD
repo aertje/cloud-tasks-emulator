@@ -250,7 +250,7 @@ await client.createTask({
   task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
 });
 // Create a normal http task that will throw 405s and will get retried
-await tasks.createTask({
+await client.createTask({
   parent: queueName,
   task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
 });

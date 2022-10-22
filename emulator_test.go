@@ -365,7 +365,6 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// In this mode, purging the queue is synchronous so we should be in the empty state straight away
-	time.Sleep(1 * time.Second)
 	assertTaskListIsEmpty(t, client, createdQueue)
 	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
 
@@ -386,6 +385,92 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 		},
 		receivedRequest,
 	)
+}
+
+func TestPurgeQueueHardResetWaitsForRunningTask(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/any-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/slow_running?latency=2s",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Now purge the queue
+	purgeQueueRequest := taskspb.PurgeQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	require.NoError(t, err)
+
+	// In this mode, purging the queue is synchronous so we should be in the empty state straight away
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+
+	// PurgeQueue shouldn't have returned till the task completed, so the test HTTP request should be available now
+	receivedRequest, err := awaitHttpRequestWithTimeout(receivedRequests, 5*time.Millisecond)
+	require.NotNil(t, receivedRequest, "Request was received")
+
+	// And the task should still not exist even after the emulator received the response
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+}
+
+func TestPurgeQueueHardResetTimesOutWithSlowTask(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/any-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/slow_running?latency=4s",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	// Now purge the queue - first time will time out after 3 seconds because the task request takes 4 seconds
+	purgeQueueRequest := taskspb.PurgeQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	assertIsGrpcError(t, "^Timed out waiting for tasks to be purged", grpcCodes.DeadlineExceeded, err)
+
+	// We can retry - this will succeed because the task completes within our timeout
+	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
+	require.NoError(t, err, "Purge should succeed after request")
+
+	// And we should now be in the empty state, with the request already executed
+	assertTaskListIsEmpty(t, client, createdQueue)
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+	receivedRequest, err := awaitHttpRequestWithTimeout(receivedRequests, 5*time.Millisecond)
+	require.NotNil(t, receivedRequest, "Request was received")
 }
 
 func TestSuccessTaskExecution(t *testing.T) {
@@ -737,6 +822,13 @@ func startTestServer() (*http.Server, <-chan *http.Request) {
 	})
 	mux.HandleFunc("/not_found", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
+		requestChannel <- r
+	})
+
+	mux.HandleFunc("/slow_running", func(w http.ResponseWriter, r *http.Request) {
+		latency, _ := time.ParseDuration(r.URL.Query().Get("latency"))
+		time.Sleep(latency)
+		w.WriteHeader(200)
 		requestChannel <- r
 	})
 

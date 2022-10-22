@@ -388,6 +388,57 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	)
 }
 
+func TestListTasks(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	srv, _ := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createdQueue := createTestQueue(t, client)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/my-test-task",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	listTasksRequest := taskspb.ListTasksRequest{
+		Parent: createdQueue.GetName(),
+	}
+
+	tasksIterator := client.ListTasks(context.Background(), &listTasksRequest)
+	assert.NoError(t, err)
+
+	listedTask, err := tasksIterator.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, listedTask.GetName(), createdTask.GetName())
+	_, err = tasksIterator.Next()
+	assert.EqualError(t, err, "no more items in iterator")
+
+	deleteQueueRequest := taskspb.DeleteQueueRequest{
+		Name: createdQueue.GetName(),
+	}
+	err = client.DeleteQueue(context.Background(), &deleteQueueRequest)
+	require.NoError(t, err)
+
+	tasksIterator = client.ListTasks(context.Background(), &listTasksRequest)
+	assert.NoError(t, err)
+
+	listedTask, err = tasksIterator.Next()
+	assertIsGrpcError(t, "^Queue does not exist", grpcCodes.NotFound, err)
+	assert.Nil(t, listedTask)
+}
+
 func TestSuccessTaskExecution(t *testing.T) {
 	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)

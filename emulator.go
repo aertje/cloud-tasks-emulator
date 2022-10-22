@@ -226,7 +226,10 @@ func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissio
 // ListTasks lists the tasks in the specified queue
 func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
 	// TODO: Implement pageing of some sort
-	queue, _ := s.fetchQueue(in.GetParent())
+	queue, ok := s.fetchQueue(in.GetParent())
+	if !ok || queue == nil {
+		return nil, status.Errorf(codes.NotFound, "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.")
+	}
 
 	var taskStates []*tasks.Task
 

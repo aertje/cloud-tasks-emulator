@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -312,7 +313,11 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		headers = httpRequest.GetHeaders()
 
 		if auth := httpRequest.GetOidcToken(); auth != nil {
-			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl())
+			audience := httpRequest.GetUrl()
+			if aud := strings.TrimSpace(auth.Audience); aud != "" {
+				audience = aud
+			}
+			tokenStr := createOIDCToken(auth.ServiceAccountEmail, audience)
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
 

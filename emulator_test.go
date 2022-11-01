@@ -680,58 +680,6 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
 }
 
-func TestOIDCAuthenticatedTaskExecutionWithAudienceOverwrite(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
-
-	OpenIDConfig.IssuerURL = "http://localhost:8980"
-
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
-
-	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
-
-	createTaskRequest := taskspb.CreateTaskRequest{
-		Parent: createdQueue.GetName(),
-		Task: &taskspb.Task{
-			MessageType: &taskspb.Task_HttpRequest{
-				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success?foo=bar",
-					AuthorizationHeader: &taskspb.HttpRequest_OidcToken{
-						OidcToken: &taskspb.OidcToken{
-							ServiceAccountEmail: "emulator@service.test",
-							Audience:            "http://my-api:8080",
-						},
-					},
-				},
-			},
-		},
-	}
-	_, err := client.CreateTask(context.Background(), &createTaskRequest)
-	require.NoError(t, err)
-
-	// Wait for it to perform the http request
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
-	require.NoError(t, err)
-
-	// Validate that the call was actually made properly
-	require.NotNil(t, receivedRequest, "Request was received")
-	authHeader := receivedRequest.Header.Get("Authorization")
-	assert.NotNil(t, authHeader, "Has Authorization header")
-	assert.Regexp(t, "^Bearer [a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$", authHeader)
-	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
-
-	// Full token validation is done in the docker smoketests and the oidc internal tests
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
-	require.NoError(t, err)
-
-	claims := token.Claims.(*OpenIDConnectClaims)
-	assert.Equal(t, "http://my-api:8080", claims.Audience, "Specifies audience")
-	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
-	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
-}
-
 func newQueue(formattedParent, name string) *taskspb.Queue {
 	return &taskspb.Queue{Name: formatQueueName(formattedParent, name)}
 }

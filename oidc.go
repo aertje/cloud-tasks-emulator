@@ -71,13 +71,16 @@ func init() {
 	OpenIDConfig.KeyID = "cloudtasks-emulator-test"
 }
 
-func createOIDCToken(serviceAccountEmail string, handlerUrl string) string {
+func createOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) string {
+	if audience == "" {
+		audience = handlerUrl
+	}
 	now := time.Now()
 	claims := OpenIDConnectClaims{
 		Email:         serviceAccountEmail,
 		EmailVerified: true,
 		StandardClaims: jwt.StandardClaims{
-			Audience:  handlerUrl,
+			Audience:  audience,
 			Issuer:    OpenIDConfig.IssuerURL,
 			IssuedAt:  now.Unix(),
 			NotBefore: now.Unix(),

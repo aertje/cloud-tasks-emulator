@@ -14,7 +14,7 @@ import (
 )
 
 func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
-	tokenStr := createOIDCToken("foobar@service.com", "http://my.service/foo?bar=v")
+	tokenStr := createOIDCToken("foobar@service.com", "http://my.service/foo?bar=v", "")
 	parser := new(jwt.Parser)
 	token, _, err := parser.ParseUnverified(tokenStr, &OpenIDConnectClaims{})
 	require.NoError(t, err)
@@ -32,9 +32,28 @@ func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 	assertRoughTimestamp(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
 }
 
+func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
+	tokenStr := createOIDCToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
+	parser := new(jwt.Parser)
+	token, _, err := parser.ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	require.NoError(t, err)
+	assert.Equal(t, "RS256", token.Header["alg"], "Uses RS256")
+	assert.Equal(t, OpenIDConfig.KeyID, token.Header["kid"], "Specifies kid")
+
+	claims := token.Claims.(*OpenIDConnectClaims)
+
+	assert.Equal(t, "http://my.api", claims.Audience, "Specifies audience")
+	assert.Equal(t, OpenIDConfig.IssuerURL, claims.Issuer, "Specifies issuer")
+	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
+	assert.True(t, claims.EmailVerified, "Specifies email")
+	assertRoughTimestamp(t, 0*time.Second, claims.IssuedAt, "Issued now")
+	assertRoughTimestamp(t, 0*time.Second, claims.NotBefore, "Not before now")
+	assertRoughTimestamp(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
+}
+
 func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	// Sanity check that the token is valid if we have the private key in go format
-	tokenStr := createOIDCToken("foobar@service.com", "http://any.service/foo")
+	tokenStr := createOIDCToken("foobar@service.com", "http://any.service/foo", "")
 	_, err := new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&OpenIDConnectClaims{},

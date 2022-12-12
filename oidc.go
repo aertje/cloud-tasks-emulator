@@ -80,6 +80,7 @@ func createOIDCToken(serviceAccountEmail string, handlerUrl string, audience str
 		Email:         serviceAccountEmail,
 		EmailVerified: true,
 		StandardClaims: jwt.StandardClaims{
+			Subject:   serviceAccountEmail,
 			Audience:  audience,
 			Issuer:    OpenIDConfig.IssuerURL,
 			IssuedAt:  now.Unix(),

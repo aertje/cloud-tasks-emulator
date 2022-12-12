@@ -26,6 +26,7 @@ func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 	assert.Equal(t, "http://my.service/foo?bar=v", claims.Audience, "Specifies audience")
 	assert.Equal(t, OpenIDConfig.IssuerURL, claims.Issuer, "Specifies issuer")
 	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
+	assert.Equal(t, "foobar@service.com", claims.Subject, "Specifies subject")
 	assert.True(t, claims.EmailVerified, "Specifies email")
 	assertRoughTimestamp(t, 0*time.Second, claims.IssuedAt, "Issued now")
 	assertRoughTimestamp(t, 0*time.Second, claims.NotBefore, "Not before now")

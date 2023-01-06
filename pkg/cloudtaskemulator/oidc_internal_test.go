@@ -1,4 +1,4 @@
-package main
+package cloudtaskemulator
 
 import (
 	"context"
@@ -96,18 +96,18 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
 
 func TestConfigureOpenIdIssuerRejectsInvalidUrl(t *testing.T) {
 	var err error
-	_, err = configureOpenIdIssuer("junk")
+	_, err = ConfigureOpenIdIssuer("junk")
 	assert.Error(t, err, "-openid-issuer must be a base URL e.g. http://any-host:8237")
 
-	_, err = configureOpenIdIssuer("https://foo:8900")
+	_, err = ConfigureOpenIdIssuer("https://foo:8900")
 	assert.Error(t, err, "-openid-issuer only supports http protocol")
 
-	_, err = configureOpenIdIssuer("http://foo:8900/deep")
+	_, err = ConfigureOpenIdIssuer("http://foo:8900/deep")
 	assert.Error(t, err, "-openid-issuer must not contain a path")
 }
 
 func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me:8200")
+	srv, err := ConfigureOpenIdIssuer("http://my-external.route.to.me:8200")
 	require.NoError(t, err)
 	assert.Equal(t, "http://my-external.route.to.me:8200", OpenIDConfig.IssuerURL)
 	assert.Equal(t, "0.0.0.0:8200", srv.Addr)
@@ -115,7 +115,7 @@ func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
 }
 
 func TestConfigureOpenIdIssuerSupportsPort80(t *testing.T) {
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me")
+	srv, err := ConfigureOpenIdIssuer("http://my-external.route.to.me")
 	require.NoError(t, err)
 	assert.Equal(t, "http://my-external.route.to.me", OpenIDConfig.IssuerURL)
 	assert.Equal(t, "0.0.0.0:80", srv.Addr)

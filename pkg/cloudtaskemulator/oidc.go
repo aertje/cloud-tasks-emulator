@@ -1,4 +1,4 @@
-package main
+package cloudtaskemulator
 
 import (
 	"crypto/rsa"
@@ -158,7 +158,7 @@ func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string) *htt
 	return server
 }
 
-func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
+func ConfigureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
 	url, err := url.ParseRequestURI(issuerUrl)
 	if err != nil {
 		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")

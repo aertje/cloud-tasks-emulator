@@ -14,10 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt"
-
 	. "cloud.google.com/go/cloudtasks/apiv2"
-	. "github.com/aertje/cloud-tasks-emulator"
+	"github.com/aertje/cloud-tasks-emulator/pkg/cloudtaskemulator"
+	"github.com/golang-jwt/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
@@ -36,9 +35,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func setUp(t *testing.T, options ServerOptions) (*grpc.Server, *Client) {
+func setUp(t *testing.T, options cloudtaskemulator.ServerOptions) (*grpc.Server, *Client) {
 	serv := grpc.NewServer()
-	emulatorServer := NewServer()
+	emulatorServer := cloudtaskemulator.NewServer()
 	emulatorServer.Options = options
 	taskspb.RegisterCloudTasksServer(serv, emulatorServer)
 
@@ -77,7 +76,7 @@ func tearDownQueue(t *testing.T, client *Client, queue *taskspb.Queue) {
 }
 
 func TestCloudTasksCreateQueue(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 	queue := newQueue(formattedParent, "testCloudTasksCreateQueue")
 	request := taskspb.CreateQueueRequest{
@@ -92,7 +91,7 @@ func TestCloudTasksCreateQueue(t *testing.T) {
 }
 
 func TestCreateTask(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -119,7 +118,7 @@ func TestCreateTask(t *testing.T) {
 }
 
 func TestCreateTaskRejectsDuplicateName(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -173,7 +172,7 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 }
 
 func TestCreateTaskRejectsInvalidName(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -198,7 +197,7 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 }
 
 func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -223,7 +222,7 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 }
 
 func TestGetQueueExists(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -239,7 +238,7 @@ func TestGetQueueExists(t *testing.T) {
 }
 
 func TestGetQueueNeverExisted(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	getQueueRequest := taskspb.GetQueueRequest{
@@ -254,7 +253,7 @@ func TestGetQueueNeverExisted(t *testing.T) {
 }
 
 func TestGetQueuePreviouslyExisted(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -279,7 +278,7 @@ func TestGetQueuePreviouslyExisted(t *testing.T) {
 }
 
 func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -329,7 +328,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 }
 
 func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{HardResetOnPurgeQueue: true})
 	defer tearDown(t, serv)
 
 	createdQueue := createTestQueue(t, client)
@@ -389,7 +388,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 }
 
 func TestListTasks(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	srv, _ := startTestServer()
@@ -440,7 +439,7 @@ func TestListTasks(t *testing.T) {
 }
 
 func TestSuccessTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	srv, receivedRequests := startTestServer()
@@ -492,7 +491,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	defer os.Unsetenv("APP_ENGINE_EMULATOR_HOST")
@@ -540,7 +539,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 }
 
 func TestErrorTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
 	srv, receivedRequests := startTestServer()
@@ -630,10 +629,10 @@ func TestErrorTaskExecution(t *testing.T) {
 }
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	serv, client := setUp(t, cloudtaskemulator.ServerOptions{})
 	defer tearDown(t, serv)
 
-	OpenIDConfig.IssuerURL = "http://localhost:8980"
+	cloudtaskemulator.OpenIDConfig.IssuerURL = "http://localhost:8980"
 
 	srv, receivedRequests := startTestServer()
 	defer srv.Shutdown(context.Background())
@@ -671,10 +670,10 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
 
 	// Full token validation is done in the docker smoketests and the oidc internal tests
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &cloudtaskemulator.OpenIDConnectClaims{})
 	require.NoError(t, err)
 
-	claims := token.Claims.(*OpenIDConnectClaims)
+	claims := token.Claims.(*cloudtaskemulator.OpenIDConnectClaims)
 	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
 	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")

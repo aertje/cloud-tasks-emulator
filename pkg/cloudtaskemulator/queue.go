@@ -1,14 +1,13 @@
-package main
+package cloudtaskemulator
 
 import (
 	"log"
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
-	pduration "github.com/golang/protobuf/ptypes/duration"
-
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	"google.golang.org/protobuf/proto"
+	pduration "google.golang.org/protobuf/types/known/durationpb"
 )
 
 // Queue holds all internals for a task queue

@@ -58,7 +58,7 @@ func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	_, err := new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&OpenIDConnectClaims{},
-		func(token *jwt.Token) (interface{}, error) {
+		func(token *jwt.Token) (any, error) {
 			// Can safely skip kid checking as we check it in the data test above
 			assert.IsType(t, jwt.SigningMethodRS256, token.Method)
 			return OpenIDConfig.PrivateKey.Public(), nil
@@ -152,10 +152,10 @@ func assertRoughTimestamp(t *testing.T, expectOffset time.Duration, timestamp in
 	assert.LessOrEqual(t, expect.Unix(), actual.Unix(), msg+"(must be less than expected)")
 }
 
-func parseJSONResponse(t *testing.T, resp *httptest.ResponseRecorder) map[string]interface{} {
+func parseJSONResponse(t *testing.T, resp *httptest.ResponseRecorder) map[string]any {
 	assert.Equal(t, "application/json", resp.Result().Header.Get("Content-Type"))
 
-	var body map[string]interface{}
+	var body map[string]any
 	err := json.Unmarshal(resp.Body.Bytes(), &body)
 	require.NoError(t, err)
 	return body

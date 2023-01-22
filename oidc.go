@@ -102,7 +102,7 @@ func createOIDCToken(serviceAccountEmail string, handlerUrl string, audience str
 }
 
 func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
-	config := map[string]interface{}{
+	config := map[string]any{
 		"issuer":                                OpenIDConfig.IssuerURL,
 		"jwks_uri":                              OpenIDConfig.IssuerURL + jwksUriPath,
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -112,7 +112,7 @@ func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Duration) {
+func respondJSON(w http.ResponseWriter, body any, expiresAfter time.Duration) {
 	json, err := json.Marshal(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -131,7 +131,7 @@ func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 	publicKey := OpenIDConfig.PrivateKey.Public().(*rsa.PublicKey)
 	b64Url := base64.URLEncoding.WithPadding(base64.NoPadding)
 
-	config := map[string]interface{}{
+	config := map[string]any{
 		"keys": []map[string]string{
 			{
 				// Ideally we would export the exponent from the key too but frankly

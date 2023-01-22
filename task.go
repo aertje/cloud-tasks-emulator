@@ -312,7 +312,7 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		headers = httpRequest.GetHeaders()
 
 		if auth := httpRequest.GetOidcToken(); auth != nil {
-			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl())
+			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
 

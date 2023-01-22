@@ -37,7 +37,7 @@ docker run \
   -p 8920:8920 \
   --name ct-smoketests \
   --network $network_name \
-  golang:1.13-alpine \
+  golang:1.19-alpine \
   go run smoketests.go \
   -emulator-port 8930
 

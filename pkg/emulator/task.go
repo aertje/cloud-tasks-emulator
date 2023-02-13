@@ -254,7 +254,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) *taskspb.Task {
 
 	lastAttempt.ResponseTime = timestamppb.Now()
 	lastAttempt.ResponseStatus = &rpcstatus.Status{
-		Code:    rpcCode,
+		Code:    int32(rpcCode),
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
 	}
 

@@ -28,41 +28,41 @@ func toHTTPMethod(taskMethod taskspb.HttpMethod) string {
 	}
 }
 
-func toRPCStatusCode(statusCode int) int32 {
+func toRPCStatusCode(statusCode int) rpccode.Code {
 	switch statusCode {
 	case 200:
-		return int32(rpccode.Code_OK)
+		return rpccode.Code_OK
 	case 400:
 		// TODO: or rpccode.Code_FAILED_PRECONDITION
 		// TODO: or rpcCode.Code_OUT_OF_RANGE
-		return int32(rpccode.Code_INVALID_ARGUMENT)
+		return rpccode.Code_INVALID_ARGUMENT
 	case 401:
-		return int32(rpccode.Code_UNAUTHENTICATED)
+		return rpccode.Code_UNAUTHENTICATED
 	case 403:
-		return int32(rpccode.Code_PERMISSION_DENIED)
+		return rpccode.Code_PERMISSION_DENIED
 	case 404:
-		return int32(rpccode.Code_NOT_FOUND)
+		return rpccode.Code_NOT_FOUND
 	case 409:
 		// TODO: or rpccde.Code_ABORTED
-		return int32(rpccode.Code_ALREADY_EXISTS)
+		return rpccode.Code_ALREADY_EXISTS
 	case 429:
-		return int32(rpccode.Code_RESOURCE_EXHAUSTED)
+		return rpccode.Code_RESOURCE_EXHAUSTED
 	case 499:
-		return int32(rpccode.Code_CANCELLED)
+		return rpccode.Code_CANCELLED
 	case 500:
 		//TODO: or rpccode.Code_DATA_LOSS
-		return int32(rpccode.Code_INTERNAL)
+		return rpccode.Code_INTERNAL
 	case 501:
-		return int32(rpccode.Code_UNIMPLEMENTED)
+		return rpccode.Code_UNIMPLEMENTED
 	case 503:
-		return int32(rpccode.Code_UNAVAILABLE)
+		return rpccode.Code_UNAVAILABLE
 	case 504:
-		return int32(rpccode.Code_DEADLINE_EXCEEDED)
+		return rpccode.Code_DEADLINE_EXCEEDED
 	default:
-		return int32(rpccode.Code_UNKNOWN)
+		return rpccode.Code_UNKNOWN
 	}
 }
 
-func toCodeName(rpcCode int32) string {
-	return rpccode.Code_name[rpcCode]
+func toCodeName(rpcCode rpccode.Code) string {
+	return rpccode.Code_name[int32(rpcCode)]
 }

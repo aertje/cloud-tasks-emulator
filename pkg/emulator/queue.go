@@ -5,17 +5,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
-	pduration "github.com/golang/protobuf/ptypes/duration"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 )
 
 // Queue holds all internals for a task queue
 type Queue struct {
 	name string
 
-	state *tasks.Queue
+	state *taskspb.Queue
 
 	fire chan *Task
 
@@ -43,7 +43,7 @@ type Queue struct {
 }
 
 // NewQueue creates a new task queue
-func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Queue, *tasks.Queue) {
+func NewQueue(name string, state *taskspb.Queue, onTaskDone func(task *Task)) (*Queue, *taskspb.Queue) {
 	setInitialQueueState(state)
 
 	queue := &Queue{
@@ -77,9 +77,9 @@ func (queue *Queue) removeTask(taskName string) {
 	queue.setTask(taskName, nil)
 }
 
-func setInitialQueueState(queueState *tasks.Queue) {
+func setInitialQueueState(queueState *taskspb.Queue) {
 	if queueState.GetRateLimits() == nil {
-		queueState.RateLimits = &tasks.RateLimits{}
+		queueState.RateLimits = &taskspb.RateLimits{}
 	}
 	if queueState.GetRateLimits().GetMaxDispatchesPerSecond() == 0 {
 		queueState.RateLimits.MaxDispatchesPerSecond = 500.0
@@ -92,7 +92,7 @@ func setInitialQueueState(queueState *tasks.Queue) {
 	}
 
 	if queueState.GetRetryConfig() == nil {
-		queueState.RetryConfig = &tasks.RetryConfig{}
+		queueState.RetryConfig = &taskspb.RetryConfig{}
 	}
 	if queueState.GetRetryConfig().GetMaxAttempts() == 0 {
 		queueState.RetryConfig.MaxAttempts = 100
@@ -101,17 +101,17 @@ func setInitialQueueState(queueState *tasks.Queue) {
 		queueState.RetryConfig.MaxDoublings = 16
 	}
 	if queueState.GetRetryConfig().GetMinBackoff() == nil {
-		queueState.RetryConfig.MinBackoff = &pduration.Duration{
+		queueState.RetryConfig.MinBackoff = &durationpb.Duration{
 			Nanos: 100000000,
 		}
 	}
 	if queueState.GetRetryConfig().GetMaxBackoff() == nil {
-		queueState.RetryConfig.MaxBackoff = &pduration.Duration{
+		queueState.RetryConfig.MaxBackoff = &durationpb.Duration{
 			Seconds: 3600,
 		}
 	}
 
-	queueState.State = tasks.Queue_RUNNING
+	queueState.State = taskspb.Queue_RUNNING
 }
 
 func (queue *Queue) runWorkers() {
@@ -184,13 +184,13 @@ func (queue *Queue) Run() {
 }
 
 // NewTask creates a new task on the queue
-func (queue *Queue) NewTask(newTaskState *tasks.Task) (*Task, *tasks.Task) {
+func (queue *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
 	task := NewTask(queue, newTaskState, func(task *Task) {
 		queue.removeTask(task.state.GetName())
 		queue.onTaskDone(task)
 	})
 
-	taskState := proto.Clone(task.state).(*tasks.Task)
+	taskState := proto.Clone(task.state).(*taskspb.Task)
 
 	queue.setTask(taskState.GetName(), task)
 
@@ -268,7 +268,7 @@ func (queue *Queue) HardReset(s *Server) {
 func (queue *Queue) Pause() {
 	if !queue.paused {
 		queue.paused = true
-		queue.state.State = tasks.Queue_PAUSED
+		queue.state.State = taskspb.Queue_PAUSED
 
 		queue.cancelDispatcher <- true
 		queue.cancelWorkers <- true
@@ -279,7 +279,7 @@ func (queue *Queue) Pause() {
 func (queue *Queue) Resume() {
 	if queue.paused {
 		queue.paused = false
-		queue.state.State = tasks.Queue_RUNNING
+		queue.state.State = taskspb.Queue_RUNNING
 
 		go queue.runDispatcher()
 		go queue.runWorkers()

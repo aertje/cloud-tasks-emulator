@@ -3,25 +3,25 @@ package emulator
 import (
 	"net/http"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	rpccode "google.golang.org/genproto/googleapis/rpc/code"
 )
 
-func toHTTPMethod(taskMethod tasks.HttpMethod) string {
+func toHTTPMethod(taskMethod taskspb.HttpMethod) string {
 	switch taskMethod {
-	case tasks.HttpMethod_GET:
+	case taskspb.HttpMethod_GET:
 		return http.MethodGet
-	case tasks.HttpMethod_POST:
+	case taskspb.HttpMethod_POST:
 		return http.MethodPost
-	case tasks.HttpMethod_DELETE:
+	case taskspb.HttpMethod_DELETE:
 		return http.MethodDelete
-	case tasks.HttpMethod_HEAD:
+	case taskspb.HttpMethod_HEAD:
 		return http.MethodHead
-	case tasks.HttpMethod_OPTIONS:
+	case taskspb.HttpMethod_OPTIONS:
 		return http.MethodOptions
-	case tasks.HttpMethod_PATCH:
+	case taskspb.HttpMethod_PATCH:
 		return http.MethodPatch
-	case tasks.HttpMethod_PUT:
+	case taskspb.HttpMethod_PUT:
 		return http.MethodPut
 	default:
 		panic("Unsupported http method")

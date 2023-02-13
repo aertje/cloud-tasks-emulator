@@ -6,14 +6,14 @@ import (
 	"strings"
 	"sync"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
-	v1 "google.golang.org/genproto/googleapis/iam/v1"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"cloud.google.com/go/iam/apiv1/iampb"
 
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/empty"
+	"google.golang.org/protobuf/proto"
 )
 
 // NewServer creates a new emulator server with its own task and queue bookkeeping
@@ -82,10 +82,10 @@ func (s *Server) hardDeleteTask(taskName string) {
 }
 
 // ListQueues lists the existing queues
-func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*tasks.ListQueuesResponse, error) {
+func (s *Server) ListQueues(ctx context.Context, in *taskspb.ListQueuesRequest) (*taskspb.ListQueuesResponse, error) {
 	// TODO: Implement pageing
 
-	var queueStates []*tasks.Queue
+	var queueStates []*taskspb.Queue
 
 	s.qsMux.Lock()
 	defer s.qsMux.Unlock()
@@ -96,13 +96,13 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 		}
 	}
 
-	return &tasks.ListQueuesResponse{
+	return &taskspb.ListQueuesResponse{
 		Queues: queueStates,
 	}, nil
 }
 
 // GetQueue returns the requested queue
-func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
+func (s *Server) GetQueue(ctx context.Context, in *taskspb.GetQueueRequest) (*taskspb.Queue, error) {
 	queue, ok := s.fetchQueue(in.GetName())
 
 	// Cloud responds with the same error message whether the queue was recently deleted or never existed
@@ -114,7 +114,7 @@ func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*task
 }
 
 // CreateQueue creates a new queue
-func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) (*tasks.Queue, error) {
+func (s *Server) CreateQueue(ctx context.Context, in *taskspb.CreateQueueRequest) (*taskspb.Queue, error) {
 	queueState := in.GetQueue()
 
 	name := queueState.GetName()
@@ -139,7 +139,7 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 	// Make a deep copy so that the original is frozen for the http response
 	queue, queueState = NewQueue(
 		name,
-		proto.Clone(queueState).(*tasks.Queue),
+		proto.Clone(queueState).(*taskspb.Queue),
 		func(task *Task) {
 			s.removeTask(task.state.GetName())
 		},
@@ -151,12 +151,12 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 }
 
 // UpdateQueue updates an existing queue (not implemented yet)
-func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) (*tasks.Queue, error) {
+func (s *Server) UpdateQueue(ctx context.Context, in *taskspb.UpdateQueueRequest) (*taskspb.Queue, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // DeleteQueue removes an existing queue.
-func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*empty.Empty, error) {
+func (s *Server) DeleteQueue(ctx context.Context, in *taskspb.DeleteQueueRequest) (*empty.Empty, error) {
 	queue, ok := s.fetchQueue(in.GetName())
 
 	// Cloud responds with same error for recently deleted queue
@@ -172,7 +172,7 @@ func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) 
 }
 
 // PurgeQueue purges the specified queue
-func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
+func (s *Server) PurgeQueue(ctx context.Context, in *taskspb.PurgeQueueRequest) (*taskspb.Queue, error) {
 	queue, _ := s.fetchQueue(in.GetName())
 
 	if s.Options.HardResetOnPurgeQueue {
@@ -187,7 +187,7 @@ func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*
 }
 
 // PauseQueue pauses queue execution
-func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*tasks.Queue, error) {
+func (s *Server) PauseQueue(ctx context.Context, in *taskspb.PauseQueueRequest) (*taskspb.Queue, error) {
 	queue, _ := s.fetchQueue(in.GetName())
 
 	queue.Pause()
@@ -196,7 +196,7 @@ func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*
 }
 
 // ResumeQueue resumes a paused queue
-func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) (*tasks.Queue, error) {
+func (s *Server) ResumeQueue(ctx context.Context, in *taskspb.ResumeQueueRequest) (*taskspb.Queue, error) {
 	queue, _ := s.fetchQueue(in.GetName())
 
 	queue.Resume()
@@ -205,29 +205,29 @@ func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) 
 }
 
 // GetIamPolicy doesn't do anything
-func (s *Server) GetIamPolicy(ctx context.Context, in *v1.GetIamPolicyRequest) (*v1.Policy, error) {
+func (s *Server) GetIamPolicy(ctx context.Context, in *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // SetIamPolicy doesn't do anything
-func (s *Server) SetIamPolicy(ctx context.Context, in *v1.SetIamPolicyRequest) (*v1.Policy, error) {
+func (s *Server) SetIamPolicy(ctx context.Context, in *iampb.SetIamPolicyRequest) (*iampb.Policy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // TestIamPermissions doesn't do anything
-func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissionsRequest) (*v1.TestIamPermissionsResponse, error) {
+func (s *Server) TestIamPermissions(ctx context.Context, in *iampb.TestIamPermissionsRequest) (*iampb.TestIamPermissionsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // ListTasks lists the tasks in the specified queue
-func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
+func (s *Server) ListTasks(ctx context.Context, in *taskspb.ListTasksRequest) (*taskspb.ListTasksResponse, error) {
 	// TODO: Implement pageing of some sort
 	queue, ok := s.fetchQueue(in.GetParent())
 	if !ok || queue == nil {
 		return nil, status.Errorf(codes.NotFound, "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.")
 	}
 
-	var taskStates []*tasks.Task
+	var taskStates []*taskspb.Task
 
 	queue.tsMux.Lock()
 	defer queue.tsMux.Unlock()
@@ -238,13 +238,13 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 		}
 	}
 
-	return &tasks.ListTasksResponse{
+	return &taskspb.ListTasksResponse{
 		Tasks: taskStates,
 	}, nil
 }
 
 // GetTask returns the specified task
-func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
+func (s *Server) GetTask(ctx context.Context, in *taskspb.GetTaskRequest) (*taskspb.Task, error) {
 	task, ok := s.fetchTask(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
@@ -257,7 +257,7 @@ func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.
 }
 
 // CreateTask creates a new task
-func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*tasks.Task, error) {
+func (s *Server) CreateTask(ctx context.Context, in *taskspb.CreateTaskRequest) (*taskspb.Task, error) {
 
 	queueName := in.GetParent()
 	queue, ok := s.fetchQueue(queueName)
@@ -294,7 +294,7 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 }
 
 // DeleteTask removes an existing task
-func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*empty.Empty, error) {
+func (s *Server) DeleteTask(ctx context.Context, in *taskspb.DeleteTaskRequest) (*empty.Empty, error) {
 	task, ok := s.fetchTask(in.GetName())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Task does not exist.")
@@ -310,7 +310,7 @@ func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*
 }
 
 // RunTask executes an existing task immediately
-func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.Task, error) {
+func (s *Server) RunTask(ctx context.Context, in *taskspb.RunTaskRequest) (*taskspb.Task, error) {
 	task, ok := s.fetchTask(in.GetName())
 
 	if !ok {

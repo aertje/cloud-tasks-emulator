@@ -1,1 +1,4 @@
-package oidc
+package main
+
+func main() {
+}

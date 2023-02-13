@@ -13,13 +13,12 @@ import (
 	"sync"
 	"time"
 
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/aertje/cloud-tasks-emulator/pkg/oidc"
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
-	pduration "github.com/golang/protobuf/ptypes/duration"
-	ptimestamp "github.com/golang/protobuf/ptypes/timestamp"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var r *regexp.Regexp
@@ -29,7 +28,7 @@ func init() {
 	r = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
 }
 
-func parseTaskName(task *tasks.Task) TaskNameParts {
+func parseTaskName(task *taskspb.Task) TaskNameParts {
 	matches := r.FindStringSubmatch(task.GetName())
 	return TaskNameParts{
 		project:  matches[1],
@@ -54,7 +53,7 @@ type TaskNameParts struct {
 type Task struct {
 	queue *Queue
 
-	state *tasks.Task
+	state *taskspb.Task
 
 	cancel chan bool
 
@@ -66,7 +65,7 @@ type Task struct {
 }
 
 // NewTask creates a new task for the specified queue
-func NewTask(queue *Queue, taskState *tasks.Task, onDone func(task *Task)) *Task {
+func NewTask(queue *Queue, taskState *taskspb.Task, onDone func(task *Task)) *Task {
 	setInitialTaskState(taskState, queue.name)
 
 	task := &Task{
@@ -79,31 +78,31 @@ func NewTask(queue *Queue, taskState *tasks.Task, onDone func(task *Task)) *Task
 	return task
 }
 
-func setInitialTaskState(taskState *tasks.Task, queueName string) {
+func setInitialTaskState(taskState *taskspb.Task, queueName string) {
 	if taskState.GetName() == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		taskState.Name = queueName + "/tasks/" + taskID
 	}
 
-	taskState.CreateTime = ptypes.TimestampNow()
+	taskState.CreateTime = timestamppb.Now()
 	// For some reason the cloud does not set nanos
 	taskState.CreateTime.Nanos = 0
 
 	if taskState.GetScheduleTime() == nil {
-		taskState.ScheduleTime = ptypes.TimestampNow()
+		taskState.ScheduleTime = timestamppb.Now()
 	}
 	if taskState.GetDispatchDeadline() == nil {
-		taskState.DispatchDeadline = &pduration.Duration{Seconds: 600}
+		taskState.DispatchDeadline = &durationpb.Duration{Seconds: 600}
 	}
 
 	// This should probably be set somewhere else?
-	taskState.View = tasks.Task_BASIC
+	taskState.View = taskspb.Task_BASIC
 
 	httpRequest := taskState.GetHttpRequest()
 
 	if httpRequest != nil {
-		if httpRequest.GetHttpMethod() == tasks.HttpMethod_HTTP_METHOD_UNSPECIFIED {
-			httpRequest.HttpMethod = tasks.HttpMethod_POST
+		if httpRequest.GetHttpMethod() == taskspb.HttpMethod_HTTP_METHOD_UNSPECIFIED {
+			httpRequest.HttpMethod = taskspb.HttpMethod_POST
 		}
 		if httpRequest.GetHeaders() == nil {
 			httpRequest.Headers = make(map[string]string)
@@ -115,8 +114,8 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
 
 	if appEngineHTTPRequest != nil {
-		if appEngineHTTPRequest.GetHttpMethod() == tasks.HttpMethod_HTTP_METHOD_UNSPECIFIED {
-			appEngineHTTPRequest.HttpMethod = tasks.HttpMethod_POST
+		if appEngineHTTPRequest.GetHttpMethod() == taskspb.HttpMethod_HTTP_METHOD_UNSPECIFIED {
+			appEngineHTTPRequest.HttpMethod = taskspb.HttpMethod_POST
 		}
 		if appEngineHTTPRequest.GetHeaders() == nil {
 			appEngineHTTPRequest.Headers = make(map[string]string)
@@ -131,7 +130,7 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 		}
 
 		if appEngineHTTPRequest.GetAppEngineRouting() == nil {
-			appEngineHTTPRequest.AppEngineRouting = &tasks.AppEngineRouting{}
+			appEngineHTTPRequest.AppEngineRouting = &taskspb.AppEngineRouting{}
 		}
 
 		if appEngineHTTPRequest.GetAppEngineRouting().Host == "" {
@@ -174,7 +173,7 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 	}
 }
 
-func updateStateForReschedule(task *Task) *tasks.Task {
+func updateStateForReschedule(task *Task) *taskspb.Task {
 	// The lock is to ensure a consistent state when updating
 	task.stateMutex.Lock()
 	taskState := task.state
@@ -182,8 +181,8 @@ func updateStateForReschedule(task *Task) *tasks.Task {
 
 	retryConfig := queueState.GetRetryConfig()
 
-	minBackoff, _ := ptypes.Duration(retryConfig.GetMinBackoff())
-	maxBackoff, _ := ptypes.Duration(retryConfig.GetMaxBackoff())
+	minBackoff := retryConfig.GetMinBackoff().AsDuration()
+	maxBackoff := retryConfig.GetMaxBackoff().AsDuration()
 
 	doubling := taskState.GetDispatchCount() - 1
 	if doubling > retryConfig.MaxDoublings {
@@ -193,7 +192,7 @@ func updateStateForReschedule(task *Task) *tasks.Task {
 	if backoff > maxBackoff {
 		backoff = maxBackoff
 	}
-	protoBackoff := ptypes.DurationProto(backoff)
+	protoBackoff := durationpb.New(backoff)
 	prevScheduleTime := taskState.GetScheduleTime()
 
 	// Avoid int32 nanos overflow
@@ -204,25 +203,25 @@ func updateStateForReschedule(task *Task) *tasks.Task {
 		scheduleNanos -= 1e9
 	}
 
-	taskState.ScheduleTime = &ptimestamp.Timestamp{
+	taskState.ScheduleTime = &timestamppb.Timestamp{
 		Nanos:   int32(scheduleNanos),
 		Seconds: scheduleSeconds,
 	}
 
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
+	frozenTaskState := proto.Clone(taskState).(*taskspb.Task)
 	task.stateMutex.Unlock()
 
 	return frozenTaskState
 }
 
-func updateStateForDispatch(task *Task) *tasks.Task {
+func updateStateForDispatch(task *Task) *taskspb.Task {
 	task.stateMutex.Lock()
 	taskState := task.state
 
-	dispatchTime := ptypes.TimestampNow()
+	dispatchTime := timestamppb.Now()
 
-	taskState.LastAttempt = &tasks.Attempt{
-		ScheduleTime: &ptimestamp.Timestamp{
+	taskState.LastAttempt = &taskspb.Attempt{
+		ScheduleTime: &timestamppb.Timestamp{
 			Nanos:   taskState.GetScheduleTime().GetNanos(),
 			Seconds: taskState.GetScheduleTime().GetSeconds(),
 		},
@@ -232,18 +231,18 @@ func updateStateForDispatch(task *Task) *tasks.Task {
 	taskState.DispatchCount++
 
 	if taskState.GetFirstAttempt() == nil {
-		taskState.FirstAttempt = &tasks.Attempt{
+		taskState.FirstAttempt = &taskspb.Attempt{
 			DispatchTime: dispatchTime,
 		}
 	}
 
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
+	frozenTaskState := proto.Clone(taskState).(*taskspb.Task)
 	task.stateMutex.Unlock()
 
 	return frozenTaskState
 }
 
-func updateStateAfterDispatch(task *Task, statusCode int) *tasks.Task {
+func updateStateAfterDispatch(task *Task, statusCode int) *taskspb.Task {
 	task.stateMutex.Lock()
 
 	taskState := task.state
@@ -253,7 +252,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) *tasks.Task {
 
 	lastAttempt := taskState.GetLastAttempt()
 
-	lastAttempt.ResponseTime = ptypes.TimestampNow()
+	lastAttempt.ResponseTime = timestamppb.Now()
 	lastAttempt.ResponseStatus = &rpcstatus.Status{
 		Code:    rpcCode,
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
@@ -261,7 +260,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) *tasks.Task {
 
 	taskState.ResponseCount++
 
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
+	frozenTaskState := proto.Clone(taskState).(*taskspb.Task)
 	task.stateMutex.Unlock()
 
 	return frozenTaskState
@@ -286,9 +285,9 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	}
 }
 
-func dispatch(retry bool, taskState *tasks.Task) int {
+func dispatch(retry bool, taskState *taskspb.Task) int {
 	client := &http.Client{}
-	client.Timeout, _ = ptypes.Duration(taskState.GetDispatchDeadline())
+	client.Timeout = taskState.GetDispatchDeadline().AsDuration()
 
 	var req *http.Request
 	var headers map[string]string
@@ -296,7 +295,7 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 	httpRequest := taskState.GetHttpRequest()
 	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
 
-	scheduled, _ := ptypes.Timestamp(taskState.GetScheduleTime())
+	scheduled := taskState.GetScheduleTime().AsTime()
 	nameParts := parseTaskName(taskState)
 
 	headerQueueName := nameParts.queueId
@@ -376,7 +375,7 @@ func (task *Task) Attempt() {
 
 // Run runs the task outside of the normal queueing mechanism.
 // This method is called directly by request.
-func (task *Task) Run() *tasks.Task {
+func (task *Task) Run() *taskspb.Task {
 	taskState := updateStateForDispatch(task)
 
 	go task.doDispatch(false)
@@ -395,7 +394,7 @@ func (task *Task) Delete() {
 // Schedule schedules the task for execution.
 // It is initially called by the queue, later by the task reschedule.
 func (task *Task) Schedule() {
-	scheduled, _ := ptypes.Timestamp(task.state.GetScheduleTime())
+	scheduled := task.state.GetScheduleTime().AsTime()
 
 	fromNow := time.Until(scheduled)
 

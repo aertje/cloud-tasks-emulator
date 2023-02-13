@@ -1,4 +1,4 @@
-package emulator
+package main
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"net"
 	"regexp"
 
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/aertje/cloud-tasks-emulator/pkg/emulator"
-	"google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
 )
 

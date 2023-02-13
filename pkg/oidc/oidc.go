@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto/rsa"
@@ -71,7 +71,7 @@ func init() {
 	OpenIDConfig.KeyID = "cloudtasks-emulator-test"
 }
 
-func createOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) string {
+func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) string {
 	if audience == "" {
 		audience = handlerUrl
 	}

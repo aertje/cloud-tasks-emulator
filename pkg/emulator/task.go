@@ -1,4 +1,4 @@
-package main
+package emulator
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/pkg/oidc"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	pduration "github.com/golang/protobuf/ptypes/duration"
@@ -312,7 +313,7 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		headers = httpRequest.GetHeaders()
 
 		if auth := httpRequest.GetOidcToken(); auth != nil {
-			tokenStr := createOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
+			tokenStr := oidc.CreateOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
 

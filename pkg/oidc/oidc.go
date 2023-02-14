@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -106,7 +107,7 @@ func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
 		"issuer":                                OpenIDConfig.IssuerURL,
 		"jwks_uri":                              OpenIDConfig.IssuerURL + jwksUriPath,
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"claims_supported":                      []string{"aud", "email", "email_verified", "exp", "iat", "iss", "nbf"},
+		"claims_supported":                      []string{"sub", "aud", "email", "email_verified", "exp", "iat", "iss", "nbf"},
 	}
 
 	respondJSON(w, config, 24*time.Hour)
@@ -129,15 +130,13 @@ func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Dura
 
 func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 	publicKey := OpenIDConfig.PrivateKey.Public().(*rsa.PublicKey)
+
 	b64Url := base64.URLEncoding.WithPadding(base64.NoPadding)
 
 	config := map[string]interface{}{
 		"keys": []map[string]string{
 			{
-				// Ideally we would export the exponent from the key too but frankly
-				// it's always AQAB in practice and I lost the will to live trying to
-				// base64url encode a 2-bytes int in go!
-				"e":   "AQAB",
+				"e":   b64Url.EncodeToString(new(big.Int).SetInt64(int64(publicKey.E)).Bytes()),
 				"n":   b64Url.EncodeToString(publicKey.N.Bytes()),
 				"kid": OpenIDConfig.KeyID,
 				"use": "sig",

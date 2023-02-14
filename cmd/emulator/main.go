@@ -40,8 +40,7 @@ func main() {
 	print(fmt.Sprintf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port))
 
 	grpcServer := grpc.NewServer()
-	emulatorServer := emulator.NewServer()
-	emulatorServer.Options.HardResetOnPurgeQueue = *resetOnPurge
+	emulatorServer := emulator.NewServer(*resetOnPurge)
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {

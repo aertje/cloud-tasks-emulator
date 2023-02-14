@@ -8,27 +8,14 @@ import (
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/iam/apiv1/iampb"
-
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// NewServer creates a new emulator server with its own task and queue bookkeeping
-func NewServer() *Server {
-	return &Server{
-		qs: make(map[string]*Queue),
-		ts: make(map[string]*Task),
-		Options: ServerOptions{
-			HardResetOnPurgeQueue: false,
-		},
-	}
-}
-
-type ServerOptions struct {
-	HardResetOnPurgeQueue bool
+type serverOptions struct {
+	resetOnPurge bool
 }
 
 // Server represents the emulator server
@@ -38,7 +25,18 @@ type Server struct {
 
 	qsMux   sync.Mutex
 	tsMux   sync.Mutex
-	Options ServerOptions
+	options serverOptions
+}
+
+// NewServer creates a new emulator server with its own task and queue bookkeeping
+func NewServer(resetOnPurge bool) *Server {
+	return &Server{
+		qs: make(map[string]*Queue),
+		ts: make(map[string]*Task),
+		options: serverOptions{
+			resetOnPurge: resetOnPurge,
+		},
+	}
 }
 
 func (s *Server) setQueue(queueName string, queue *Queue) {
@@ -175,7 +173,7 @@ func (s *Server) DeleteQueue(ctx context.Context, in *taskspb.DeleteQueueRequest
 func (s *Server) PurgeQueue(ctx context.Context, in *taskspb.PurgeQueueRequest) (*taskspb.Queue, error) {
 	queue, _ := s.fetchQueue(in.GetName())
 
-	if s.Options.HardResetOnPurgeQueue {
+	if s.options.resetOnPurge {
 		// Use the development environment behaviour - synchronously purge the queue and release all task names
 		queue.HardReset(s)
 	} else {

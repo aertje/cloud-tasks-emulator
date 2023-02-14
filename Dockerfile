@@ -1,4 +1,4 @@
-FROM golang:1.13-alpine as builder
+FROM golang:1.20-alpine as builder
 
 WORKDIR /app
 
@@ -8,15 +8,15 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o emulator .
+RUN (cd ./cmd/emulator && go build -o emulator .)
 
 
 FROM alpine:latest
 
 LABEL org.opencontainers.image.source=https://github.com/aertje/cloud-tasks-emulator
 
-ENTRYPOINT ["/emulator"]
+WORKDIR /app
 
-WORKDIR /
+COPY --from=builder /app/cmd/emulator/emulator /app
 
-COPY --from=builder /app/emulator .
+ENTRYPOINT ["./emulator"]

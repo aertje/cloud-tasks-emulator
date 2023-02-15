@@ -388,13 +388,13 @@ func main() {
 
 	var initialQueues arrayFlags
 
-	envVarInitialQueues := os.Getenv("INITIAL_QUEUES")
-	if envVarInitialQueues != "" {
-		initialQueues = strings.Split(envVarInitialQueues, ",")
-	}
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
 	flag.Parse()
+
+	if len(initialQueues) == 0 {
+		initialQueues = strings.Split(os.Getenv("INITIAL_QUEUES"), ",")
+	}
 
 	if *openidIssuer != "" {
 		srv, err := configureOpenIdIssuer(*openidIssuer)

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -361,13 +362,36 @@ func createInitialQueue(emulatorServer *Server, name string) {
 }
 
 func main() {
+	defaultHost := "localhost"
+	if os.Getenv("HOST") != "" {
+		defaultHost = os.Getenv("HOST")
+	}
+	host := flag.String("host", defaultHost, "The host name")
+
+	defaultPort := "8123"
+	if os.Getenv("PORT") != "" {
+		defaultPort = os.Getenv("PORT")
+	}
+	port := flag.String("port", defaultPort, "The port")
+
+	defaultOpenIdIssuer := ""
+	if os.Getenv("OPENID_ISSUER") != "" {
+		defaultOpenIdIssuer = os.Getenv("OPENID_ISSUER")
+	}
+	openidIssuer := flag.String("openid-issuer", defaultOpenIdIssuer, "URL to serve the OpenID configuration on, if required")
+
+	defaultHardResetOnPurgeQueue := false
+	if os.Getenv("HARD_RESET_ON_PURGE_QUEUE") == "true" {
+		defaultHardResetOnPurgeQueue = true
+	}
+	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", defaultHardResetOnPurgeQueue, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
+
 	var initialQueues arrayFlags
 
-	host := flag.String("host", "localhost", "The host name")
-	port := flag.String("port", "8123", "The port")
-	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
-	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
-
+	envVarInitialQueues := os.Getenv("INITIAL_QUEUES")
+	if envVarInitialQueues != "" {
+		initialQueues = strings.Split(envVarInitialQueues, ",")
+	}
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
 	flag.Parse()

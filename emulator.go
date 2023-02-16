@@ -392,7 +392,7 @@ func main() {
 
 	flag.Parse()
 
-	if len(initialQueues) == 0 {
+	if len(initialQueues) == 0 && os.Getenv("INITIAL_QUEUES") != "" {
 		initialQueues = strings.Split(os.Getenv("INITIAL_QUEUES"), ",")
 	}
 

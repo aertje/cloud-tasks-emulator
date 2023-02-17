@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	rpccode "google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/genproto/googleapis/rpc/code"
 )
 
 func toHTTPMethod(taskMethod taskspb.HttpMethod) string {
@@ -28,41 +28,41 @@ func toHTTPMethod(taskMethod taskspb.HttpMethod) string {
 	}
 }
 
-func toRPCStatusCode(statusCode int) rpccode.Code {
+func toRPCStatusCode(statusCode int) code.Code {
 	switch statusCode {
 	case 200:
-		return rpccode.Code_OK
+		return code.Code_OK
 	case 400:
 		// TODO: or rpccode.Code_FAILED_PRECONDITION
 		// TODO: or rpcCode.Code_OUT_OF_RANGE
-		return rpccode.Code_INVALID_ARGUMENT
+		return code.Code_INVALID_ARGUMENT
 	case 401:
-		return rpccode.Code_UNAUTHENTICATED
+		return code.Code_UNAUTHENTICATED
 	case 403:
-		return rpccode.Code_PERMISSION_DENIED
+		return code.Code_PERMISSION_DENIED
 	case 404:
-		return rpccode.Code_NOT_FOUND
+		return code.Code_NOT_FOUND
 	case 409:
 		// TODO: or rpccde.Code_ABORTED
-		return rpccode.Code_ALREADY_EXISTS
+		return code.Code_ALREADY_EXISTS
 	case 429:
-		return rpccode.Code_RESOURCE_EXHAUSTED
+		return code.Code_RESOURCE_EXHAUSTED
 	case 499:
-		return rpccode.Code_CANCELLED
+		return code.Code_CANCELLED
 	case 500:
 		//TODO: or rpccode.Code_DATA_LOSS
-		return rpccode.Code_INTERNAL
+		return code.Code_INTERNAL
 	case 501:
-		return rpccode.Code_UNIMPLEMENTED
+		return code.Code_UNIMPLEMENTED
 	case 503:
-		return rpccode.Code_UNAVAILABLE
+		return code.Code_UNAVAILABLE
 	case 504:
-		return rpccode.Code_DEADLINE_EXCEEDED
+		return code.Code_DEADLINE_EXCEEDED
 	default:
-		return rpccode.Code_UNKNOWN
+		return code.Code_UNKNOWN
 	}
 }
 
-func toCodeName(rpcCode rpccode.Code) string {
-	return rpccode.Code_name[int32(rpcCode)]
+func toCodeName(rpcCode code.Code) string {
+	return code.Code_name[int32(rpcCode)]
 }

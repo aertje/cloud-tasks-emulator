@@ -188,3 +188,11 @@ func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
 	fmt.Printf("Issuing OpenID tokens as %v - running endpoint on %v:%v\n", issuerUrl, listenAddr, port)
 	return serveOpenIDConfigurationEndpoint(listenAddr, port), nil
 }
+
+func GetHandler() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
+	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
+
+	return mux
+}

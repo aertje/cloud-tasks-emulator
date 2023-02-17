@@ -3,24 +3,26 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
+	"log"
 	"net"
+	"net/http"
 	"regexp"
 
-	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/aertje/cloud-tasks-emulator/pkg/emulator"
+	"github.com/aertje/cloud-tasks-emulator/pkg/oidc"
 	"google.golang.org/grpc"
 )
 
 func main() {
-	host := flag.String("host", "localhost", "The host name")
-	port := flag.String("port", "8123", "The port")
-	// openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
-
 	var initialQueues arrayFlags
+
+	emulatorAddress := flag.String("host", "0.0.0.0:8123", "The address (host and port) the emulator will listen on")
+	resetOnPurge := flag.Bool("reset-on-purge", false, "Perform a synchronous reset on purge queue (differs from production)")
 	flag.Var(&initialQueues, "queue", "Queue(s) to create on startup (repeat as required)")
 
-	resetOnPurge := flag.Bool("reset-on-purge", false, "Perform a synchronous reset on purge queue (differs from production)")
+	oidcAddress := flag.String("oidc-host", "0.0.0.0:80", "The address (host and port) the OIDC server will listen on")
+	oidcIssuer := flag.String("oidc-issuer", "http://localhost", "The issuer URL for OIDC")
 
 	flag.Parse()
 
@@ -32,39 +34,66 @@ func main() {
 	// 	defer srv.Shutdown(context.Background())
 	// }
 
-	lis, err := net.Listen("tcp", fmt.Sprintf("%v:%v", *host, *port))
+	startEmulatorServer(*emulatorAddress, *resetOnPurge, initialQueues)
+	startOIDCServer(*oidcAddress, *oidcIssuer)
+}
+
+func startEmulatorServer(address string, resetOnPurge bool, initialQueues []string) {
+	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		panic(err)
 	}
 
-	print(fmt.Sprintf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port))
+	log.Printf("Starting cloud tasks emulator, listening on %v", address)
 
 	grpcServer := grpc.NewServer()
-	emulatorServer := emulator.NewServer(*resetOnPurge)
-	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
+	emulatorServer := emulator.NewServer(resetOnPurge)
+	taskspb.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
-	for i := 0; i < len(initialQueues); i++ {
-		createInitialQueue(emulatorServer, initialQueues[i])
+	for _, q := range initialQueues {
+		err := createInitialQueue(emulatorServer, q)
+		if err != nil {
+			panic(err)
+		}
 	}
 
-	grpcServer.Serve(lis)
+	go grpcServer.Serve(lis)
+
+	defer grpcServer.GracefulStop()
 }
 
 // Creates an initial queue on the emulator
-func createInitialQueue(emulatorServer *emulator.Server, name string) {
-	print(fmt.Sprintf("Creating initial queue %s\n", name))
+func createInitialQueue(emulatorServer *emulator.Server, queueName string) error {
+	log.Printf("Creating initial queue %s", queueName)
 
-	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
-	parentName := r.ReplaceAllString(name, "")
+	r, err := regexp.Compile("/queues/[A-Za-z0-9-]+$")
+	if err != nil {
+		return err
+	}
 
-	queue := &tasks.Queue{Name: name}
-	req := &tasks.CreateQueueRequest{
-		Parent: parentName,
+	parent := r.ReplaceAllString(queueName, "")
+
+	queue := &taskspb.Queue{Name: queueName}
+	req := &taskspb.CreateQueueRequest{
+		Parent: parent,
 		Queue:  queue,
 	}
 
-	_, err := emulatorServer.CreateQueue(context.TODO(), req)
-	if err != nil {
-		panic(err)
+	_, err = emulatorServer.CreateQueue(context.TODO(), req)
+
+	return err
+}
+
+// TODO: error handling
+// TODO: contexts
+
+func startOIDCServer(address, issuer string) {
+	// TODO: pass in issuer into server
+	server := &http.Server{
+		Addr:    address,
+		Handler: oidc.GetHandler(),
 	}
+	go server.ListenAndServe()
+
+	defer server.Shutdown(context.Background())
 }

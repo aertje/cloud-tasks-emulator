@@ -23,8 +23,9 @@ type Server struct {
 	qs map[string]*Queue
 	ts map[string]*Task
 
-	qsMux   sync.Mutex
-	tsMux   sync.Mutex
+	qsMux sync.Mutex
+	tsMux sync.Mutex
+
 	options serverOptions
 }
 

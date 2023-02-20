@@ -4,18 +4,13 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"log"
 	"math/big"
 	"net/http"
-	"net/url"
-	"strings"
+	"path"
 	"time"
 
 	"github.com/golang-jwt/jwt"
 )
-
-const jwksUriPath = "/jwks"
 
 // This private key is, of course, not actually private!
 const openIdPrivateKeyStr = `
@@ -61,6 +56,32 @@ type OpenIDConnectClaims struct {
 	jwt.StandardClaims
 }
 
+type serverOptions struct {
+	issuer string
+}
+
+type Server struct {
+	*http.ServeMux
+
+	options serverOptions
+}
+
+func NewServer(issuer string) Server {
+	mux := http.NewServeMux()
+
+	s := Server{
+		mux,
+		serverOptions{
+			issuer: issuer,
+		},
+	}
+
+	mux.HandleFunc("/.well-known/openid-configuration", s.configHandler)
+	mux.HandleFunc("/jwks", s.jwksHandler)
+
+	return s
+}
+
 func init() {
 	var err error
 	OpenIDConfig.PrivateKey, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(openIdPrivateKeyStr))
@@ -72,40 +93,10 @@ func init() {
 	OpenIDConfig.KeyID = "cloudtasks-emulator-test"
 }
 
-func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) string {
-	if audience == "" {
-		audience = handlerUrl
-	}
-	now := time.Now()
-	claims := OpenIDConnectClaims{
-		Email:         serviceAccountEmail,
-		EmailVerified: true,
-		StandardClaims: jwt.StandardClaims{
-			Subject:   serviceAccountEmail,
-			Audience:  audience,
-			Issuer:    OpenIDConfig.IssuerURL,
-			IssuedAt:  now.Unix(),
-			NotBefore: now.Unix(),
-			ExpiresAt: now.Add(5 * time.Minute).Unix(),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = OpenIDConfig.KeyID
-
-	tokenString, err := token.SignedString(OpenIDConfig.PrivateKey)
-
-	if err != nil {
-		log.Fatalf("Failed to create OIDC token: %v", err)
-	}
-
-	return tokenString
-}
-
-func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
+func (s Server) configHandler(w http.ResponseWriter, r *http.Request) {
 	config := map[string]interface{}{
 		"issuer":                                OpenIDConfig.IssuerURL,
-		"jwks_uri":                              OpenIDConfig.IssuerURL + jwksUriPath,
+		"jwks_uri":                              path.Join(s.options.issuer, "jwks"),
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"claims_supported":                      []string{"sub", "aud", "email", "email_verified", "exp", "iat", "iss", "nbf"},
 	}
@@ -113,22 +104,7 @@ func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Duration) {
-	json, err := json.Marshal(body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	utc, _ := time.LoadLocation("UTC")
-	expires := time.Now().In(utc).Add(expiresAfter).Format(http.TimeFormat)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public")
-	w.Header().Set("Expires", expires)
-	w.Write(json)
-}
-
-func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
+func (s Server) jwksHandler(w http.ResponseWriter, r *http.Request) {
 	publicKey := OpenIDConfig.PrivateKey.Public().(*rsa.PublicKey)
 
 	b64Url := base64.URLEncoding.WithPadding(base64.NoPadding)
@@ -149,50 +125,65 @@ func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
-	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
-
-	server := &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
-	go server.ListenAndServe()
-
-	return server
-}
-
-func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
-	url, err := url.ParseRequestURI(issuerUrl)
+func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Duration) {
+	json, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	if url.Scheme != "http" {
-		return nil, fmt.Errorf("-openid-issuer only supports http protocol")
-	}
-
-	if url.Path != "" {
-		return nil, fmt.Errorf("-openid-issuer must not contain a path")
-	}
-
-	OpenIDConfig.IssuerURL = issuerUrl
-
-	hostParts := strings.Split(url.Host, ":")
-	var port string
-	if len(hostParts) > 1 {
-		port = hostParts[1]
-	} else {
-		port = "80"
-	}
-
-	listenAddr := "0.0.0.0"
-	fmt.Printf("Issuing OpenID tokens as %v - running endpoint on %v:%v\n", issuerUrl, listenAddr, port)
-	return serveOpenIDConfigurationEndpoint(listenAddr, port), nil
+	utc, _ := time.LoadLocation("UTC")
+	expires := time.Now().In(utc).Add(expiresAfter).Format(http.TimeFormat)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public")
+	w.Header().Set("Expires", expires)
+	w.Write(json)
 }
 
-func GetHandler() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
-	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
+// func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string) *http.Server {
+// 	mux := http.NewServeMux()
+// 	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
+// 	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
 
-	return mux
-}
+// 	server := &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
+// 	go server.ListenAndServe()
+
+// 	return server
+// }
+
+// func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
+// 	url, err := url.ParseRequestURI(issuerUrl)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")
+// 	}
+
+// 	if url.Scheme != "http" {
+// 		return nil, fmt.Errorf("-openid-issuer only supports http protocol")
+// 	}
+
+// 	if url.Path != "" {
+// 		return nil, fmt.Errorf("-openid-issuer must not contain a path")
+// 	}
+
+// 	OpenIDConfig.IssuerURL = issuerUrl
+
+// 	hostParts := strings.Split(url.Host, ":")
+// 	var port string
+// 	if len(hostParts) > 1 {
+// 		port = hostParts[1]
+// 	} else {
+// 		port = "80"
+// 	}
+
+// 	listenAddr := "0.0.0.0"
+// 	fmt.Printf("Issuing OpenID tokens as %v - running endpoint on %v:%v\n", issuerUrl, listenAddr, port)
+// 	return serveOpenIDConfigurationEndpoint(listenAddr, port), nil
+// }
+
+// func GetHandler() *http.ServeMux {
+// 	mux := http.NewServeMux()
+// 	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
+// 	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
+
+// 	return mux
+// }

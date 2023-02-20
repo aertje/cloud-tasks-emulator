@@ -31,14 +31,6 @@ func main() {
 
 	flag.Parse()
 
-	// if *openidIssuer != "" {
-	// 	srv, err := configureOpenIdIssuer(*openidIssuer)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	defer srv.Shutdown(context.Background())
-	// }
-
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals)
 	defer signal.Stop(osSignals)
@@ -97,7 +89,7 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 
 	// Run the server in a separate goroutine so we can respond to a context
 	// cancellation. The actual terminating of the server is done using a
-	// defered server.Stop
+	// deferred server.Stop
 	errChan := make(chan error, 1)
 	go func() {
 		defer close(errChan)
@@ -125,15 +117,15 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 func startOIDCServer(ctx context.Context, address, issuer string) error {
 	log.Printf("Starting OIDC server, listening on %v...", address)
 
-	// TODO: pass in issuer into server
+	oidcServer := oidc.NewServer(issuer)
 	server := &http.Server{
 		Addr:    address,
-		Handler: oidc.GetHandler(),
+		Handler: oidcServer,
 	}
 
 	// Run the server in a separate goroutine so we can respond to a context
 	// cancellation. The actual terminating of the server is done using a
-	// defered server.Close
+	// deferred server.Close
 	errChan := make(chan error, 1)
 	go func() {
 		defer close(errChan)
@@ -163,7 +155,7 @@ func createQueues(ctx context.Context, emulatorServer *emulator.Server, queueNam
 	if len(queueNames) == 0 {
 		return nil
 	}
-	log.Printf("Creating %d initial queues...", len(queueNames))
+	log.Printf("Creating %d queues...", len(queueNames))
 
 	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
 

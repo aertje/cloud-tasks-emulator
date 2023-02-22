@@ -12,128 +12,130 @@ import (
 
 // Queue holds all internals for a task queue
 type Queue struct {
-	name string
-
+	name  string
 	state *taskspb.Queue
 
-	fire chan *Task
-
-	work chan *Task
-
-	ts map[string]*Task
-
+	ts    map[string]*Task
 	tsMux sync.Mutex
+
+	fire chan *Task
+	work chan *Task
 
 	tokenBucket chan bool
 
 	maxDispatchesPerSecond float64
 
 	cancelTokenGenerator chan bool
-
-	cancelDispatcher chan bool
-
-	cancelWorkers chan bool
+	cancelDispatcher     chan bool
+	cancelWorkers        chan bool
 
 	cancelled bool
-
-	paused bool
-
-	onTaskDone func(task *Task)
+	paused    bool
 }
 
 // NewQueue creates a new task queue
-func NewQueue(name string, state *taskspb.Queue, onTaskDone func(task *Task)) (*Queue, *taskspb.Queue) {
-	setInitialQueueState(state)
-
+func NewQueue(name string, state *taskspb.Queue) *Queue {
 	queue := &Queue{
 		name:                   name,
 		state:                  state,
 		fire:                   make(chan *Task),
 		work:                   make(chan *Task),
 		ts:                     make(map[string]*Task),
-		onTaskDone:             onTaskDone,
 		tokenBucket:            make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
 		maxDispatchesPerSecond: state.GetRateLimits().GetMaxDispatchesPerSecond(),
 		cancelTokenGenerator:   make(chan bool, 1),
 		cancelDispatcher:       make(chan bool, 1),
 		cancelWorkers:          make(chan bool, 1),
 	}
+
+	queue.setInitialQueueState()
+
 	// Fill the token bucket
 	for i := 0; i < int(state.GetRateLimits().GetMaxBurstSize()); i++ {
 		queue.tokenBucket <- true
 	}
 
-	return queue, state
+	return queue
 }
 
-func (queue *Queue) setTask(taskName string, task *Task) {
-	queue.tsMux.Lock()
-	defer queue.tsMux.Unlock()
-	queue.ts[taskName] = task
+func (q *Queue) stateCopy() *taskspb.Queue {
+	return proto.Clone(q.state).(*taskspb.Queue)
 }
 
-func (queue *Queue) removeTask(taskName string) {
-	queue.setTask(taskName, nil)
+func (q *Queue) fetchTask(taskName string) (*Task, bool) {
+	q.tsMux.Lock()
+	defer q.tsMux.Unlock()
+	task, ok := q.ts[taskName]
+	return task, ok
 }
 
-func setInitialQueueState(queueState *taskspb.Queue) {
-	if queueState.GetRateLimits() == nil {
-		queueState.RateLimits = &taskspb.RateLimits{}
-	}
-	if queueState.GetRateLimits().GetMaxDispatchesPerSecond() == 0 {
-		queueState.RateLimits.MaxDispatchesPerSecond = 500.0
-	}
-	if queueState.GetRateLimits().GetMaxBurstSize() == 0 {
-		queueState.RateLimits.MaxBurstSize = 100
-	}
-	if queueState.GetRateLimits().GetMaxConcurrentDispatches() == 0 {
-		queueState.RateLimits.MaxConcurrentDispatches = 1000
-	}
+func (q *Queue) setTask(taskName string, task *Task) {
+	q.tsMux.Lock()
+	defer q.tsMux.Unlock()
+	q.ts[taskName] = task
+}
 
-	if queueState.GetRetryConfig() == nil {
-		queueState.RetryConfig = &taskspb.RetryConfig{}
+func (q *Queue) removeTask(taskName string) {
+	q.setTask(taskName, nil)
+}
+
+func (q *Queue) setInitialQueueState() {
+	if q.state.GetRateLimits() == nil {
+		q.state.RateLimits = &taskspb.RateLimits{}
 	}
-	if queueState.GetRetryConfig().GetMaxAttempts() == 0 {
-		queueState.RetryConfig.MaxAttempts = 100
+	if q.state.GetRateLimits().GetMaxDispatchesPerSecond() == 0 {
+		q.state.RateLimits.MaxDispatchesPerSecond = 500.0
 	}
-	if queueState.GetRetryConfig().GetMaxDoublings() == 0 {
-		queueState.RetryConfig.MaxDoublings = 16
+	if q.state.GetRateLimits().GetMaxBurstSize() == 0 {
+		q.state.RateLimits.MaxBurstSize = 100
 	}
-	if queueState.GetRetryConfig().GetMinBackoff() == nil {
-		queueState.RetryConfig.MinBackoff = &durationpb.Duration{
+	if q.state.GetRateLimits().GetMaxConcurrentDispatches() == 0 {
+		q.state.RateLimits.MaxConcurrentDispatches = 1000
+	}
+	if q.state.GetRetryConfig() == nil {
+		q.state.RetryConfig = &taskspb.RetryConfig{}
+	}
+	if q.state.GetRetryConfig().GetMaxAttempts() == 0 {
+		q.state.RetryConfig.MaxAttempts = 100
+	}
+	if q.state.GetRetryConfig().GetMaxDoublings() == 0 {
+		q.state.RetryConfig.MaxDoublings = 16
+	}
+	if q.state.GetRetryConfig().GetMinBackoff() == nil {
+		q.state.RetryConfig.MinBackoff = &durationpb.Duration{
 			Nanos: 100000000,
 		}
 	}
-	if queueState.GetRetryConfig().GetMaxBackoff() == nil {
-		queueState.RetryConfig.MaxBackoff = &durationpb.Duration{
+	if q.state.GetRetryConfig().GetMaxBackoff() == nil {
+		q.state.RetryConfig.MaxBackoff = &durationpb.Duration{
 			Seconds: 3600,
 		}
 	}
 
-	queueState.State = taskspb.Queue_RUNNING
+	q.state.State = taskspb.Queue_STATE_UNSPECIFIED
 }
 
-func (queue *Queue) runWorkers() {
-	for i := 0; i < int(queue.state.GetRateLimits().GetMaxConcurrentDispatches()); i++ {
-		go queue.runWorker()
+func (q *Queue) runWorkers() {
+	for i := 0; i < int(q.state.GetRateLimits().GetMaxConcurrentDispatches()); i++ {
+		go q.runWorker()
 	}
 }
 
-func (queue *Queue) runWorker() {
+func (q *Queue) runWorker() {
 	for {
 		select {
-		case task := <-queue.work:
+		case task := <-q.work:
 			task.Attempt()
-		case <-queue.cancelWorkers:
+		case <-q.cancelWorkers:
 			// Forward for next worker
-			queue.cancelWorkers <- true
+			q.cancelWorkers <- true
 			return
 		}
 	}
 }
 
-func (queue *Queue) runTokenGenerator() {
-	period := time.Second / time.Duration(queue.maxDispatchesPerSecond)
+func (q *Queue) runTokenGenerator() {
+	period := time.Second / time.Duration(q.maxDispatchesPerSecond)
 	// Use Timer with Reset() in place of time.Ticker as the latter was causing high CPU usage in Docker
 	t := time.NewTimer(period)
 
@@ -141,13 +143,13 @@ func (queue *Queue) runTokenGenerator() {
 		select {
 		case <-t.C:
 			select {
-			case queue.tokenBucket <- true:
+			case q.tokenBucket <- true:
 				// Added token
 				t.Reset(period)
-			case <-queue.cancelTokenGenerator:
+			case <-q.cancelTokenGenerator:
 				return
 			}
-		case <-queue.cancelTokenGenerator:
+		case <-q.cancelTokenGenerator:
 			if !t.Stop() {
 				<-t.C
 			}
@@ -156,42 +158,47 @@ func (queue *Queue) runTokenGenerator() {
 	}
 }
 
-func (queue *Queue) runDispatcher() {
+func (q *Queue) runDispatcher() {
 	for {
 		select {
 		// Consume a token
-		case <-queue.tokenBucket:
+		case <-q.tokenBucket:
 			select {
 			// Wait for task
-			case task := <-queue.fire:
+			case task := <-q.fire:
 				// Pass on to workers
-				queue.work <- task
-			case <-queue.cancelDispatcher:
+				q.work <- task
+			case <-q.cancelDispatcher:
 				return
 			}
-		case <-queue.cancelDispatcher:
+		case <-q.cancelDispatcher:
 			return
 		}
 	}
 }
 
 // Run starts the queue (workers, token generator and dispatcher)
-func (queue *Queue) Run() {
-	go queue.runWorkers()
-	go queue.runTokenGenerator()
-	go queue.runDispatcher()
+func (q *Queue) Run() *taskspb.Queue {
+	q.state.State = taskspb.Queue_RUNNING
+
+	queueState := q.stateCopy()
+
+	go q.runWorkers()
+	go q.runTokenGenerator()
+	go q.runDispatcher()
+
+	return queueState
 }
 
 // NewTask creates a new task on the queue
-func (queue *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
-	task := NewTask(queue, newTaskState, func(task *Task) {
-		queue.removeTask(task.state.GetName())
-		queue.onTaskDone(task)
+func (q *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
+	task := NewTask(q, newTaskState, func(task *Task) {
+		q.removeTask(task.state.GetName())
 	})
 
 	taskState := proto.Clone(task.state).(*taskspb.Task)
 
-	queue.setTask(taskState.GetName(), task)
+	q.setTask(taskState.GetName(), task)
 
 	task.Schedule()
 
@@ -199,88 +206,67 @@ func (queue *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
 }
 
 // Delete stops, purges and removes the queue
-func (queue *Queue) Delete() {
-	if !queue.cancelled {
-		queue.cancelled = true
+func (q *Queue) Delete() {
+	if !q.cancelled {
+		q.cancelled = true
 		log.Println("Stopping queue")
-		queue.cancelTokenGenerator <- true
-		queue.cancelDispatcher <- true
-		queue.cancelWorkers <- true
+		q.cancelTokenGenerator <- true
+		q.cancelDispatcher <- true
+		q.cancelWorkers <- true
 
-		queue.Purge()
+		q.Purge()
 	}
 }
 
 // Purge purges all tasks from the queue
-// - Normally this is a fire-and-forget operation, but it returns a WaitGroup to allow HardReset to wait for completion
-func (queue *Queue) Purge() *sync.WaitGroup {
-	waitGroup := sync.WaitGroup{}
-	waitGroup.Add(1)
-
+func (q *Queue) Purge() {
 	go func() {
-		defer waitGroup.Done()
+		q.tsMux.Lock()
+		defer q.tsMux.Unlock()
 
-		queue.tsMux.Lock()
-		defer queue.tsMux.Unlock()
-
-		for _, task := range queue.ts {
-			// Avoid task firing
+		for _, task := range q.ts {
 			if task != nil {
-				task.Delete()
+				// Avoid task firing but still allow onTaskDone callbacks
+				task.Delete(true)
 			}
 		}
 	}()
-
-	return &waitGroup
 }
 
 // Goes beyond `Purge` behaviour to synchronously delete all tasks and their name handles
-func (queue *Queue) HardReset(s *Server) {
-	waitGroup := queue.Purge()
-	waitGroup.Wait()
+func (q *Queue) HardReset(s *Server) {
+	q.tsMux.Lock()
+	defer q.tsMux.Unlock()
 
-	// This is still a bit awkward - we can't *guarantee* the task is fully deleted even after the WaitGroup because:
-	// - Purge() calls task.Delete()
-	// - task.Delete() writes to a buffered `cancel` channel
-	// - task.Schedule() reads from that buffered channel in a separate goroutine
-	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
-	//
-	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
-	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
-	// period to allow the tasks' internal goroutines to fire first.
-	time.Sleep(10 * time.Millisecond)
-
-	queue.tsMux.Lock()
-	defer queue.tsMux.Unlock()
-	for taskName, task := range queue.ts {
+	for taskName, task := range q.ts {
+		// Avoid task firing
 		if task != nil {
-			// The naive "sleep till it deletes" approach described above is too naive...
-			panic("Expected task to be deleted by now!")
+			// Avoid callback, we do map cleanup locally and synchronously
+			task.Delete(false)
 		}
 
-		delete(queue.ts, taskName)
-		s.hardDeleteTask(taskName)
+		delete(q.ts, taskName)
 	}
 }
 
 // Pause pauses the queue
-func (queue *Queue) Pause() {
-	if !queue.paused {
-		queue.paused = true
-		queue.state.State = taskspb.Queue_PAUSED
+func (q *Queue) Pause() {
+	if !q.paused {
+		q.paused = true
+		q.state.State = taskspb.Queue_PAUSED
 
-		queue.cancelDispatcher <- true
-		queue.cancelWorkers <- true
+		q.cancelDispatcher <- true
+		q.cancelWorkers <- true
 	}
 }
 
 // Resume resumes a paused queue
-func (queue *Queue) Resume() {
-	if queue.paused {
-		queue.paused = false
-		queue.state.State = taskspb.Queue_RUNNING
+func (q *Queue) Resume() {
+	if q.paused {
+		q.paused = false
+		q.state.State = taskspb.Queue_RUNNING
 
-		go queue.runDispatcher()
-		go queue.runWorkers()
+		go q.runDispatcher()
+		go q.runWorkers()
 	}
 }

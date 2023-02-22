@@ -10,7 +10,6 @@ import (
 	"cloud.google.com/go/iam/apiv1/iampb"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -20,11 +19,8 @@ type serverOptions struct {
 
 // Server represents the emulator server
 type Server struct {
-	qs map[string]*Queue
-	ts map[string]*Task
-
+	qs    map[string]*Queue
 	qsMux sync.Mutex
-	tsMux sync.Mutex
 
 	options serverOptions
 }
@@ -33,7 +29,7 @@ type Server struct {
 func NewServer(resetOnPurge bool) *Server {
 	return &Server{
 		qs: make(map[string]*Queue),
-		ts: make(map[string]*Task),
+		// ts: make(map[string]*Task),
 		options: serverOptions{
 			resetOnPurge: resetOnPurge,
 		},
@@ -57,27 +53,13 @@ func (s *Server) removeQueue(queueName string) {
 	s.setQueue(queueName, nil)
 }
 
-func (s *Server) setTask(taskName string, task *Task) {
-	s.tsMux.Lock()
-	defer s.tsMux.Unlock()
-	s.ts[taskName] = task
-}
-
 func (s *Server) fetchTask(taskName string) (*Task, bool) {
-	s.tsMux.Lock()
-	defer s.tsMux.Unlock()
-	task, ok := s.ts[taskName]
-	return task, ok
-}
-
-func (s *Server) removeTask(taskName string) {
-	s.setTask(taskName, nil)
-}
-
-func (s *Server) hardDeleteTask(taskName string) {
-	s.tsMux.Lock()
-	defer s.tsMux.Unlock()
-	delete(s.ts, taskName)
+	queueName := parseTaskName(taskName).queueName
+	queue, found := s.fetchQueue(queueName)
+	if !found {
+		return nil, false
+	}
+	return queue.fetchTask(taskName)
 }
 
 // ListQueues lists the existing queues
@@ -135,16 +117,13 @@ func (s *Server) CreateQueue(ctx context.Context, in *taskspb.CreateQueueRequest
 		return nil, status.Errorf(codes.FailedPrecondition, "The queue cannot be created because a queue with this name existed too recently.")
 	}
 
-	// Make a deep copy so that the original is frozen for the http response
-	queue, queueState = NewQueue(
+	queue = NewQueue(
 		name,
-		proto.Clone(queueState).(*taskspb.Queue),
-		func(task *Task) {
-			s.removeTask(task.state.GetName())
-		},
+		queueState,
 	)
 	s.setQueue(name, queue)
-	queue.Run()
+
+	queueState = queue.Run()
 
 	return queueState, nil
 }
@@ -285,9 +264,7 @@ func (s *Server) CreateTask(ctx context.Context, in *taskspb.CreateTaskRequest) 
 		}
 	}
 
-	task, taskState := queue.NewTask(in.GetTask())
-
-	s.setTask(taskState.GetName(), task)
+	_, taskState := queue.NewTask(in.GetTask())
 
 	return taskState, nil
 }
@@ -303,7 +280,7 @@ func (s *Server) DeleteTask(ctx context.Context, in *taskspb.DeleteTaskRequest) 
 	}
 
 	// The removal of the task from the server struct is handled in the queue callback
-	task.Delete()
+	task.Delete(true)
 
 	return &emptypb.Empty{}, nil
 }

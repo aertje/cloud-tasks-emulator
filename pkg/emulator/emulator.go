@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"context"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -13,12 +14,23 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+type OIDCTokenCreator interface {
+	CreateOIDCToken(email, subject, audience string) (token string, err error)
+}
+
+type HTTPDoer interface {
+	Do(req *http.Request) (resp *http.Response, err error)
+}
+
 type serverOptions struct {
 	resetOnPurge bool
 }
 
 // Server represents the emulator server
 type Server struct {
+	oidcTokenCreator OIDCTokenCreator
+	httpDoer         HTTPDoer
+
 	qs    map[string]*Queue
 	qsMux sync.Mutex
 
@@ -26,10 +38,11 @@ type Server struct {
 }
 
 // NewServer creates a new emulator server with its own task and queue bookkeeping
-func NewServer(resetOnPurge bool) *Server {
+func NewServer(oidcTokenCreator OIDCTokenCreator, httpDoer HTTPDoer, resetOnPurge bool) *Server {
 	return &Server{
-		qs: make(map[string]*Queue),
-		// ts: make(map[string]*Task),
+		oidcTokenCreator: oidcTokenCreator,
+		httpDoer:         httpDoer,
+		qs:               make(map[string]*Queue),
 		options: serverOptions{
 			resetOnPurge: resetOnPurge,
 		},
@@ -118,6 +131,7 @@ func (s *Server) CreateQueue(ctx context.Context, in *taskspb.CreateQueueRequest
 	}
 
 	queue = NewQueue(
+		s,
 		name,
 		queueState,
 	)

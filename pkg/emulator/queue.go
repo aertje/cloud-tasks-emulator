@@ -12,6 +12,8 @@ import (
 
 // Queue holds all internals for a task queue
 type Queue struct {
+	server *Server
+
 	name  string
 	state *taskspb.Queue
 
@@ -34,8 +36,9 @@ type Queue struct {
 }
 
 // NewQueue creates a new task queue
-func NewQueue(name string, state *taskspb.Queue) *Queue {
+func NewQueue(server *Server, name string, state *taskspb.Queue) *Queue {
 	queue := &Queue{
+		server:                 server,
 		name:                   name,
 		state:                  state,
 		fire:                   make(chan *Task),
@@ -125,7 +128,8 @@ func (q *Queue) runWorker() {
 	for {
 		select {
 		case task := <-q.work:
-			task.Attempt()
+			// TODO: how to treat error from the task? Probably inject it in an error channel?
+			err := task.Attempt()
 		case <-q.cancelWorkers:
 			// Forward for next worker
 			q.cancelWorkers <- true
@@ -137,21 +141,21 @@ func (q *Queue) runWorker() {
 func (q *Queue) runTokenGenerator() {
 	period := time.Second / time.Duration(q.maxDispatchesPerSecond)
 	// Use Timer with Reset() in place of time.Ticker as the latter was causing high CPU usage in Docker
-	t := time.NewTimer(period)
+	timer := time.NewTimer(period)
 
 	for {
 		select {
-		case <-t.C:
+		case <-timer.C:
 			select {
 			case q.tokenBucket <- true:
 				// Added token
-				t.Reset(period)
+				timer.Reset(period)
 			case <-q.cancelTokenGenerator:
 				return
 			}
 		case <-q.cancelTokenGenerator:
-			if !t.Stop() {
-				<-t.C
+			if !timer.Stop() {
+				<-timer.C
 			}
 			return
 		}
@@ -192,9 +196,7 @@ func (q *Queue) Run() *taskspb.Queue {
 
 // NewTask creates a new task on the queue
 func (q *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
-	task := NewTask(q, newTaskState, func(task *Task) {
-		q.removeTask(task.state.GetName())
-	})
+	task := NewTask(q, newTaskState)
 
 	taskState := proto.Clone(task.state).(*taskspb.Task)
 
@@ -269,4 +271,8 @@ func (q *Queue) Resume() {
 		go q.runDispatcher()
 		go q.runWorkers()
 	}
+}
+
+func (q *Queue) taskDone(task *Task) {
+	q.removeTask(task.state.GetName())
 }

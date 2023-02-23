@@ -13,7 +13,6 @@ import (
 	"time"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/aertje/cloud-tasks-emulator/pkg/oidc"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -28,8 +27,6 @@ type Task struct {
 
 	cancel chan bool
 
-	onDone func(*Task)
-
 	stateMutex sync.Mutex
 
 	cancelOnce sync.Once
@@ -37,11 +34,10 @@ type Task struct {
 
 // NewTask creates a new task for the specified queue. It updates the supplied queue
 // state to its initial values.
-func NewTask(queue *Queue, taskState *taskspb.Task, onDone func(task *Task)) *Task {
+func NewTask(queue *Queue, taskState *taskspb.Task) *Task {
 	task := &Task{
 		queue:  queue,
 		state:  taskState,
-		onDone: onDone,
 		cancel: make(chan bool, 1), // Buffered in case cancel comes when task is not scheduled
 	}
 
@@ -51,6 +47,9 @@ func NewTask(queue *Queue, taskState *taskspb.Task, onDone func(task *Task)) *Ta
 }
 
 func (t *Task) setInitialTaskState(queueName string) {
+	t.stateMutex.Lock()
+	defer t.stateMutex.Unlock()
+
 	if t.state.GetName() == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		t.state.Name = queueName + "/tasks/" + taskID
@@ -148,6 +147,7 @@ func (t *Task) setInitialTaskState(queueName string) {
 func (t *Task) updateStateForReschedule() {
 	// The lock is to ensure a consistent state when updating
 	t.stateMutex.Lock()
+	defer t.stateMutex.Unlock()
 
 	retryConfig := t.queue.state.GetRetryConfig()
 
@@ -177,13 +177,13 @@ func (t *Task) updateStateForReschedule() {
 		Nanos:   int32(scheduleNanos),
 		Seconds: scheduleSeconds,
 	}
-
-	t.stateMutex.Unlock()
 }
 
-func updateStateForDispatch(task *Task) *taskspb.Task {
-	task.stateMutex.Lock()
-	taskState := task.state
+func (t *Task) updateStateForDispatch() *taskspb.Task {
+	t.stateMutex.Lock()
+	defer t.stateMutex.Unlock()
+
+	taskState := t.state
 
 	dispatchTime := timestamppb.Now()
 
@@ -204,20 +204,18 @@ func updateStateForDispatch(task *Task) *taskspb.Task {
 	}
 
 	frozenTaskState := proto.Clone(taskState).(*taskspb.Task)
-	task.stateMutex.Unlock()
 
 	return frozenTaskState
 }
 
-func updateStateAfterDispatch(task *Task, statusCode int) *taskspb.Task {
-	task.stateMutex.Lock()
-
-	taskState := task.state
+func (t *Task) updateStateAfterDispatch(statusCode int) *taskspb.Task {
+	t.stateMutex.Lock()
+	t.stateMutex.Unlock()
 
 	rpcCode := toRPCStatusCode(statusCode)
 	rpcCodeName := toCodeName(rpcCode)
 
-	lastAttempt := taskState.GetLastAttempt()
+	lastAttempt := t.state.GetLastAttempt()
 
 	lastAttempt.ResponseTime = timestamppb.Now()
 	lastAttempt.ResponseStatus = &rpcstatus.Status{
@@ -225,50 +223,49 @@ func updateStateAfterDispatch(task *Task, statusCode int) *taskspb.Task {
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
 	}
 
-	taskState.ResponseCount++
+	t.state.ResponseCount++
 
-	frozenTaskState := proto.Clone(taskState).(*taskspb.Task)
-	task.stateMutex.Unlock()
+	frozenTaskState := proto.Clone(t.state).(*taskspb.Task)
 
 	return frozenTaskState
 }
 
-func (task *Task) reschedule(retry bool, statusCode int) {
+func (t *Task) reschedule(retry bool, statusCode int) {
 	if statusCode >= 200 && statusCode <= 299 {
 		log.Println("Task done")
-		task.onDone(task)
+		t.queue.taskDone(t)
 	} else {
 		log.Println("Task exec error with status " + strconv.Itoa(statusCode))
 		if retry {
-			retryConfig := task.queue.state.GetRetryConfig()
+			retryConfig := t.queue.state.GetRetryConfig()
 
-			if task.state.DispatchCount >= retryConfig.GetMaxAttempts() {
+			if t.state.DispatchCount >= retryConfig.GetMaxAttempts() {
 				log.Println("Ran out of attempts")
 			} else {
-				task.updateStateForReschedule()
-				task.Schedule()
+				t.updateStateForReschedule()
+				t.Schedule()
 			}
 		}
 	}
 }
 
-func dispatch(retry bool, taskState *taskspb.Task) int {
+func (t *Task) dispatch(retry bool) (int, error) {
 	client := &http.Client{}
-	client.Timeout = taskState.GetDispatchDeadline().AsDuration()
+	client.Timeout = t.state.GetDispatchDeadline().AsDuration()
 
 	var req *http.Request
 	var headers map[string]string
 
-	httpRequest := taskState.GetHttpRequest()
-	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
+	httpRequest := t.state.GetHttpRequest()
+	appEngineHTTPRequest := t.state.GetAppEngineHttpRequest()
 
-	scheduled := taskState.GetScheduleTime().AsTime()
-	nameParts := parseTaskName(taskState.GetName())
+	scheduled := t.state.GetScheduleTime().AsTime()
+	nameParts := parseTaskName(t.state.GetName())
 
 	headerQueueName := nameParts.queueID
 	headerTaskName := nameParts.taskID
-	headerTaskRetryCount := fmt.Sprintf("%v", taskState.GetDispatchCount()-1)
-	headerTaskExecutionCount := fmt.Sprintf("%v", taskState.GetResponseCount())
+	headerTaskRetryCount := fmt.Sprintf("%v", t.state.GetDispatchCount()-1)
+	headerTaskExecutionCount := fmt.Sprintf("%v", t.state.GetResponseCount())
 	headerTaskETA := fmt.Sprintf("%f", float64(scheduled.UnixNano())/1e9)
 
 	if httpRequest != nil {
@@ -279,8 +276,17 @@ func dispatch(retry bool, taskState *taskspb.Task) int {
 		headers = httpRequest.GetHeaders()
 
 		if auth := httpRequest.GetOidcToken(); auth != nil {
-			tokenStr := oidc.CreateOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
-			headers["Authorization"] = "Bearer " + tokenStr
+			// tokenStr := oidc.CreateOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
+			email := auth.GetServiceAccountEmail()
+			audience := auth.GetAudience()
+			if audience == "" {
+				audience = httpRequest.GetUrl()
+			}
+			token, err := t.queue.server.oidcTokenCreator.CreateOIDCToken(email, email, audience)
+			if err != nil {
+				return 0, fmt.Errorf("unable to generate OIDC token: %w", err)
+			}
+			headers["Authorization"] = "Bearer " + token
 		}
 
 		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
@@ -316,63 +322,65 @@ func dispatch(retry bool, taskState *taskspb.Task) int {
 		req.Header[k] = []string{v}
 	}
 
-	resp, err := client.Do(req)
+	resp, err := t.queue.server.httpDoer.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return -1
+		return 0, fmt.Errorf("unable to perform HTTP request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() // ignore error
 
-	return resp.StatusCode
+	return resp.StatusCode, nil
 }
 
-func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, task.state)
+func (t *Task) doDispatch(retry bool) error {
+	respCode, err := t.dispatch(retry)
+	if err != nil {
+		return fmt.Errorf("error dispatching task: %w", err)
+	}
 
-	updateStateAfterDispatch(task, respCode)
-	task.reschedule(retry, respCode)
+	t.updateStateAfterDispatch(respCode)
+	t.reschedule(retry, respCode)
 }
 
 // Attempt tries to execute a task
-func (task *Task) Attempt() {
-	updateStateForDispatch(task)
+func (t *Task) Attempt() error {
+	t.updateStateForDispatch()
 
-	task.doDispatch(true)
+	return t.doDispatch(true)
 }
 
 // Run runs the task outside of the normal queueing mechanism.
 // This method is called directly by request.
-func (task *Task) Run() *taskspb.Task {
-	taskState := updateStateForDispatch(task)
+func (t *Task) Run() *taskspb.Task {
+	taskState := t.updateStateForDispatch()
 
-	go task.doDispatch(false)
+	go t.doDispatch(false)
 
 	return taskState
 }
 
 // Delete cancels the task if it is queued for execution.
 // This method is called directly by request.
-func (task *Task) Delete(doCallback bool) {
-	task.cancelOnce.Do(func() {
-		task.cancel <- doCallback
+func (t *Task) Delete(doCallback bool) {
+	t.cancelOnce.Do(func() {
+		t.cancel <- doCallback
 	})
 }
 
 // Schedule schedules the task for execution.
 // It is initially called by the queue, later by the task reschedule.
-func (task *Task) Schedule() {
-	scheduled := task.state.GetScheduleTime().AsTime()
+func (t *Task) Schedule() {
+	scheduled := t.state.GetScheduleTime().AsTime()
 
 	fromNow := time.Until(scheduled)
 
 	go func() {
 		select {
 		case <-time.After(fromNow):
-			task.queue.fire <- task
+			t.queue.fire <- t
 			return
-		case doCallback := <-task.cancel:
+		case doCallback := <-t.cancel:
 			if doCallback {
-				task.onDone(task)
+				t.queue.taskDone(t)
 			}
 			return
 		}

@@ -73,9 +73,12 @@ func main() {
 func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool, initialQueues []string) error {
 	log.Printf("Starting cloud tasks emulator server, listening on %v...", address)
 
-	server := grpc.NewServer()
-	emulatorServer := emulator.NewServer(resetOnPurge)
-	taskspb.RegisterCloudTasksServer(server, emulatorServer)
+	httpClient := &http.Client{}
+	oidcTokenCreator := oidc.NewOIDCTokenCreator()
+	emulatorServer := emulator.NewServer(oidcTokenCreator, httpClient, resetOnPurge)
+
+	grpcServer := grpc.NewServer()
+	taskspb.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	err := createQueues(ctx, emulatorServer, initialQueues)
 	if err != nil {
@@ -93,7 +96,7 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 	errChan := make(chan error, 1)
 	go func() {
 		defer close(errChan)
-		err := server.Serve(lis)
+		err := grpcServer.Serve(lis)
 		if err != nil {
 			errChan <- fmt.Errorf("error running GRPC server: %w", err)
 		}
@@ -101,7 +104,7 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 
 	defer func() {
 		log.Printf("Shutting down emulator server...")
-		server.Stop() // Forceful close
+		grpcServer.Stop() // Forceful close
 	}()
 
 	// Block until context cancellation or server error
@@ -150,17 +153,17 @@ func startOIDCServer(ctx context.Context, address, issuer string) error {
 	return nil
 }
 
-// Creates an initial queue on the emulator
+// Creates initial queues on the emulator
 func createQueues(ctx context.Context, emulatorServer *emulator.Server, queueNames []string) error {
 	if len(queueNames) == 0 {
 		return nil
 	}
-	log.Printf("Creating %d queues...", len(queueNames))
+	log.Printf("Creating %d queue(s)...", len(queueNames))
 
-	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
+	reParentName := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
 
 	for _, qn := range queueNames {
-		parent := r.ReplaceAllString(qn, "")
+		parent := reParentName.ReplaceAllString(qn, "")
 
 		queue := &taskspb.Queue{Name: qn}
 		req := &taskspb.CreateQueueRequest{

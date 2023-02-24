@@ -339,6 +339,8 @@ func (t *Task) doDispatch(retry bool) error {
 
 	t.updateStateAfterDispatch(respCode)
 	t.reschedule(retry, respCode)
+
+	return nil
 }
 
 // Attempt tries to execute a task

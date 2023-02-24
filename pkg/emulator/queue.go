@@ -38,20 +38,21 @@ type Queue struct {
 // NewQueue creates a new task queue
 func NewQueue(server *Server, name string, state *taskspb.Queue) *Queue {
 	queue := &Queue{
-		server:                 server,
-		name:                   name,
-		state:                  state,
-		fire:                   make(chan *Task),
-		work:                   make(chan *Task),
-		ts:                     make(map[string]*Task),
-		tokenBucket:            make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
-		maxDispatchesPerSecond: state.GetRateLimits().GetMaxDispatchesPerSecond(),
-		cancelTokenGenerator:   make(chan bool, 1),
-		cancelDispatcher:       make(chan bool, 1),
-		cancelWorkers:          make(chan bool, 1),
+		server:               server,
+		name:                 name,
+		state:                state,
+		fire:                 make(chan *Task),
+		work:                 make(chan *Task),
+		ts:                   make(map[string]*Task),
+		cancelTokenGenerator: make(chan bool, 1),
+		cancelDispatcher:     make(chan bool, 1),
+		cancelWorkers:        make(chan bool, 1),
 	}
 
 	queue.setInitialQueueState()
+
+	queue.maxDispatchesPerSecond = state.GetRateLimits().GetMaxDispatchesPerSecond()
+	queue.tokenBucket = make(chan bool, queue.state.GetRateLimits().GetMaxBurstSize())
 
 	// Fill the token bucket
 	for i := 0; i < int(state.GetRateLimits().GetMaxBurstSize()); i++ {
@@ -119,17 +120,21 @@ func (q *Queue) setInitialQueueState() {
 }
 
 func (q *Queue) runWorkers() {
-	for i := 0; i < int(q.state.GetRateLimits().GetMaxConcurrentDispatches()); i++ {
-		go q.runWorker()
+	workerCount := int(q.state.GetRateLimits().GetMaxConcurrentDispatches())
+	log.Printf("Starting %d workers for queue %v...", workerCount, q.name)
+	for i := 0; i < int(workerCount); i++ {
+		go q.runWorker(i)
 	}
 }
 
-func (q *Queue) runWorker() {
+func (q *Queue) runWorker(workerID int) {
 	for {
 		select {
 		case task := <-q.work:
-			// TODO: how to treat error from the task? Probably inject it in an error channel?
 			err := task.Attempt()
+			if err != nil {
+				log.Printf("Error in worker %d: %v", workerID, err)
+			}
 		case <-q.cancelWorkers:
 			// Forward for next worker
 			q.cancelWorkers <- true

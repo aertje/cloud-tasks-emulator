@@ -6,16 +6,19 @@ import (
 	"github.com/golang-jwt/jwt"
 )
 
-func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
-	if audience == "" {
-		audience = handlerUrl
-	}
+type OIDCTokenCreator struct{}
+
+func NewOIDCTokenCreator() OIDCTokenCreator {
+	return OIDCTokenCreator{}
+}
+
+func (c OIDCTokenCreator) CreateOIDCToken(email, subject, audience string) (string, error) {
 	now := time.Now()
 	claims := OpenIDConnectClaims{
-		Email:         serviceAccountEmail,
+		Email:         email,
 		EmailVerified: true,
 		StandardClaims: jwt.StandardClaims{
-			Subject:   serviceAccountEmail,
+			Subject:   subject,
 			Audience:  audience,
 			Issuer:    OpenIDConfig.IssuerURL,
 			IssuedAt:  now.Unix(),

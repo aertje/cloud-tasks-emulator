@@ -31,8 +31,8 @@ type Server struct {
 	oidcTokenCreator OIDCTokenCreator
 	httpDoer         HTTPDoer
 
-	qs    map[string]*Queue
-	qsMux sync.Mutex
+	queues      map[string]*Queue
+	queuesMutex sync.Mutex
 
 	options serverOptions
 }
@@ -42,7 +42,7 @@ func NewServer(oidcTokenCreator OIDCTokenCreator, httpDoer HTTPDoer, resetOnPurg
 	return &Server{
 		oidcTokenCreator: oidcTokenCreator,
 		httpDoer:         httpDoer,
-		qs:               make(map[string]*Queue),
+		queues:           make(map[string]*Queue),
 		options: serverOptions{
 			resetOnPurge: resetOnPurge,
 		},
@@ -50,20 +50,16 @@ func NewServer(oidcTokenCreator OIDCTokenCreator, httpDoer HTTPDoer, resetOnPurg
 }
 
 func (s *Server) setQueue(queueName string, queue *Queue) {
-	s.qsMux.Lock()
-	defer s.qsMux.Unlock()
-	s.qs[queueName] = queue
+	s.queuesMutex.Lock()
+	defer s.queuesMutex.Unlock()
+	s.queues[queueName] = queue
 }
 
 func (s *Server) fetchQueue(queueName string) (*Queue, bool) {
-	s.qsMux.Lock()
-	defer s.qsMux.Unlock()
-	queue, ok := s.qs[queueName]
+	s.queuesMutex.Lock()
+	defer s.queuesMutex.Unlock()
+	queue, ok := s.queues[queueName]
 	return queue, ok
-}
-
-func (s *Server) removeQueue(queueName string) {
-	s.setQueue(queueName, nil)
 }
 
 func (s *Server) fetchTask(taskName string) (*Task, bool) {
@@ -81,10 +77,10 @@ func (s *Server) ListQueues(ctx context.Context, in *taskspb.ListQueuesRequest) 
 
 	var queueStates []*taskspb.Queue
 
-	s.qsMux.Lock()
-	defer s.qsMux.Unlock()
+	s.queuesMutex.Lock()
+	defer s.queuesMutex.Unlock()
 
-	for _, queue := range s.qs {
+	for _, queue := range s.queues {
 		if queue != nil {
 			queueStates = append(queueStates, queue.state)
 		}
@@ -132,7 +128,6 @@ func (s *Server) CreateQueue(ctx context.Context, in *taskspb.CreateQueueRequest
 
 	queue = NewQueue(
 		s,
-		name,
 		queueState,
 	)
 	s.setQueue(name, queue)
@@ -149,7 +144,11 @@ func (s *Server) UpdateQueue(ctx context.Context, in *taskspb.UpdateQueueRequest
 
 // DeleteQueue removes an existing queue.
 func (s *Server) DeleteQueue(ctx context.Context, in *taskspb.DeleteQueueRequest) (*emptypb.Empty, error) {
-	queue, ok := s.fetchQueue(in.GetName())
+	// Lock across whole method as we are reading and removing from the queue map
+	s.queuesMutex.Lock()
+	defer s.queuesMutex.Unlock()
+
+	queue, ok := s.queues[in.GetName()]
 
 	// Cloud responds with same error for recently deleted queue
 	if !ok || queue == nil {
@@ -158,7 +157,7 @@ func (s *Server) DeleteQueue(ctx context.Context, in *taskspb.DeleteQueueRequest
 
 	queue.Delete()
 
-	s.removeQueue(in.GetName())
+	s.queues[in.GetName()] = nil
 
 	return &emptypb.Empty{}, nil
 }
@@ -169,7 +168,7 @@ func (s *Server) PurgeQueue(ctx context.Context, in *taskspb.PurgeQueueRequest) 
 
 	if s.options.resetOnPurge {
 		// Use the development environment behaviour - synchronously purge the queue and release all task names
-		queue.HardReset(s)
+		queue.HardReset()
 	} else {
 		// Mirror production behaviour - spin off an asynchronous purge operation and return
 		queue.Purge()
@@ -221,10 +220,10 @@ func (s *Server) ListTasks(ctx context.Context, in *taskspb.ListTasksRequest) (*
 
 	var taskStates []*taskspb.Task
 
-	queue.tsMux.Lock()
-	defer queue.tsMux.Unlock()
+	queue.tasksMutex.Lock()
+	defer queue.tasksMutex.Unlock()
 
-	for _, task := range queue.ts {
+	for _, task := range queue.tasks {
 		if task != nil {
 			taskStates = append(taskStates, task.state)
 		}
@@ -250,7 +249,6 @@ func (s *Server) GetTask(ctx context.Context, in *taskspb.GetTaskRequest) (*task
 
 // CreateTask creates a new task
 func (s *Server) CreateTask(ctx context.Context, in *taskspb.CreateTaskRequest) (*taskspb.Task, error) {
-
 	queueName := in.GetParent()
 	queue, ok := s.fetchQueue(queueName)
 	if !ok {
@@ -284,6 +282,7 @@ func (s *Server) CreateTask(ctx context.Context, in *taskspb.CreateTaskRequest) 
 }
 
 // DeleteTask removes an existing task
+// TODO: BUG - when task has run out of attempts it can't be deleted
 func (s *Server) DeleteTask(ctx context.Context, in *taskspb.DeleteTaskRequest) (*emptypb.Empty, error) {
 	task, ok := s.fetchTask(in.GetName())
 	if !ok {
@@ -293,8 +292,8 @@ func (s *Server) DeleteTask(ctx context.Context, in *taskspb.DeleteTaskRequest) 
 		return nil, status.Errorf(codes.NotFound, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	}
 
-	// The removal of the task from the server struct is handled in the queue callback
-	task.Delete(true)
+	// The removal of the task from the queue struct is handled in a callback to the queue
+	task.Delete()
 
 	return &emptypb.Empty{}, nil
 }
@@ -313,4 +312,17 @@ func (s *Server) RunTask(ctx context.Context, in *taskspb.RunTaskRequest) (*task
 	taskState := task.Run()
 
 	return taskState, nil
+}
+
+func (s *Server) Stop() {
+	s.queuesMutex.Lock()
+	defer s.queuesMutex.Unlock()
+
+	for queueName, queue := range s.queues {
+		if queue != nil {
+			queue.Delete()
+		}
+
+		delete(s.queues, queueName)
+	}
 }

@@ -14,11 +14,11 @@ import (
 type Queue struct {
 	server *Server
 
-	name  string
-	state *taskspb.Queue
+	state      *taskspb.Queue
+	stateMutex sync.Mutex
 
-	ts    map[string]*Task
-	tsMux sync.Mutex
+	tasks      map[string]*Task
+	tasksMutex sync.Mutex
 
 	fire chan *Task
 	work chan *Task
@@ -27,30 +27,29 @@ type Queue struct {
 
 	maxDispatchesPerSecond float64
 
-	cancelTokenGenerator chan bool
-	cancelDispatcher     chan bool
-	cancelWorkers        chan bool
+	pause  chan bool
+	resume chan bool
+	cancel chan bool
 
-	cancelled bool
-	paused    bool
+	cancelWait sync.WaitGroup
 }
 
 // NewQueue creates a new task queue
-func NewQueue(server *Server, name string, state *taskspb.Queue) *Queue {
+func NewQueue(server *Server, state *taskspb.Queue) *Queue {
 	queue := &Queue{
-		server:               server,
-		name:                 name,
-		state:                state,
-		fire:                 make(chan *Task),
-		work:                 make(chan *Task),
-		ts:                   make(map[string]*Task),
-		cancelTokenGenerator: make(chan bool, 1),
-		cancelDispatcher:     make(chan bool, 1),
-		cancelWorkers:        make(chan bool, 1),
+		server: server,
+		state:  state,
+		fire:   make(chan *Task),
+		work:   make(chan *Task),
+		tasks:  make(map[string]*Task),
+		pause:  make(chan bool, 1),
+		resume: make(chan bool, 1),
+		cancel: make(chan bool),
 	}
 
 	queue.setInitialQueueState()
 
+	// Need to update these here after the defaults are set
 	queue.maxDispatchesPerSecond = state.GetRateLimits().GetMaxDispatchesPerSecond()
 	queue.tokenBucket = make(chan bool, queue.state.GetRateLimits().GetMaxBurstSize())
 
@@ -67,20 +66,26 @@ func (q *Queue) stateCopy() *taskspb.Queue {
 }
 
 func (q *Queue) fetchTask(taskName string) (*Task, bool) {
-	q.tsMux.Lock()
-	defer q.tsMux.Unlock()
-	task, ok := q.ts[taskName]
+	q.tasksMutex.Lock()
+	defer q.tasksMutex.Unlock()
+	task, ok := q.tasks[taskName]
 	return task, ok
 }
 
 func (q *Queue) setTask(taskName string, task *Task) {
-	q.tsMux.Lock()
-	defer q.tsMux.Unlock()
-	q.ts[taskName] = task
+	q.tasksMutex.Lock()
+	defer q.tasksMutex.Unlock()
+	q.tasks[taskName] = task
 }
 
 func (q *Queue) removeTask(taskName string) {
-	q.setTask(taskName, nil)
+	q.tasksMutex.Lock()
+	defer q.tasksMutex.Unlock()
+	// Only set the task to nil if it's present. It might have already
+	// been removed by a `HardReset`.
+	if _, ok := q.tasks[taskName]; ok {
+		q.tasks[taskName] = nil
+	}
 }
 
 func (q *Queue) setInitialQueueState() {
@@ -120,14 +125,21 @@ func (q *Queue) setInitialQueueState() {
 }
 
 func (q *Queue) runWorkers() {
+	defer q.cancelWait.Done()
+
 	workerCount := int(q.state.GetRateLimits().GetMaxConcurrentDispatches())
-	log.Printf("Starting %d workers for queue %v...", workerCount, q.name)
+	log.Printf("Starting %d workers for queue %v...", workerCount, q.state.GetName())
+
+	q.cancelWait.Add(workerCount)
+
 	for i := 0; i < int(workerCount); i++ {
 		go q.runWorker(i)
 	}
 }
 
 func (q *Queue) runWorker(workerID int) {
+	defer q.cancelWait.Done()
+
 	for {
 		select {
 		case task := <-q.work:
@@ -135,15 +147,15 @@ func (q *Queue) runWorker(workerID int) {
 			if err != nil {
 				log.Printf("Error in worker %d: %v", workerID, err)
 			}
-		case <-q.cancelWorkers:
-			// Forward for next worker
-			q.cancelWorkers <- true
+		case <-q.cancel:
 			return
 		}
 	}
 }
 
 func (q *Queue) runTokenGenerator() {
+	defer q.cancelWait.Done()
+
 	period := time.Second / time.Duration(q.maxDispatchesPerSecond)
 	// Use Timer with Reset() in place of time.Ticker as the latter was causing high CPU usage in Docker
 	timer := time.NewTimer(period)
@@ -155,32 +167,41 @@ func (q *Queue) runTokenGenerator() {
 			case q.tokenBucket <- true:
 				// Added token
 				timer.Reset(period)
-			case <-q.cancelTokenGenerator:
+			case <-q.cancel:
+				timer.Stop()
 				return
 			}
-		case <-q.cancelTokenGenerator:
-			if !timer.Stop() {
-				<-timer.C
-			}
+		case <-q.cancel:
+			timer.Stop()
 			return
 		}
 	}
 }
 
 func (q *Queue) runDispatcher() {
+	defer q.cancelWait.Done()
+
 	for {
 		select {
 		// Consume a token
 		case <-q.tokenBucket:
 			select {
+			case paused := <-q.pause:
+				if paused {
+					select {
+					case <-q.cancel:
+						return
+					case <-q.resume:
+					}
+				}
 			// Wait for task
 			case task := <-q.fire:
 				// Pass on to workers
 				q.work <- task
-			case <-q.cancelDispatcher:
+			case <-q.cancel:
 				return
 			}
-		case <-q.cancelDispatcher:
+		case <-q.cancel:
 			return
 		}
 	}
@@ -192,6 +213,7 @@ func (q *Queue) Run() *taskspb.Queue {
 
 	queueState := q.stateCopy()
 
+	q.cancelWait.Add(3)
 	go q.runWorkers()
 	go q.runTokenGenerator()
 	go q.runDispatcher()
@@ -212,69 +234,63 @@ func (q *Queue) NewTask(newTaskState *taskspb.Task) (*Task, *taskspb.Task) {
 	return task, taskState
 }
 
-// Delete stops, purges and removes the queue
+// Delete stops and purges the queue
 func (q *Queue) Delete() {
-	if !q.cancelled {
-		q.cancelled = true
-		log.Println("Stopping queue")
-		q.cancelTokenGenerator <- true
-		q.cancelDispatcher <- true
-		q.cancelWorkers <- true
+	close(q.cancel)
 
-		q.Purge()
-	}
+	q.Purge()
+
+	// Wait for all workers to be finished
+	q.cancelWait.Wait()
 }
 
 // Purge purges all tasks from the queue
 func (q *Queue) Purge() {
 	go func() {
-		q.tsMux.Lock()
-		defer q.tsMux.Unlock()
+		q.tasksMutex.Lock()
+		defer q.tasksMutex.Unlock()
 
-		for _, task := range q.ts {
+		for _, task := range q.tasks {
 			if task != nil {
-				// Avoid task firing but still allow onTaskDone callbacks
-				task.Delete(true)
+				task.Delete()
 			}
 		}
 	}()
 }
 
 // Goes beyond `Purge` behaviour to synchronously delete all tasks and their name handles
-func (q *Queue) HardReset(s *Server) {
-	q.tsMux.Lock()
-	defer q.tsMux.Unlock()
+func (q *Queue) HardReset() {
+	q.tasksMutex.Lock()
+	defer q.tasksMutex.Unlock()
 
-	for taskName, task := range q.ts {
-		// Avoid task firing
+	for taskName, task := range q.tasks {
 		if task != nil {
-			// Avoid callback, we do map cleanup locally and synchronously
-			task.Delete(false)
+			task.Delete()
 		}
 
-		delete(q.ts, taskName)
+		delete(q.tasks, taskName)
 	}
 }
 
-// Pause pauses the queue
+// Pause pauses the queue, if not already paused
 func (q *Queue) Pause() {
-	if !q.paused {
-		q.paused = true
-		q.state.State = taskspb.Queue_PAUSED
+	q.stateMutex.Lock()
+	defer q.stateMutex.Unlock()
 
-		q.cancelDispatcher <- true
-		q.cancelWorkers <- true
+	if q.state.GetState() != taskspb.Queue_PAUSED {
+		q.state.State = taskspb.Queue_PAUSED
+		q.pause <- true
 	}
 }
 
-// Resume resumes a paused queue
+// Resume resumes a paused queue, if not already running
 func (q *Queue) Resume() {
-	if q.paused {
-		q.paused = false
-		q.state.State = taskspb.Queue_RUNNING
+	q.stateMutex.Lock()
+	defer q.stateMutex.Unlock()
 
-		go q.runDispatcher()
-		go q.runWorkers()
+	if q.state.GetState() != taskspb.Queue_RUNNING {
+		q.state.State = taskspb.Queue_RUNNING
+		q.resume <- true
 	}
 }
 

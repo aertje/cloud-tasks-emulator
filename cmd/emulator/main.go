@@ -32,7 +32,7 @@ func main() {
 	flag.Parse()
 
 	osSignals := make(chan os.Signal, 1)
-	signal.Notify(osSignals)
+	signal.Notify(osSignals, os.Interrupt, os.Kill)
 	defer signal.Stop(osSignals)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,6 +104,7 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 
 	defer func() {
 		log.Printf("Shutting down emulator server...")
+		emulatorServer.Stop()
 		grpcServer.Stop() // Forceful close
 	}()
 

@@ -28,8 +28,6 @@ type Task struct {
 	cancel chan bool
 
 	stateMutex sync.Mutex
-
-	cancelOnce sync.Once
 }
 
 // NewTask creates a new task for the specified queue. It updates the supplied queue
@@ -38,10 +36,10 @@ func NewTask(queue *Queue, taskState *taskspb.Task) *Task {
 	task := &Task{
 		queue:  queue,
 		state:  taskState,
-		cancel: make(chan bool, 1), // Buffered in case cancel comes when task is not scheduled
+		cancel: make(chan bool),
 	}
 
-	task.setInitialTaskState(queue.name)
+	task.setInitialTaskState(queue.state.GetName())
 
 	return task
 }
@@ -145,7 +143,6 @@ func (t *Task) setInitialTaskState(queueName string) {
 }
 
 func (t *Task) updateStateForReschedule() {
-	// The lock is to ensure a consistent state when updating
 	t.stateMutex.Lock()
 	defer t.stateMutex.Unlock()
 
@@ -232,15 +229,16 @@ func (t *Task) updateStateAfterDispatch(statusCode int) *taskspb.Task {
 
 func (t *Task) reschedule(retry bool, statusCode int) {
 	if statusCode >= 200 && statusCode <= 299 {
-		log.Println("Task done")
+		log.Printf("Task %v done with status code %d", t.state.GetName(), statusCode)
 		t.queue.taskDone(t)
 	} else {
-		log.Println("Task exec error with status " + strconv.Itoa(statusCode))
+		log.Printf("Task %v error with status code %d", t.state.GetName(), statusCode)
 		if retry {
 			retryConfig := t.queue.state.GetRetryConfig()
 
 			if t.state.DispatchCount >= retryConfig.GetMaxAttempts() {
-				log.Println("Ran out of attempts")
+				// TODO: Check if prod cloud tasks removes the task or not
+				log.Printf("Task %v ran out of attempts (%d)", t.state.GetName(), retryConfig.GetMaxAttempts())
 			} else {
 				t.updateStateForReschedule()
 				t.Schedule()
@@ -362,10 +360,8 @@ func (t *Task) Run() *taskspb.Task {
 
 // Delete cancels the task if it is queued for execution.
 // This method is called directly by request.
-func (t *Task) Delete(doCallback bool) {
-	t.cancelOnce.Do(func() {
-		t.cancel <- doCallback
-	})
+func (t *Task) Delete() {
+	close(t.cancel)
 }
 
 // Schedule schedules the task for execution.
@@ -380,10 +376,8 @@ func (t *Task) Schedule() {
 		case <-time.After(fromNow):
 			t.queue.fire <- t
 			return
-		case doCallback := <-t.cancel:
-			if doCallback {
-				t.queue.taskDone(t)
-			}
+		case <-t.cancel:
+			t.queue.taskDone(t)
 			return
 		}
 	}()

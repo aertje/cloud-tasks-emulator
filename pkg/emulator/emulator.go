@@ -74,6 +74,7 @@ func (s *Server) fetchTask(taskName string) (*Task, bool) {
 // ListQueues lists the existing queues
 func (s *Server) ListQueues(ctx context.Context, in *taskspb.ListQueuesRequest) (*taskspb.ListQueuesResponse, error) {
 	// TODO: Implement pageing
+	// TODO: Split per region: parent is a required field, should error if not specified.
 
 	var queueStates []*taskspb.Queue
 
@@ -93,6 +94,7 @@ func (s *Server) ListQueues(ctx context.Context, in *taskspb.ListQueuesRequest) 
 
 // GetQueue returns the requested queue
 func (s *Server) GetQueue(ctx context.Context, in *taskspb.GetQueueRequest) (*taskspb.Queue, error) {
+	// TODO: Name is required, should error if not defined
 	queue, ok := s.fetchQueue(in.GetName())
 
 	// Cloud responds with the same error message whether the queue was recently deleted or never existed

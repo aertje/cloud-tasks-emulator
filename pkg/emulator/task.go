@@ -207,7 +207,7 @@ func (t *Task) updateStateForDispatch() *taskspb.Task {
 
 func (t *Task) updateStateAfterDispatch(statusCode int) *taskspb.Task {
 	t.stateMutex.Lock()
-	t.stateMutex.Unlock()
+	defer t.stateMutex.Unlock()
 
 	rpcCode := toRPCStatusCode(statusCode)
 	rpcCodeName := toCodeName(rpcCode)

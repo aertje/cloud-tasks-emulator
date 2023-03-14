@@ -1,0 +1,30 @@
+name: CI/CD
+on:
+  push:
+  pull_request:
+env:
+  IMAGE_NAME: cloud-tasks-emulator
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.20
+        id: go
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Get dependencies
+        run: go get -v -t -d ./...
+      - name: Build
+        run: go build -v .
+      - name: Test
+        run: go test -v .

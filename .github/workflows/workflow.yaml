@@ -2,6 +2,8 @@ name: CI/CD
 on:
   push:
   pull_request:
+env:
+  IMAGE_NAME: cloud-tasks-emulator
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -22,7 +24,5 @@ jobs:
             ${{ runner.os }}-go-
       - name: Get dependencies
         run: go get -v -t -d ./...
-      - name: Build
-        run: go build -v .
       - name: Test
-        run: go test -v .
+        run: go test -v ./...

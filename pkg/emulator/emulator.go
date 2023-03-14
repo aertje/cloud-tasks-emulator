@@ -112,7 +112,7 @@ func (s *Server) CreateQueue(ctx context.Context, in *taskspb.CreateQueueRequest
 	name := queueState.GetName()
 	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", name)
 	if !nameMatched {
-		return nil, status.Errorf(codes.InvalidArgument, "Queue name must be formatted: \"projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>\"")
+		return nil, status.Errorf(codes.InvalidArgument, `Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>"`)
 	}
 	parent := in.GetParent()
 	parentMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+", parent)

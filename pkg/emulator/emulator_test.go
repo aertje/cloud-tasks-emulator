@@ -2,8 +2,10 @@ package emulator_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/aertje/cloud-tasks-emulator/pkg/emulator"
@@ -23,7 +25,9 @@ type FakeHTTPDoer struct {
 }
 
 func (d FakeHTTPDoer) Do(req *http.Request) (resp *http.Response, err error) {
-	return nil, nil
+	return &http.Response{
+		Body: io.NopCloser(nil),
+	}, nil
 }
 
 var defaultQueue = &cloudtaskspb.Queue{
@@ -99,6 +103,160 @@ func TestGetQueueNotFound(t *testing.T) {
 		"rpc error: code = NotFound desc = Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
 		err.Error(),
 	)
+}
+
+func TestCreateQueue(t *testing.T) {
+	server := createServer()
+
+	response, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, defaultQueue.String(), response.String())
+}
+
+func TestCreateQueueAlreadyExists(t *testing.T) {
+	server := createServer()
+
+	_, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+	assert.Error(t, err)
+	assert.Equal(t, "rpc error: code = AlreadyExists desc = Queue already exists", err.Error())
+}
+
+func TestCreateQueueFormatError(t *testing.T) {
+	server := createServer()
+
+	for _, tt := range []struct {
+		Name          string
+		Parent        string
+		QueueName     string
+		ExpectedError string
+	}{
+		{
+			Name:          "InvalidParent",
+			Parent:        "not/right",
+			QueueName:     "projects/my-project/locations/australia-southeast1/queues/my-queue",
+			ExpectedError: `rpc error: code = InvalidArgument desc = Invalid resource field value in the request.`,
+		},
+		{
+			Name:          "InvalidName",
+			Parent:        "projects/my-project/locations/australia-southeast1",
+			QueueName:     "not/right",
+			ExpectedError: `rpc error: code = InvalidArgument desc = Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>"`,
+		},
+	} {
+		t.Run(tt.Name, func(t *testing.T) {
+			_, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+				Parent: tt.Parent,
+				Queue: &cloudtaskspb.Queue{
+					Name: tt.QueueName,
+				},
+			})
+			assert.Error(t, err)
+			assert.Equal(t, tt.ExpectedError, err.Error())
+		})
+	}
+}
+
+func TestDeleteQueue(t *testing.T) {
+	server := createServer()
+
+	_, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = server.DeleteQueue(context.Background(), &cloudtaskspb.DeleteQueueRequest{
+		Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+	})
+	assert.NoError(t, err)
+}
+
+func TestDeleteQueueNeverExisted(t *testing.T) {
+	server := createServer()
+
+	_, err := server.DeleteQueue(context.Background(), &cloudtaskspb.DeleteQueueRequest{
+		Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+	})
+	assert.Equal(t, "rpc error: code = NotFound desc = Requested entity was not found.", err.Error())
+}
+
+func TestDeleteQueueAlreadyDeleted(t *testing.T) {
+	server := createServer()
+
+	_, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = server.DeleteQueue(context.Background(), &cloudtaskspb.DeleteQueueRequest{
+		Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+	})
+	require.NoError(t, err)
+
+	_, err = server.DeleteQueue(context.Background(), &cloudtaskspb.DeleteQueueRequest{
+		Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+	})
+	assert.Equal(t, "rpc error: code = NotFound desc = Requested entity was not found.", err.Error())
+}
+
+func TestPurgeQueue(t *testing.T) {
+	server := createServer()
+
+	_, err := server.CreateQueue(context.Background(), &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/my-project/locations/australia-southeast1",
+		Queue: &cloudtaskspb.Queue{
+			Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = server.CreateTask(context.Background(), &cloudtaskspb.CreateTaskRequest{
+		Parent: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response, err := server.PurgeQueue(context.Background(), &cloudtaskspb.PurgeQueueRequest{
+		Name: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, defaultQueue.String(), response.String())
+
+	assert.Eventually(t, func() bool {
+		tasks, err := server.ListTasks(context.Background(), &cloudtaskspb.ListTasksRequest{
+			Parent: "projects/my-project/locations/australia-southeast1/queues/my-queue",
+		})
+
+		return err == nil && len(tasks.Tasks) == 0
+	}, 10*time.Millisecond, time.Millisecond)
 }
 
 func createServer() *emulator.Server {

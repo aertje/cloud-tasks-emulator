@@ -200,6 +200,7 @@ createdTaskResp, _ := client.CreateTask(context.Background(), &createTaskRequest
 The following example can be used for PHP.
 ```php
 use Grpc\ChannelCredentials;
+use Google\Cloud\Core\InsecureCredentialsWrapper;
 use Google\Cloud\Tasks\V2\Task;
 use Google\Cloud\Tasks\V2\HttpMethod;
 use Google\Cloud\Tasks\V2\HttpRequest;
@@ -208,6 +209,7 @@ use Google\Cloud\Tasks\V2\CloudTasksClient;
 $client = new CloudTasksClient([
             'apiEndpoint' => 'localhost:8123',
             'transport' => 'grpc',
+            'credentials' => new InsecureCredentialsWrapper(),
             'transportConfig' => [
                 'grpc' => [
                     'stubOpts' => [

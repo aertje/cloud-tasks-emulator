@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/aertje/cloud-tasks-emulator/pkg/emulator"
+	"github.com/aertje/cloud-tasks-emulator/pkg/cloudtasks/emulator"
+	"github.com/aertje/cloud-tasks-emulator/pkg/cloudtasks/server"
 	"github.com/aertje/cloud-tasks-emulator/pkg/oidc"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -32,7 +32,7 @@ func main() {
 	flag.Parse()
 
 	osSignals := make(chan os.Signal, 1)
-	signal.Notify(osSignals, os.Interrupt, os.Kill)
+	signal.Notify(osSignals)
 	defer signal.Stop(osSignals)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,12 +75,13 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 
 	httpClient := &http.Client{}
 	oidcTokenCreator := oidc.NewOIDCTokenCreator()
-	emulatorServer := emulator.NewServer(oidcTokenCreator, httpClient, resetOnPurge)
+	em := emulator.NewEmulator(oidcTokenCreator, httpClient, resetOnPurge)
+	handler := server.NewHandler(em)
 
 	grpcServer := grpc.NewServer()
-	taskspb.RegisterCloudTasksServer(grpcServer, emulatorServer)
+	taskspb.RegisterCloudTasksServer(grpcServer, &handler)
 
-	err := createQueues(ctx, emulatorServer, initialQueues)
+	err := createQueues(ctx, em, initialQueues)
 	if err != nil {
 		return fmt.Errorf("unable to create queues: %w", err)
 	}
@@ -104,7 +105,7 @@ func startEmulatorServer(ctx context.Context, address string, resetOnPurge bool,
 
 	defer func() {
 		log.Printf("Shutting down emulator server...")
-		emulatorServer.Stop()
+		// em.Stop()
 		grpcServer.Stop() // Forceful close
 	}()
 
@@ -155,24 +156,9 @@ func startOIDCServer(ctx context.Context, address, issuer string) error {
 }
 
 // Creates initial queues on the emulator
-func createQueues(ctx context.Context, emulatorServer *emulator.Server, queueNames []string) error {
-	if len(queueNames) == 0 {
-		return nil
-	}
-	log.Printf("Creating %d queue(s)...", len(queueNames))
-
-	reParentName := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
-
+func createQueues(ctx context.Context, em *emulator.Emulator, queueNames []string) error {
 	for _, qn := range queueNames {
-		parent := reParentName.ReplaceAllString(qn, "")
-
-		queue := &taskspb.Queue{Name: qn}
-		req := &taskspb.CreateQueueRequest{
-			Parent: parent,
-			Queue:  queue,
-		}
-
-		_, err := emulatorServer.CreateQueue(ctx, req)
+		_, err := em.CreateQueue(qn, emulator.NewDefaultQueueConfig())
 
 		if err != nil {
 			return err

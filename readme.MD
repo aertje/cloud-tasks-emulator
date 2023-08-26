@@ -35,6 +35,18 @@ go run ./ -host localhost \
   -queue projects/dev/locations/here/queues/anotherq
 ```
 
+Alternatively, you can define environment variables and then run the shell script `./emulator_from_env.sh` to start the emulator. The following environment variables are supported:
+
+ ```sh
+ export PORT=8124
+ export HOST=localhost
+ export HARD_RESET_ON_PURGE=true
+ export INITIAL_QUEUES=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
+ export OPENID_ISSUER=http://localhost:8080
+
+./emulator_from_env.sh
+ ```
+
 Once running, you connect to it using the standard google cloud tasks GRPC libraries.
 
 ### Docker
@@ -64,7 +76,7 @@ gcloud-tasks-emulator:
 
 
 ## App Engine
-If you want to use it to make calls to a local [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server) instance, you'll need to set the appropriate environment variable, e.g.:  
+If you want to use it to make calls to a local [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server) instance, you'll need to set the appropriate environment variable, e.g.:
 ```sh
 export APP_ENGINE_EMULATOR_HOST=http://localhost:8080
 ```
@@ -216,7 +228,7 @@ $client = new CloudTasksClient([
                 ]
             ]
         ]);
-	
+
 $http = new HttpRequest();
 $http->setHttpMethod(HttpMethod::GET)->setUrl('https://google.com');
 

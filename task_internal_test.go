@@ -69,3 +69,40 @@ func TestSetInitialTaskStateAppEngineEmulatorTargeted(t *testing.T) {
 
 	assert.Equal(t, "http://2.v1.worker.nginx", taskState.GetAppEngineHttpRequest().GetAppEngineRouting().GetHost())
 }
+
+func TestSetInitialTaskStateAppEngineDefaultHeaders(t *testing.T) {
+	taskState := &taskspb.Task{
+		MessageType: &taskspb.Task_AppEngineHttpRequest{
+			AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+				Body: []byte{},
+			},
+		},
+	}
+	setInitialTaskState(taskState, "projects/bluebook/locations/us-east1/queues/agentq")
+
+	headers := taskState.GetAppEngineHttpRequest().GetHeaders()
+	assert.Len(t, headers, 2)
+	assert.Equal(t, "AppEngine-Google; (+http://code.google.com/appengine)", headers["User-Agent"])
+	assert.Equal(t, "application/octet-stream", headers["Content-Type"])
+}
+
+func TestSetInitialTaskStateAppEngineHeaderOverrides(t *testing.T) {
+	inputHeaders := make(map[string]string)
+	inputHeaders["content-type"] = "application/json"
+
+	taskState := &taskspb.Task{
+		MessageType: &taskspb.Task_AppEngineHttpRequest{
+			AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+				Headers: inputHeaders,
+				Body:    []byte{},
+			},
+		},
+	}
+	setInitialTaskState(taskState, "projects/bluebook/locations/us-east1/queues/agentq")
+
+	headers := taskState.GetAppEngineHttpRequest().GetHeaders()
+
+	assert.Len(t, headers, 2)
+	assert.Equal(t, "AppEngine-Google; (+http://code.google.com/appengine)", headers["User-Agent"])
+	assert.Equal(t, "application/json", headers["Content-Type"])
+}

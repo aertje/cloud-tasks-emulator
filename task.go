@@ -106,6 +106,8 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 		}
 		if httpRequest.GetHeaders() == nil {
 			httpRequest.Headers = make(map[string]string)
+		} else {
+			httpRequest.Headers = titelize(httpRequest.GetHeaders())
 		}
 		// Override
 		httpRequest.Headers["User-Agent"] = "Google-Cloud-Tasks"
@@ -119,6 +121,8 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 		}
 		if appEngineHTTPRequest.GetHeaders() == nil {
 			appEngineHTTPRequest.Headers = make(map[string]string)
+		} else {
+			appEngineHTTPRequest.Headers = titelize(appEngineHTTPRequest.GetHeaders())
 		}
 
 		appEngineHTTPRequest.Headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"

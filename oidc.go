@@ -5,10 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -32,7 +32,7 @@ type OpenIDConnectClaims struct {
 
 func init() {
 	var err error
-	openIdPrivateKeyStr2, err := os.ReadFile("oidc.key")
+	openIdPrivateKeyStr2, err := ioutil.ReadFile("oidc.key")
 	if err != nil {
 		panic(err)
 	}
@@ -126,7 +126,7 @@ func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 
 func openIDCertsHttpHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
-	openIdcert, err := os.ReadFile("oidc.cert")
+	openIdcert, err := ioutil.ReadFile("oidc.cert")
 	if err != nil {
 		panic(err)
 	}

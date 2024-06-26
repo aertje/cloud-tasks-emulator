@@ -15,6 +15,8 @@ LABEL org.opencontainers.image.source=https://github.com/aertje/cloud-tasks-emul
 
 WORKDIR /
 
+COPY --from=builder /app/oidc.key oidc.key
+COPY --from=builder /app/oidc.cert oidc.cert
 COPY --from=builder /app/emulator .
 COPY --from=builder /app/emulator_from_env.sh .
 RUN chmod +x emulator_from_env.sh

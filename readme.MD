@@ -67,7 +67,15 @@ If you are planning on using docker-compose the above configuration translates t
 ```yml
 gcloud-tasks-emulator:
   image: ghcr.io/aertje/cloud-tasks-emulator:latest
-  command: -host 0.0.0.0 -port 8123 -queue "projects/dev/locations/here/queues/anotherq"
+  command: >
+      -host 0.0.0.0 
+      -port 8123 
+      -queue projects/my-project/locations/us-west1/queues/queue1 
+      -queue projects/my-project/locations/us-west1/queues/queue2
+      -rate-limits-max-dispatches-per-second 50 
+      -rate-limits-max-burst-size 50 
+      -rate-limits-max-concurrent-dispatches 101 
+      -retry-config-max-attempts 1 
   ports:
     - "${TASKS_PORT:-8123}:8123"
   environment:
@@ -269,3 +277,11 @@ await client.createTask({
   task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
 });
 ```
+
+## Publishing the image
+docker build -t cloud-tasks-emulator .
+docker tag cloud-tasks-emulator llay/cloud-tasks-emulator:1.3.0
+docker login
+docker push llay/cloud-tasks-emulator:1.3.0
+
+check https://hub.docker.com/r/llay/cloud-tasks-emulator

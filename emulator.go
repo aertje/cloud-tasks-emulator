@@ -342,13 +342,31 @@ func (i *arrayFlags) Set(value string) error {
 }
 
 // Creates an initial queue on the emulator
-func createInitialQueue(emulatorServer *Server, name string) {
+func createInitialQueue(
+		emulatorServer *Server, 
+		name string, 
+		rateLimitsMaxDispatchesPerSecond *float64,
+		rateLimitsMaxBurstSize int32,
+		rateLimitsMaxConcurrentDispatches int32,
+		retryConfigMaxAttempts int32,
+	) {
 	print(fmt.Sprintf("Creating initial queue %s\n", name))
-
+	
 	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
 	parentName := r.ReplaceAllString(name, "")
+	
+	queue := &tasks.Queue{
+		Name: name,
+		RateLimits: &tasks.RateLimits{
+			MaxDispatchesPerSecond: *rateLimitsMaxDispatchesPerSecond,
+			MaxBurstSize:           rateLimitsMaxBurstSize,
+			MaxConcurrentDispatches: rateLimitsMaxConcurrentDispatches,
+		},
+		RetryConfig: &tasks.RetryConfig{
+			MaxAttempts: retryConfigMaxAttempts,
+		},
+	}
 
-	queue := &tasks.Queue{Name: name}
 	req := &tasks.CreateQueueRequest{
 		Parent: parentName,
 		Queue:  queue,
@@ -369,6 +387,12 @@ func main() {
 	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
 
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
+
+	// Queue config options: https://pkg.go.dev/cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb#Queue
+	rateLimitsMaxDispatchesPerSecond := flag.Float64("rate-limits-max-dispatches-per-second", 50, "The maximum rate of dispatches per second. Source: https://pkg.go.dev/cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb#Queue")
+	rateLimitsMaxBurstSize := flag.Int("rate-limits-max-burst-size", 50, "The maximum burst size. Source: https://pkg.go.dev/cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb#Queue")
+	rateLimitsMaxConcurrentDispatches := flag.Int("rate-limits-max-concurrent-dispatches", 100, "The maximum number of concurrent dispatches. Source: https://pkg.go.dev/cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb#Queue")
+	retryConfigMaxAttempts := flag.Int("retry-config-max-attempts", 3, "The maximum number of attempts. Source: https://pkg.go.dev/cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb#Queue")
 
 	flag.Parse()
 
@@ -393,7 +417,14 @@ func main() {
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {
-		createInitialQueue(emulatorServer, initialQueues[i])
+		createInitialQueue(
+			emulatorServer, 
+			initialQueues[i],
+			rateLimitsMaxDispatchesPerSecond,
+			int32(*rateLimitsMaxBurstSize),
+			int32(*rateLimitsMaxConcurrentDispatches),
+			int32(*retryConfigMaxAttempts),
+		)
 	}
 
 	grpcServer.Serve(lis)

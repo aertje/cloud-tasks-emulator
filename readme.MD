@@ -252,12 +252,12 @@ $response = $client->createTask($queuePath, $task);
 The following example can be used for JavaScript.
 ```js
 import { CloudTasksClient } from '@google-cloud/tasks';
-import { credentials } from '@grpc/grpc-js';
+import { ChannelCredentials } from 'google-gax';
 
 const client = new CloudTasksClient({
   port: 8123,
   servicePath: 'localhost',
-  sslCreds: credentials.createInsecure(),
+  sslCreds: ChannelCredentials.createInsecure(),
 });
 
 const parent = 'projects/my-sandbox/locations/us-central1';

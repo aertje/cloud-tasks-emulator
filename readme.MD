@@ -245,7 +245,7 @@ $task = new Task();
 $task->setHttpRequest($http);
 $queuePath = $client->queueName('dev', 'here', 'tasks');
 
-$response = $this->client->createTask($queuePath, $task);
+$response = $client->createTask($queuePath, $task);
 ```
 
 ### JavaScript example

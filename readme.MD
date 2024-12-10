@@ -113,6 +113,8 @@ With this flag:
   will be available at `http://localhost:8980/.well-known/openid-configuration`
 * The emulator's public key(s) (in JWK format) will be available at
   `http://localhost:8980/jwks`
+* The emulator's public key(s) (in PEM format) will be available at
+  `http://localhost:8980/certs`
 
 The `-openid-issuer` URL can be any `http://hostname:port` value that your
 application code can route to. The endpoint listens on `0.0.0.0` for easy
@@ -120,6 +122,10 @@ use in docker / k8s environments.
 
 You can, of course, export the content of the `/jwks` url if you prefer to
 hardcode the public keys in your application.
+
+Optionally, if you wish, you can use your own private key and self-signed certificate to
+sign the tokens. Here's how you can do it: [`readme-owncert.md`](./readme-owncert.md).
+
 
 ## Flushing task state
 
@@ -268,4 +274,58 @@ await client.createTask({
   parent: queueName,
   task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
 });
+
+// create task with OIDC token
+const payload = { foo: "bar" };
+const serviceAccountEmail = "account@project_id.iam.gserviceaccount.com"
+await client.createTask({
+    parent: queueName,
+    task: {
+    httpRequest: {
+        url: "https://myapp.example.com/worker",
+        httpMethod: "POST",
+        body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+        headers: {"Content-Type": "application/json"},
+        oidcToken: {
+            serviceAccountEmail,
+        },
+    },
+    },
+});
 ```
+
+Receiving HTTP calls from the emulator and verifying OIDC tokens.
+```js
+// at this point you started the emulator with the -openid-issuer flag
+// and created a http task with oidc token
+// in this example we are assuming that the issuer is http://localhost:8980
+import { OAuth2Client } from "google-auth-library";
+
+const client = new OAuth2Client({
+  endpoints: {
+    // PEM certs for node.js environment
+    oauth2FederatedSignonPemCertsUrl: "http://localhost:8980/certs",
+
+    // JWK certs for browser environment
+    oauth2FederatedSignonJwkCertsUrl: "http://localhost:8980/jwks",
+  },
+  issuers: ["http://localhost:8980"],
+});
+
+// function using node.js
+// to handling the http request 
+// to https://myapp.example.com/worker
+// the is webhook used in task creation
+// that is protected by oidc token
+function httpRequestHandler() {
+  
+  // data from Authorization header
+  const idToken = "..."; 
+
+  const ticket = await client.verifyIdToken({
+    idToken,
+    audience: "https://myapp.example.com/worker",
+  });
+  const payload = ticket.getPayload();
+  console.info("Payload", payload);
+}

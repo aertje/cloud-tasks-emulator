@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -111,6 +116,80 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
     `,
 		resp.Body.String(),
 	)
+}
+
+func TestOpenIdCertsHttpHandler(t *testing.T) {
+	OpenIDConfig.KeyID = "any-key-id"
+
+	resp := performRequest("GET", "/certs", openIDCertsHttpHandler)
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	var err error
+
+	expires, err := time.Parse(http.TimeFormat, resp.Result().Header.Get("Expires"))
+	require.NoError(t, err)
+	assertRoughTimestamp(t, 24*time.Hour, expires.Unix(), "Expect future expires")
+
+	openIdcert, err := os.ReadFile("oidc.cert")
+	require.NoError(t, err)
+
+	certs := map[string]interface{}{
+		OpenIDConfig.KeyID: string(openIdcert),
+	}
+
+	certsJSON, err := json.Marshal(certs)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(certsJSON), resp.Body.String())
+}
+
+func TestValidateOIDCTokenWithCertPem(t *testing.T) {
+	var err error
+
+	tokenStr := createOIDCToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
+
+	openIdcert, err := os.ReadFile("oidc.cert")
+	require.NoError(t, err)
+
+	parsePEMCert := func(pemCert []byte) (*rsa.PublicKey, error) {
+		block, _ := pem.Decode(pemCert)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("failed to decode PEM block containing certificate")
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate: %v", err)
+		}
+
+		rsaPub, ok := cert.PublicKey.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("not an RSA public key")
+		}
+
+		return rsaPub, nil
+	}
+
+	// Load the public key
+	pubKey, err := parsePEMCert(openIdcert)
+	require.NoError(t, err)
+
+	// Parse the token
+	parser := new(jwt.Parser)
+	_, _, err = parser.ParseUnverified(tokenStr, &jwt.MapClaims{})
+	require.NoError(t, err)
+
+	// Verify the token
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		// Validate the algorithm - this is optional but recommended
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return pubKey, nil
+	})
+	require.NoError(t, err)
+
+	assert.True(t, token.Valid, "Token is valid")
 }
 
 func TestConfigureOpenIdIssuerRejectsInvalidUrl(t *testing.T) {

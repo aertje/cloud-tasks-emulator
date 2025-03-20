@@ -39,11 +39,13 @@ type Queue struct {
 
 	paused bool
 
+	insecureMode bool
+
 	onTaskDone func(task *Task)
 }
 
 // NewQueue creates a new task queue
-func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Queue, *tasks.Queue) {
+func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task), insecureMode bool) (*Queue, *tasks.Queue) {
 	setInitialQueueState(state)
 
 	queue := &Queue{
@@ -58,6 +60,7 @@ func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Qu
 		cancelTokenGenerator:   make(chan bool, 1),
 		cancelDispatcher:       make(chan bool, 1),
 		cancelWorkers:          make(chan bool, 1),
+		insecureMode:           insecureMode,
 	}
 	// Fill the token bucket
 	for i := 0; i < int(state.GetRateLimits().GetMaxBurstSize()); i++ {

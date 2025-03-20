@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"math/rand"
@@ -285,8 +286,16 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	}
 }
 
-func dispatch(retry bool, taskState *tasks.Task) int {
-	client := &http.Client{}
+func dispatch(retry bool, insecure bool, taskState *tasks.Task) int {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecure,
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
 	client.Timeout, _ = ptypes.Duration(taskState.GetDispatchDeadline())
 
 	var req *http.Request
@@ -360,7 +369,7 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 }
 
 func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, task.state)
+	respCode := dispatch(retry, task.queue.insecureMode, task.state)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

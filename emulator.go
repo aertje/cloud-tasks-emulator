@@ -27,12 +27,14 @@ func NewServer() *Server {
 		ts: make(map[string]*Task),
 		Options: ServerOptions{
 			HardResetOnPurgeQueue: false,
+			InsecureMode:          false,
 		},
 	}
 }
 
 type ServerOptions struct {
 	HardResetOnPurgeQueue bool
+	InsecureMode          bool
 }
 
 // Server represents the emulator server
@@ -147,6 +149,7 @@ func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) 
 		func(task *Task) {
 			s.removeTask(task.state.GetName())
 		},
+		s.Options.InsecureMode,
 	)
 	s.setQueue(name, queue)
 	queue.Run()
@@ -367,6 +370,7 @@ func main() {
 	port := flag.String("port", "8123", "The port")
 	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
 	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
+	insecureMode := flag.Bool("insecure", false, "Allow insecure https requests (differs from production)")
 
 	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
 
@@ -390,6 +394,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 	emulatorServer := NewServer()
 	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
+	emulatorServer.Options.InsecureMode = *insecureMode
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {

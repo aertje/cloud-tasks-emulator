@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	pduration "github.com/golang/protobuf/ptypes/duration"
 	ptimestamp "github.com/golang/protobuf/ptypes/timestamp"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 )
 

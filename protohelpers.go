@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	rpccode "google.golang.org/genproto/googleapis/rpc/code"
 )
 

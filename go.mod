@@ -6,11 +6,11 @@ require (
 	cloud.google.com/go/cloudtasks v1.13.6
 	cloud.google.com/go/iam v1.5.2
 	github.com/golang-jwt/jwt v3.2.2+incompatible
-	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/api v0.229.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b
 	google.golang.org/grpc v1.74.2
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
@@ -40,6 +40,5 @@ require (
 	golang.org/x/time v0.11.0 // indirect
 	google.golang.org/genproto v0.0.0-20250804133106-a7a43d27e69b // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250804133106-a7a43d27e69b // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

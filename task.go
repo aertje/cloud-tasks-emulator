@@ -353,7 +353,11 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 }
 
 func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, task.state)
+	task.stateMutex.Lock()
+	local := proto.Clone(task.state).(*tasks.Task)
+	task.stateMutex.Unlock()
+
+	respCode := dispatch(retry, local)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

@@ -238,7 +238,7 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 
 	for _, task := range queue.ts {
 		if task != nil {
-			taskStates = append(taskStates, task.state)
+			taskStates = append(taskStates, task.Snapshot())
 		}
 	}
 

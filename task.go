@@ -402,3 +402,10 @@ func (task *Task) Schedule() {
 		}
 	}()
 }
+
+func (t *Task) Snapshot() *tasks.Task {
+    t.stateMutex.Lock()
+    defer t.stateMutex.Unlock()
+    return proto.Clone(t.state).(*tasks.Task)
+}
+

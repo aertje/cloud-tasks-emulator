@@ -9,14 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go 1.x
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v6
         with:
-          go-version: ^1.13
+          go-version: ^1.24
         id: go
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Cache dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -37,11 +37,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Build image
         run: docker build . --file Dockerfile --tag $IMAGE_NAME
       - name: Cache smoketest dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: /tmp/smoketest-packages
           key:  smoketests-pkgs-${{ hashFiles('docker-smoketests/go.*') }}
@@ -55,9 +55,9 @@ jobs:
     if:  ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       - name: Publish to Github Packages
         run: |
           set -o errexit

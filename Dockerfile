@@ -15,6 +15,13 @@ LABEL org.opencontainers.image.source=https://github.com/aertje/cloud-tasks-emul
 
 WORKDIR /
 
+# Install ca-certificates package
+RUN apk add --no-cache ca-certificates
+
+# Copy local CA certificate if it exists and add it to trusted certificates
+COPY --from=builder /app/rootCA.pem /usr/local/share/ca-certificates/rootCA.crt
+RUN update-ca-certificates
+
 COPY --from=builder /app/oidc.key oidc.key
 COPY --from=builder /app/oidc.cert oidc.cert
 COPY --from=builder /app/emulator .

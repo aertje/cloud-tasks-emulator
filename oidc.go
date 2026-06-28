@@ -71,17 +71,16 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string, config *engine.OIDCConfig) *http.Server {
+// newOpenIDConfigurationServer builds the OpenID discovery/JWKS HTTP server. The
+// caller owns its lifecycle (starting it and shutting it down); see main.
+func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *engine.OIDCConfig) *http.Server {
 	s := openIDServer{config: config}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", s.configHandler)
 	mux.HandleFunc(jwksUriPath, s.jwksHandler)
 
-	server := &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
-	go server.ListenAndServe()
-
-	return server
+	return &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
 }
 
 func configureOpenIdIssuer(issuerUrl string, config *engine.OIDCConfig) (*http.Server, error) {
@@ -109,6 +108,6 @@ func configureOpenIdIssuer(issuerUrl string, config *engine.OIDCConfig) (*http.S
 	}
 
 	listenAddr := "0.0.0.0"
-	fmt.Printf("Issuing OpenID tokens as %v - running endpoint on %v:%v\n", issuerUrl, listenAddr, port)
-	return serveOpenIDConfigurationEndpoint(listenAddr, port, config), nil
+	fmt.Printf("Issuing OpenID tokens as %v - serving endpoint on %v:%v\n", issuerUrl, listenAddr, port)
+	return newOpenIDConfigurationServer(listenAddr, port, config), nil
 }

@@ -2,14 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -59,12 +64,13 @@ func main() {
 	emulatorServer := NewServer()
 	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
 
+	var openIDServer *http.Server
 	if *openidIssuer != "" {
 		srv, err := configureOpenIdIssuer(*openidIssuer, emulatorServer.Options.OIDC)
 		if err != nil {
 			panic(err)
 		}
-		defer srv.Shutdown(context.Background())
+		openIDServer = srv
 	}
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("%v:%v", *host, *port))
@@ -81,5 +87,54 @@ func main() {
 		createInitialQueue(emulatorServer, initialQueues[i])
 	}
 
-	grpcServer.Serve(lis)
+	if err := serve(grpcServer, lis, openIDServer); err != nil {
+		panic(err)
+	}
+}
+
+// serve runs the gRPC server and the optional OpenID HTTP server until one of
+// them exits or a SIGINT/SIGTERM arrives, then shuts the other down too. It
+// returns the first non-nil error from any server.
+func serve(grpcServer *grpc.Server, lis net.Listener, openIDServer *http.Server) error {
+	// Cancelled on signal, or by any server goroutine returning (via the deferred
+	// cancel), so one server stopping brings the others down with it.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var group errgroup.Group
+
+	group.Go(func() error {
+		defer cancel()
+		if err := grpcServer.Serve(lis); err != nil {
+			return fmt.Errorf("gRPC server: %w", err)
+		}
+		return nil
+	})
+
+	if openIDServer != nil {
+		group.Go(func() error {
+			defer cancel()
+			if err := openIDServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("OpenID server: %w", err)
+			}
+			return nil
+		})
+	}
+
+	// Shutdown watcher: wakes on the first server exit or signal and stops the
+	// rest, so group.Wait can return.
+	group.Go(func() error {
+		<-ctx.Done()
+		grpcServer.GracefulStop()
+		if openIDServer != nil {
+			if err := openIDServer.Shutdown(context.Background()); err != nil {
+				return fmt.Errorf("OpenID server shutdown: %w", err)
+			}
+		}
+		return nil
+	})
+
+	return group.Wait()
 }

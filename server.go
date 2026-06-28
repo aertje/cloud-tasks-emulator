@@ -13,25 +13,25 @@ import (
 )
 
 // ServerOptions tunes runtime behaviour of the emulator server.
-type ServerOptions struct {
-	HardResetOnPurgeQueue bool
-}
+// It is an alias for engine.Options so callers can mutate it on a Server and
+// have the engine observe the changes without an explicit sync step.
+type ServerOptions = engine.Options
 
 // Server is the gRPC CloudTasksServer implementation. It is a thin handler that
 // translates proto requests and responses on/off the engine.
 type Server struct {
-	engine  *engine.Engine
+	engine *engine.Engine
+
+	// Options is shared with the engine via pointer; assignments to this field
+	// are observed by the engine on subsequent calls.
 	Options ServerOptions
 }
 
 // NewServer creates a new emulator server with its own engine and default options.
 func NewServer() *Server {
-	return &Server{
-		engine: engine.New(),
-		Options: ServerOptions{
-			HardResetOnPurgeQueue: false,
-		},
-	}
+	s := &Server{}
+	s.engine = engine.New(&s.Options)
+	return s
 }
 
 // ListQueues lists the existing queues
@@ -81,7 +81,7 @@ func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) 
 
 // PurgeQueue purges the specified queue
 func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.PurgeQueue(in.GetName(), s.Options.HardResetOnPurgeQueue)
+	q, err := s.engine.PurgeQueue(in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}

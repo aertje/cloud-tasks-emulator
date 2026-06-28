@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// Options tunes runtime behaviour of the engine.
+type Options struct {
+	// HardResetOnPurgeQueue makes PurgeQueue synchronously delete tasks and
+	// release their name handles. This mirrors a development-environment
+	// behaviour rather than production Cloud Tasks.
+	HardResetOnPurgeQueue bool
+}
+
 // Engine owns all queue/task state and the runtime that drives task dispatch.
 // It is the core layer; gRPC handlers should wrap an Engine and translate
 // proto requests/responses + sentinel errors at the edge.
@@ -16,13 +24,22 @@ type Engine struct {
 
 	qsMux sync.Mutex
 	tsMux sync.Mutex
+
+	// opts is held via pointer so callers retain ownership of the value and
+	// mutations made after construction (e.g. test setup) are observed.
+	opts *Options
 }
 
-// New creates a new engine with empty queue/task bookkeeping.
-func New() *Engine {
+// New creates a new engine with empty queue/task bookkeeping. opts may be nil
+// to accept defaults.
+func New(opts *Options) *Engine {
+	if opts == nil {
+		opts = &Options{}
+	}
 	return &Engine{
-		qs: make(map[string]*Queue),
-		ts: make(map[string]*Task),
+		qs:   make(map[string]*Queue),
+		ts:   make(map[string]*Task),
+		opts: opts,
 	}
 }
 
@@ -130,13 +147,14 @@ func (e *Engine) DeleteQueue(name string) error {
 	return nil
 }
 
-// PurgeQueue purges the named queue. When hardReset is true, also releases
-// all task name handles so the names become reusable - this mirrors the
-// emulator's optional "development environment" behaviour rather than prod.
-func (e *Engine) PurgeQueue(name string, hardReset bool) (*Queue, error) {
+// PurgeQueue purges the named queue. When Options.HardResetOnPurgeQueue is set,
+// also releases all task name handles so the names become reusable - this
+// mirrors the emulator's optional development-environment behaviour rather
+// than production Cloud Tasks.
+func (e *Engine) PurgeQueue(name string) (*Queue, error) {
 	queue, _ := e.fetchQueue(name)
 	// Pre-existing behaviour: no nil check on queue; tests do not exercise the missing-queue path here.
-	if hardReset {
+	if e.opts.HardResetOnPurgeQueue {
 		e.hardResetQueue(queue)
 	} else {
 		queue.Purge()

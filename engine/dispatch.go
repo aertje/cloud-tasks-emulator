@@ -83,7 +83,7 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	}
 }
 
-func dispatch(retry bool, state *TaskState) int {
+func dispatch(retry bool, state *TaskState, oidc *OIDCConfig) int {
 	client := &http.Client{Timeout: state.DispatchDeadline}
 
 	var req *http.Request
@@ -103,7 +103,7 @@ func dispatch(retry bool, state *TaskState) int {
 		headers = state.HTTPRequest.Headers
 
 		if auth := state.HTTPRequest.OIDCToken; auth != nil {
-			tokenStr := CreateOIDCToken(auth.ServiceAccountEmail, state.HTTPRequest.URL, auth.Audience)
+			tokenStr := oidc.CreateToken(auth.ServiceAccountEmail, state.HTTPRequest.URL, auth.Audience)
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
 
@@ -149,7 +149,7 @@ func dispatch(retry bool, state *TaskState) int {
 }
 
 func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, &task.state)
+	respCode := dispatch(retry, &task.state, task.queue.oidc)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

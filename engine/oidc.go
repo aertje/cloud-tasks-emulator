@@ -40,7 +40,11 @@ FSkhEKj2YXWlriv3hyPIC8Aq
 -----END PRIVATE KEY-----
 `
 
-var OpenIDConfig struct {
+// OIDCConfig holds the key material and issuer identity used to mint OIDC tokens
+// during dispatch and to publish the matching discovery/JWKS endpoints. It is
+// created per-engine (see DefaultOIDCConfig) and threaded through to dispatch
+// rather than held as mutable package state.
+type OIDCConfig struct {
 	IssuerURL  string
 	KeyID      string
 	PrivateKey *rsa.PrivateKey
@@ -52,20 +56,23 @@ type OpenIDConnectClaims struct {
 	jwt.StandardClaims
 }
 
-func init() {
-	var err error
-	OpenIDConfig.PrivateKey, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(openIdPrivateKeyStr))
+// DefaultOIDCConfig builds an OIDCConfig from the baked-in development key.
+func DefaultOIDCConfig() *OIDCConfig {
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(openIdPrivateKeyStr))
 	if err != nil {
 		panic(err)
 	}
 
-	OpenIDConfig.IssuerURL = "http://cloud-tasks-emulator"
-	OpenIDConfig.KeyID = "cloudtasks-emulator-test"
+	return &OIDCConfig{
+		IssuerURL:  "http://cloud-tasks-emulator",
+		KeyID:      "cloudtasks-emulator-test",
+		PrivateKey: privateKey,
+	}
 }
 
-// CreateOIDCToken issues an RS256-signed OIDC token for the given service account.
+// CreateToken issues an RS256-signed OIDC token for the given service account.
 // audience defaults to handlerUrl if not provided.
-func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience string) string {
+func (c *OIDCConfig) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) string {
 	if audience == "" {
 		audience = handlerUrl
 	}
@@ -76,7 +83,7 @@ func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience str
 		StandardClaims: jwt.StandardClaims{
 			Subject:   serviceAccountEmail,
 			Audience:  audience,
-			Issuer:    OpenIDConfig.IssuerURL,
+			Issuer:    c.IssuerURL,
 			IssuedAt:  now.Unix(),
 			NotBefore: now.Unix(),
 			ExpiresAt: now.Add(5 * time.Minute).Unix(),
@@ -84,9 +91,9 @@ func CreateOIDCToken(serviceAccountEmail string, handlerUrl string, audience str
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = OpenIDConfig.KeyID
+	token.Header["kid"] = c.KeyID
 
-	tokenString, err := token.SignedString(OpenIDConfig.PrivateKey)
+	tokenString, err := token.SignedString(c.PrivateKey)
 
 	if err != nil {
 		log.Fatalf("Failed to create OIDC token: %v", err)

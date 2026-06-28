@@ -35,10 +35,14 @@ type Queue struct {
 	paused bool
 
 	onTaskDone func(task *Task)
+
+	// oidc is the token-signing configuration used by tasks on this queue when
+	// dispatching with an OIDC token. Threaded down from the engine.
+	oidc *OIDCConfig
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidc *OIDCConfig, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	queue := &Queue{
@@ -48,6 +52,7 @@ func newQueue(state QueueState, onTaskDone func(task *Task)) *Queue {
 		work:                   make(chan *Task),
 		ts:                     make(map[string]*Task),
 		onTaskDone:             onTaskDone,
+		oidc:                   oidc,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
 		cancelTokenGenerator:   make(chan bool, 1),

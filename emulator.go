@@ -56,8 +56,11 @@ func main() {
 
 	flag.Parse()
 
+	emulatorServer := NewServer()
+	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
+
 	if *openidIssuer != "" {
-		srv, err := configureOpenIdIssuer(*openidIssuer)
+		srv, err := configureOpenIdIssuer(*openidIssuer, emulatorServer.Options.OIDC)
 		if err != nil {
 			panic(err)
 		}
@@ -72,8 +75,6 @@ func main() {
 	print(fmt.Sprintf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port))
 
 	grpcServer := grpc.NewServer()
-	emulatorServer := NewServer()
-	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
 	for i := 0; i < len(initialQueues); i++ {

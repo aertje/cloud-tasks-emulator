@@ -15,9 +15,11 @@ import (
 )
 
 func TestOpenIdConfigHttpHandler(t *testing.T) {
-	engine.OpenIDConfig.IssuerURL = "http://foo.bar:8080"
+	config := engine.DefaultOIDCConfig()
+	config.IssuerURL = "http://foo.bar:8080"
+	s := openIDServer{config: config}
 
-	resp := performRequest("GET", "/.well-known/openid-configuration", openIDConfigHttpHandler)
+	resp := performRequest("GET", "/.well-known/openid-configuration", s.configHandler)
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := parseJSONResponse(t, resp)
@@ -28,9 +30,11 @@ func TestOpenIdConfigHttpHandler(t *testing.T) {
 }
 
 func TestOpenIdJWKSHttpHandler(t *testing.T) {
-	engine.OpenIDConfig.KeyID = "any-key-id"
+	config := engine.DefaultOIDCConfig()
+	config.KeyID = "any-key-id"
+	s := openIDServer{config: config}
 
-	resp := performRequest("GET", "/jwks", openIDJWKSHttpHandler)
+	resp := performRequest("GET", "/jwks", s.jwksHandler)
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 
@@ -62,28 +66,30 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
 
 func TestConfigureOpenIdIssuerRejectsInvalidUrl(t *testing.T) {
 	var err error
-	_, err = configureOpenIdIssuer("junk")
+	_, err = configureOpenIdIssuer("junk", engine.DefaultOIDCConfig())
 	assert.Error(t, err, "-openid-issuer must be a base URL e.g. http://any-host:8237")
 
-	_, err = configureOpenIdIssuer("https://foo:8900")
+	_, err = configureOpenIdIssuer("https://foo:8900", engine.DefaultOIDCConfig())
 	assert.Error(t, err, "-openid-issuer only supports http protocol")
 
-	_, err = configureOpenIdIssuer("http://foo:8900/deep")
+	_, err = configureOpenIdIssuer("http://foo:8900/deep", engine.DefaultOIDCConfig())
 	assert.Error(t, err, "-openid-issuer must not contain a path")
 }
 
 func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me:8200")
+	config := engine.DefaultOIDCConfig()
+	srv, err := configureOpenIdIssuer("http://my-external.route.to.me:8200", config)
 	require.NoError(t, err)
-	assert.Equal(t, "http://my-external.route.to.me:8200", engine.OpenIDConfig.IssuerURL)
+	assert.Equal(t, "http://my-external.route.to.me:8200", config.IssuerURL)
 	assert.Equal(t, "0.0.0.0:8200", srv.Addr)
 	srv.Shutdown(context.Background())
 }
 
 func TestConfigureOpenIdIssuerSupportsPort80(t *testing.T) {
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me")
+	config := engine.DefaultOIDCConfig()
+	srv, err := configureOpenIdIssuer("http://my-external.route.to.me", config)
 	require.NoError(t, err)
-	assert.Equal(t, "http://my-external.route.to.me", engine.OpenIDConfig.IssuerURL)
+	assert.Equal(t, "http://my-external.route.to.me", config.IssuerURL)
 	assert.Equal(t, "0.0.0.0:80", srv.Addr)
 	srv.Shutdown(context.Background())
 }

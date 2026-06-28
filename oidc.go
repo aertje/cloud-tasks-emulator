@@ -15,10 +15,17 @@ import (
 
 const jwksUriPath = "/jwks"
 
-func openIDConfigHttpHandler(w http.ResponseWriter, r *http.Request) {
+// openIDServer serves the OpenID discovery and JWKS endpoints for a given signing
+// configuration. It holds the config explicitly rather than reaching for package
+// state, so the HTTP endpoints publish exactly the key the engine signs with.
+type openIDServer struct {
+	config *engine.OIDCConfig
+}
+
+func (s openIDServer) configHandler(w http.ResponseWriter, r *http.Request) {
 	config := map[string]interface{}{
-		"issuer":                                engine.OpenIDConfig.IssuerURL,
-		"jwks_uri":                              engine.OpenIDConfig.IssuerURL + jwksUriPath,
+		"issuer":                                s.config.IssuerURL,
+		"jwks_uri":                              s.config.IssuerURL + jwksUriPath,
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"claims_supported":                      []string{"aud", "email", "email_verified", "exp", "iat", "iss", "nbf"},
 	}
@@ -41,8 +48,8 @@ func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Dura
 	w.Write(jsonBody)
 }
 
-func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
-	publicKey := engine.OpenIDConfig.PrivateKey.Public().(*rsa.PublicKey)
+func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
+	publicKey := s.config.PrivateKey.Public().(*rsa.PublicKey)
 	b64Url := base64.URLEncoding.WithPadding(base64.NoPadding)
 
 	config := map[string]interface{}{
@@ -53,7 +60,7 @@ func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 				// base64url encode a 2-bytes int in go!
 				"e":   "AQAB",
 				"n":   b64Url.EncodeToString(publicKey.N.Bytes()),
-				"kid": engine.OpenIDConfig.KeyID,
+				"kid": s.config.KeyID,
 				"use": "sig",
 				"alg": "RSA256",
 				"kty": "RSA",
@@ -64,10 +71,12 @@ func openIDJWKSHttpHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string) *http.Server {
+func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string, config *engine.OIDCConfig) *http.Server {
+	s := openIDServer{config: config}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", openIDConfigHttpHandler)
-	mux.HandleFunc(jwksUriPath, openIDJWKSHttpHandler)
+	mux.HandleFunc("/.well-known/openid-configuration", s.configHandler)
+	mux.HandleFunc(jwksUriPath, s.jwksHandler)
 
 	server := &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
 	go server.ListenAndServe()
@@ -75,7 +84,7 @@ func serveOpenIDConfigurationEndpoint(listenAddr string, listenPort string) *htt
 	return server
 }
 
-func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
+func configureOpenIdIssuer(issuerUrl string, config *engine.OIDCConfig) (*http.Server, error) {
 	url, err := url.ParseRequestURI(issuerUrl)
 	if err != nil {
 		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")
@@ -89,7 +98,7 @@ func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
 		return nil, fmt.Errorf("-openid-issuer must not contain a path")
 	}
 
-	engine.OpenIDConfig.IssuerURL = issuerUrl
+	config.IssuerURL = issuerUrl
 
 	hostParts := strings.Split(url.Host, ":")
 	var port string
@@ -101,5 +110,5 @@ func configureOpenIdIssuer(issuerUrl string) (*http.Server, error) {
 
 	listenAddr := "0.0.0.0"
 	fmt.Printf("Issuing OpenID tokens as %v - running endpoint on %v:%v\n", issuerUrl, listenAddr, port)
-	return serveOpenIDConfigurationEndpoint(listenAddr, port), nil
+	return serveOpenIDConfigurationEndpoint(listenAddr, port, config), nil
 }

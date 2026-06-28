@@ -13,6 +13,11 @@ type Options struct {
 	// release their name handles. This mirrors a development-environment
 	// behaviour rather than production Cloud Tasks.
 	HardResetOnPurgeQueue bool
+
+	// OIDC holds the token-signing configuration used when dispatching tasks
+	// with an OIDC token, and published via the issuer's HTTP endpoints. New
+	// defaults it to DefaultOIDCConfig when nil.
+	OIDC *OIDCConfig
 }
 
 // Engine owns all queue/task state and the runtime that drives task dispatch.
@@ -35,6 +40,9 @@ type Engine struct {
 func New(opts *Options) *Engine {
 	if opts == nil {
 		opts = &Options{}
+	}
+	if opts.OIDC == nil {
+		opts.OIDC = DefaultOIDCConfig()
 	}
 	return &Engine{
 		qs:   make(map[string]*Queue),
@@ -126,7 +134,7 @@ func (e *Engine) CreateQueue(parent string, qs QueueState) (*Queue, error) {
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	queue := newQueue(qs, func(task *Task) {
+	queue := newQueue(qs, e.opts.OIDC, func(task *Task) {
 		e.removeTaskEntry(task.state.Name)
 	})
 	e.setQueue(qs.Name, queue)

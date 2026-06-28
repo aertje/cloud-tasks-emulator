@@ -631,10 +631,10 @@ func TestErrorTaskExecution(t *testing.T) {
 }
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
+	oidcConfig := engine.DefaultOIDCConfig()
+	oidcConfig.IssuerURL = "http://localhost:8980"
+	serv, client := setUp(t, ServerOptions{OIDC: oidcConfig})
 	defer tearDown(t, serv)
-
-	engine.OpenIDConfig.IssuerURL = "http://localhost:8980"
 
 	srv, receivedRequests := startTestServer()
 	defer srv.Shutdown(context.Background())

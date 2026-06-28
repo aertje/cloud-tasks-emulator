@@ -4,18 +4,13 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"github.com/golang/protobuf/proto"
-	pduration "github.com/golang/protobuf/ptypes/duration"
-
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 )
 
 // Queue holds all internals for a task queue
 type Queue struct {
 	name string
 
-	state *tasks.Queue
+	state QueueState
 
 	fire chan *Task
 
@@ -43,32 +38,32 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Queue, *tasks.Queue) {
-	setInitialQueueState(state)
+func newQueue(state QueueState, onTaskDone func(task *Task)) *Queue {
+	setInitialQueueState(&state)
 
 	queue := &Queue{
-		name:                   name,
+		name:                   state.Name,
 		state:                  state,
 		fire:                   make(chan *Task),
 		work:                   make(chan *Task),
 		ts:                     make(map[string]*Task),
 		onTaskDone:             onTaskDone,
-		tokenBucket:            make(chan bool, state.GetRateLimits().GetMaxBurstSize()),
-		maxDispatchesPerSecond: state.GetRateLimits().GetMaxDispatchesPerSecond(),
+		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
+		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
 		cancelTokenGenerator:   make(chan bool, 1),
 		cancelDispatcher:       make(chan bool, 1),
 		cancelWorkers:          make(chan bool, 1),
 	}
 	// Fill the token bucket
-	for i := 0; i < int(state.GetRateLimits().GetMaxBurstSize()); i++ {
+	for i := 0; i < int(state.RateLimits.MaxBurstSize); i++ {
 		queue.tokenBucket <- true
 	}
 
-	return queue, state
+	return queue
 }
 
-// State returns the proto-backed queue state.
-func (q *Queue) State() *tasks.Queue {
+// State returns a snapshot of the queue state.
+func (q *Queue) State() QueueState {
 	return q.state
 }
 
@@ -82,45 +77,35 @@ func (queue *Queue) removeTask(taskName string) {
 	queue.setTask(taskName, nil)
 }
 
-func setInitialQueueState(queueState *tasks.Queue) {
-	if queueState.GetRateLimits() == nil {
-		queueState.RateLimits = &tasks.RateLimits{}
+func setInitialQueueState(s *QueueState) {
+	if s.RateLimits.MaxDispatchesPerSecond == 0 {
+		s.RateLimits.MaxDispatchesPerSecond = 500.0
 	}
-	if queueState.GetRateLimits().GetMaxDispatchesPerSecond() == 0 {
-		queueState.RateLimits.MaxDispatchesPerSecond = 500.0
+	if s.RateLimits.MaxBurstSize == 0 {
+		s.RateLimits.MaxBurstSize = 100
 	}
-	if queueState.GetRateLimits().GetMaxBurstSize() == 0 {
-		queueState.RateLimits.MaxBurstSize = 100
-	}
-	if queueState.GetRateLimits().GetMaxConcurrentDispatches() == 0 {
-		queueState.RateLimits.MaxConcurrentDispatches = 1000
+	if s.RateLimits.MaxConcurrentDispatches == 0 {
+		s.RateLimits.MaxConcurrentDispatches = 1000
 	}
 
-	if queueState.GetRetryConfig() == nil {
-		queueState.RetryConfig = &tasks.RetryConfig{}
+	if s.RetryConfig.MaxAttempts == 0 {
+		s.RetryConfig.MaxAttempts = 100
 	}
-	if queueState.GetRetryConfig().GetMaxAttempts() == 0 {
-		queueState.RetryConfig.MaxAttempts = 100
+	if s.RetryConfig.MaxDoublings == 0 {
+		s.RetryConfig.MaxDoublings = 16
 	}
-	if queueState.GetRetryConfig().GetMaxDoublings() == 0 {
-		queueState.RetryConfig.MaxDoublings = 16
+	if s.RetryConfig.MinBackoff == 0 {
+		s.RetryConfig.MinBackoff = 100 * time.Millisecond
 	}
-	if queueState.GetRetryConfig().GetMinBackoff() == nil {
-		queueState.RetryConfig.MinBackoff = &pduration.Duration{
-			Nanos: 100000000,
-		}
-	}
-	if queueState.GetRetryConfig().GetMaxBackoff() == nil {
-		queueState.RetryConfig.MaxBackoff = &pduration.Duration{
-			Seconds: 3600,
-		}
+	if s.RetryConfig.MaxBackoff == 0 {
+		s.RetryConfig.MaxBackoff = 3600 * time.Second
 	}
 
-	queueState.State = tasks.Queue_RUNNING
+	s.State = QueueRunStateRunning
 }
 
 func (queue *Queue) runWorkers() {
-	for i := 0; i < int(queue.state.GetRateLimits().GetMaxConcurrentDispatches()); i++ {
+	for i := 0; i < int(queue.state.RateLimits.MaxConcurrentDispatches); i++ {
 		go queue.runWorker()
 	}
 }
@@ -188,20 +173,21 @@ func (queue *Queue) Run() {
 	go queue.runDispatcher()
 }
 
-// NewTask creates a new task on the queue
-func (queue *Queue) NewTask(newTaskState *tasks.Task) (*Task, *tasks.Task) {
-	task := newTask(queue, newTaskState, func(task *Task) {
-		queue.removeTask(task.state.GetName())
+// NewTask creates a new task on the queue. Returns the live *Task and a snapshot
+// of its state immediately after creation.
+func (queue *Queue) NewTask(taskState TaskState) (*Task, TaskState) {
+	task := newTask(queue, taskState, func(task *Task) {
+		queue.removeTask(task.state.Name)
 		queue.onTaskDone(task)
 	})
 
-	taskState := proto.Clone(task.state).(*tasks.Task)
+	frozen := task.state
 
-	queue.setTask(taskState.GetName(), task)
+	queue.setTask(frozen.Name, task)
 
 	task.Schedule()
 
-	return task, taskState
+	return task, frozen
 }
 
 // Delete stops, purges and removes the queue
@@ -244,7 +230,7 @@ func (queue *Queue) Purge() *sync.WaitGroup {
 func (queue *Queue) Pause() {
 	if !queue.paused {
 		queue.paused = true
-		queue.state.State = tasks.Queue_PAUSED
+		queue.state.State = QueueRunStatePaused
 
 		queue.cancelDispatcher <- true
 		queue.cancelWorkers <- true
@@ -255,7 +241,7 @@ func (queue *Queue) Pause() {
 func (queue *Queue) Resume() {
 	if queue.paused {
 		queue.paused = false
-		queue.state.State = tasks.Queue_RUNNING
+		queue.state.State = QueueRunStateRunning
 
 		go queue.runDispatcher()
 		go queue.runWorkers()

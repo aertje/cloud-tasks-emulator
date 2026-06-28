@@ -1,33 +1,12 @@
 package engine
 
 import (
-	"net/http"
-
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	rpccode "google.golang.org/genproto/googleapis/rpc/code"
 )
 
-func toHTTPMethod(taskMethod tasks.HttpMethod) string {
-	switch taskMethod {
-	case tasks.HttpMethod_GET:
-		return http.MethodGet
-	case tasks.HttpMethod_POST:
-		return http.MethodPost
-	case tasks.HttpMethod_DELETE:
-		return http.MethodDelete
-	case tasks.HttpMethod_HEAD:
-		return http.MethodHead
-	case tasks.HttpMethod_OPTIONS:
-		return http.MethodOptions
-	case tasks.HttpMethod_PATCH:
-		return http.MethodPatch
-	case tasks.HttpMethod_PUT:
-		return http.MethodPut
-	default:
-		panic("Unsupported http method")
-	}
-}
-
+// toRPCStatusCode maps an HTTP status code returned by a target to the
+// google.rpc.Code used in Attempt.ResponseStatus. Only the codes that
+// Cloud Tasks documents are mapped; everything else falls back to UNKNOWN.
 func toRPCStatusCode(statusCode int) int32 {
 	switch statusCode {
 	case 200:

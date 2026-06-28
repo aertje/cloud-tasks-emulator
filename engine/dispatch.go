@@ -8,105 +8,62 @@ import (
 	"os"
 	"strconv"
 	"time"
-
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
-	ptimestamp "github.com/golang/protobuf/ptypes/timestamp"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
-	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 )
 
-func updateStateForReschedule(task *Task) *tasks.Task {
-	// The lock is to ensure a consistent state when updating
+func updateStateForReschedule(task *Task) {
 	task.stateMutex.Lock()
-	taskState := task.state
-	queueState := task.queue.state
+	defer task.stateMutex.Unlock()
 
-	retryConfig := queueState.GetRetryConfig()
+	retryConfig := task.queue.state.RetryConfig
 
-	minBackoff, _ := ptypes.Duration(retryConfig.GetMinBackoff())
-	maxBackoff, _ := ptypes.Duration(retryConfig.GetMaxBackoff())
-
-	doubling := taskState.GetDispatchCount() - 1
+	doubling := task.state.DispatchCount - 1
 	if doubling > retryConfig.MaxDoublings {
 		doubling = retryConfig.MaxDoublings
 	}
-	backoff := minBackoff * time.Duration(1<<uint32(doubling))
-	if backoff > maxBackoff {
-		backoff = maxBackoff
-	}
-	protoBackoff := ptypes.DurationProto(backoff)
-	prevScheduleTime := taskState.GetScheduleTime()
-
-	// Avoid int32 nanos overflow
-	scheduleNanos := int64(prevScheduleTime.GetNanos()) + int64(protoBackoff.GetNanos())
-	scheduleSeconds := prevScheduleTime.GetSeconds() + protoBackoff.GetSeconds()
-	if scheduleNanos >= 1e9 {
-		scheduleSeconds++
-		scheduleNanos -= 1e9
+	backoff := retryConfig.MinBackoff * time.Duration(1<<uint32(doubling))
+	if backoff > retryConfig.MaxBackoff {
+		backoff = retryConfig.MaxBackoff
 	}
 
-	taskState.ScheduleTime = &ptimestamp.Timestamp{
-		Nanos:   int32(scheduleNanos),
-		Seconds: scheduleSeconds,
-	}
-
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
-	task.stateMutex.Unlock()
-
-	return frozenTaskState
+	task.state.ScheduleTime = task.state.ScheduleTime.Add(backoff)
 }
 
-func updateStateForDispatch(task *Task) *tasks.Task {
+func updateStateForDispatch(task *Task) TaskState {
 	task.stateMutex.Lock()
-	taskState := task.state
+	defer task.stateMutex.Unlock()
 
-	dispatchTime := ptypes.TimestampNow()
+	dispatchTime := time.Now()
 
-	taskState.LastAttempt = &tasks.Attempt{
-		ScheduleTime: &ptimestamp.Timestamp{
-			Nanos:   taskState.GetScheduleTime().GetNanos(),
-			Seconds: taskState.GetScheduleTime().GetSeconds(),
-		},
+	task.state.LastAttempt = &Attempt{
+		ScheduleTime: task.state.ScheduleTime,
 		DispatchTime: dispatchTime,
 	}
 
-	taskState.DispatchCount++
+	task.state.DispatchCount++
 
-	if taskState.GetFirstAttempt() == nil {
-		taskState.FirstAttempt = &tasks.Attempt{
+	if task.state.FirstAttempt == nil {
+		task.state.FirstAttempt = &Attempt{
 			DispatchTime: dispatchTime,
 		}
 	}
 
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
-	task.stateMutex.Unlock()
-
-	return frozenTaskState
+	return task.state
 }
 
-func updateStateAfterDispatch(task *Task, statusCode int) *tasks.Task {
+func updateStateAfterDispatch(task *Task, statusCode int) {
 	task.stateMutex.Lock()
-
-	taskState := task.state
+	defer task.stateMutex.Unlock()
 
 	rpcCode := toRPCStatusCode(statusCode)
 	rpcCodeName := toCodeName(rpcCode)
 
-	lastAttempt := taskState.GetLastAttempt()
-
-	lastAttempt.ResponseTime = ptypes.TimestampNow()
-	lastAttempt.ResponseStatus = &rpcstatus.Status{
+	task.state.LastAttempt.ResponseTime = time.Now()
+	task.state.LastAttempt.ResponseStatus = &AttemptStatus{
 		Code:    rpcCode,
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
 	}
 
-	taskState.ResponseCount++
-
-	frozenTaskState := proto.Clone(taskState).(*tasks.Task)
-	task.stateMutex.Unlock()
-
-	return frozenTaskState
+	task.state.ResponseCount++
 }
 
 func (task *Task) reschedule(retry bool, statusCode int) {
@@ -116,9 +73,7 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	} else {
 		log.Println("Task exec error with status " + strconv.Itoa(statusCode))
 		if retry {
-			retryConfig := task.queue.state.GetRetryConfig()
-
-			if task.state.DispatchCount >= retryConfig.GetMaxAttempts() {
+			if task.state.DispatchCount >= task.queue.state.RetryConfig.MaxAttempts {
 				log.Println("Ran out of attempts")
 			} else {
 				updateStateForReschedule(task)
@@ -128,34 +83,27 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	}
 }
 
-func dispatch(retry bool, taskState *tasks.Task) int {
-	client := &http.Client{}
-	client.Timeout, _ = ptypes.Duration(taskState.GetDispatchDeadline())
+func dispatch(retry bool, state *TaskState) int {
+	client := &http.Client{Timeout: state.DispatchDeadline}
 
 	var req *http.Request
 	var headers map[string]string
 
-	httpRequest := taskState.GetHttpRequest()
-	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
-
-	scheduled, _ := ptypes.Timestamp(taskState.GetScheduleTime())
-	nameParts := parseTaskName(taskState)
+	nameParts := parseTaskName(state.Name)
 
 	headerQueueName := nameParts.queueId
 	headerTaskName := nameParts.taskId
-	headerTaskRetryCount := fmt.Sprintf("%v", taskState.GetDispatchCount()-1)
-	headerTaskExecutionCount := fmt.Sprintf("%v", taskState.GetResponseCount())
-	headerTaskETA := fmt.Sprintf("%f", float64(scheduled.UnixNano())/1e9)
+	headerTaskRetryCount := fmt.Sprintf("%v", state.DispatchCount-1)
+	headerTaskExecutionCount := fmt.Sprintf("%v", state.ResponseCount)
+	headerTaskETA := fmt.Sprintf("%f", float64(state.ScheduleTime.UnixNano())/1e9)
 
-	if httpRequest != nil {
-		method := toHTTPMethod(httpRequest.GetHttpMethod())
+	if state.HTTPRequest != nil {
+		req, _ = http.NewRequest(state.HTTPRequest.Method, state.HTTPRequest.URL, bytes.NewBuffer(state.HTTPRequest.Body))
 
-		req, _ = http.NewRequest(method, httpRequest.GetUrl(), bytes.NewBuffer(httpRequest.GetBody()))
+		headers = state.HTTPRequest.Headers
 
-		headers = httpRequest.GetHeaders()
-
-		if auth := httpRequest.GetOidcToken(); auth != nil {
-			tokenStr := CreateOIDCToken(auth.ServiceAccountEmail, httpRequest.GetUrl(), auth.Audience)
+		if auth := state.HTTPRequest.OIDCToken; auth != nil {
+			tokenStr := CreateOIDCToken(auth.ServiceAccountEmail, state.HTTPRequest.URL, auth.Audience)
 			headers["Authorization"] = "Bearer " + tokenStr
 		}
 
@@ -166,16 +114,14 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 		headers["X-CloudTasks-TaskExecutionCount"] = headerTaskExecutionCount
 		headers["X-CloudTasks-TaskRetryCount"] = headerTaskRetryCount
 		headers["X-CloudTasks-TaskETA"] = headerTaskETA
-	} else if appEngineHTTPRequest != nil {
-		method := toHTTPMethod(appEngineHTTPRequest.GetHttpMethod())
+	} else if state.AppEngineHTTPRequest != nil {
+		ae := state.AppEngineHTTPRequest
 
-		host := appEngineHTTPRequest.GetAppEngineRouting().GetHost()
+		url := ae.AppEngineRouting.Host + ae.RelativeURI
 
-		url := host + appEngineHTTPRequest.GetRelativeUri()
+		req, _ = http.NewRequest(ae.Method, url, bytes.NewBuffer(ae.Body))
 
-		req, _ = http.NewRequest(method, url, bytes.NewBuffer(appEngineHTTPRequest.GetBody()))
-
-		headers = appEngineHTTPRequest.GetHeaders()
+		headers = ae.Headers
 
 		// These headers are only set on dispatch, see https://cloud.google.com/tasks/docs/reference/rpc/google.cloud.tasks.v2#google.cloud.tasks.v2.AppEngineHttpRequest
 		// TODO: optional headers
@@ -203,7 +149,7 @@ func dispatch(retry bool, taskState *tasks.Task) int {
 }
 
 func (task *Task) doDispatch(retry bool) {
-	respCode := dispatch(retry, task.state)
+	respCode := dispatch(retry, &task.state)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

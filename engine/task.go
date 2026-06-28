@@ -2,27 +2,24 @@ package engine
 
 import (
 	"math/rand"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/golang/protobuf/ptypes"
-	pduration "github.com/golang/protobuf/ptypes/duration"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 )
 
-var r *regexp.Regexp
+var taskNameRE *regexp.Regexp
 
 func init() {
 	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
-	r = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
+	taskNameRE = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
 }
 
-func parseTaskName(task *tasks.Task) TaskNameParts {
-	matches := r.FindStringSubmatch(task.GetName())
+func parseTaskName(name string) TaskNameParts {
+	matches := taskNameRE.FindStringSubmatch(name)
 	return TaskNameParts{
 		project:  matches[1],
 		location: matches[2],
@@ -32,7 +29,7 @@ func parseTaskName(task *tasks.Task) TaskNameParts {
 }
 
 func isValidTaskName(name string) bool {
-	return r.MatchString(name)
+	return taskNameRE.MatchString(name)
 }
 
 type TaskNameParts struct {
@@ -46,7 +43,7 @@ type TaskNameParts struct {
 type Task struct {
 	queue *Queue
 
-	state *tasks.Task
+	state TaskState
 
 	cancel chan bool
 
@@ -58,80 +55,76 @@ type Task struct {
 }
 
 // newTask creates a new task for the specified queue
-func newTask(queue *Queue, taskState *tasks.Task, onDone func(task *Task)) *Task {
-	setInitialTaskState(taskState, queue.name)
+func newTask(queue *Queue, taskState TaskState, onDone func(task *Task)) *Task {
+	setInitialTaskState(&taskState, queue.name)
 
-	task := &Task{
+	return &Task{
 		queue:  queue,
 		state:  taskState,
 		onDone: onDone,
 		cancel: make(chan bool, 1), // Buffered in case cancel comes when task is not scheduled
 	}
-
-	return task
 }
 
-// State returns the proto-backed task state.
-func (t *Task) State() *tasks.Task {
+// State returns a snapshot of the task state.
+//
+// Note: TaskState is a value type but contains pointers (HTTPRequest /
+// AppEngineHTTPRequest / Attempt / Headers map), so the snapshot is shallow.
+// Callers that need a deep copy should round-trip via taskToProto at the edge.
+func (t *Task) State() TaskState {
+	t.stateMutex.Lock()
+	defer t.stateMutex.Unlock()
 	return t.state
 }
 
-func setInitialTaskState(taskState *tasks.Task, queueName string) {
-	if taskState.GetName() == "" {
+func setInitialTaskState(s *TaskState, queueName string) {
+	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
-		taskState.Name = queueName + "/tasks/" + taskID
+		s.Name = queueName + "/tasks/" + taskID
 	}
 
-	taskState.CreateTime = ptypes.TimestampNow()
-	// For some reason the cloud does not set nanos
-	taskState.CreateTime.Nanos = 0
+	// Cloud only sets whole-second precision on CreateTime.
+	s.CreateTime = time.Unix(time.Now().Unix(), 0)
 
-	if taskState.GetScheduleTime() == nil {
-		taskState.ScheduleTime = ptypes.TimestampNow()
+	if s.ScheduleTime.IsZero() {
+		s.ScheduleTime = time.Now()
 	}
-	if taskState.GetDispatchDeadline() == nil {
-		taskState.DispatchDeadline = &pduration.Duration{Seconds: 600}
+	if s.DispatchDeadline == 0 {
+		s.DispatchDeadline = 600 * time.Second
 	}
 
-	// This should probably be set somewhere else?
-	taskState.View = tasks.Task_BASIC
-
-	httpRequest := taskState.GetHttpRequest()
-
-	if httpRequest != nil {
-		if httpRequest.GetHttpMethod() == tasks.HttpMethod_HTTP_METHOD_UNSPECIFIED {
-			httpRequest.HttpMethod = tasks.HttpMethod_POST
+	if s.HTTPRequest != nil {
+		if s.HTTPRequest.Method == "" {
+			s.HTTPRequest.Method = http.MethodPost
 		}
-		if httpRequest.GetHeaders() == nil {
-			httpRequest.Headers = make(map[string]string)
+		if s.HTTPRequest.Headers == nil {
+			s.HTTPRequest.Headers = make(map[string]string)
 		}
 		// Override
-		httpRequest.Headers["User-Agent"] = "Google-Cloud-Tasks"
+		s.HTTPRequest.Headers["User-Agent"] = "Google-Cloud-Tasks"
 	}
 
-	appEngineHTTPRequest := taskState.GetAppEngineHttpRequest()
-
-	if appEngineHTTPRequest != nil {
-		if appEngineHTTPRequest.GetHttpMethod() == tasks.HttpMethod_HTTP_METHOD_UNSPECIFIED {
-			appEngineHTTPRequest.HttpMethod = tasks.HttpMethod_POST
+	if s.AppEngineHTTPRequest != nil {
+		ae := s.AppEngineHTTPRequest
+		if ae.Method == "" {
+			ae.Method = http.MethodPost
 		}
-		if appEngineHTTPRequest.GetHeaders() == nil {
-			appEngineHTTPRequest.Headers = make(map[string]string)
+		if ae.Headers == nil {
+			ae.Headers = make(map[string]string)
 		}
+		ae.Headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"
 
-		appEngineHTTPRequest.Headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"
-
-		if appEngineHTTPRequest.GetBody() != nil {
-			if _, ok := appEngineHTTPRequest.GetHeaders()["Content-Type"]; !ok {
-				appEngineHTTPRequest.Headers["Content-Type"] = "application/octet-stream"
+		if len(ae.Body) > 0 {
+			if _, ok := ae.Headers["Content-Type"]; !ok {
+				ae.Headers["Content-Type"] = "application/octet-stream"
 			}
 		}
 
-		if appEngineHTTPRequest.GetAppEngineRouting() == nil {
-			appEngineHTTPRequest.AppEngineRouting = &tasks.AppEngineRouting{}
+		if ae.AppEngineRouting == nil {
+			ae.AppEngineRouting = &AppEngineRouting{}
 		}
 
-		if appEngineHTTPRequest.GetAppEngineRouting().Host == "" {
+		if ae.AppEngineRouting.Host == "" {
 			var host, domainSeparator string
 
 			emulatorHost := os.Getenv("APP_ENGINE_EMULATOR_HOST")
@@ -140,7 +133,7 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 				// TODO: the new route format for appengine is <PROJECT_ID>.<REGION_ID>.r.appspot.com
 				// TODO: support custom domains
 				// https://cloud.google.com/appengine/docs/standard/python/how-requests-are-routed
-				host = "https://" + parseTaskName(taskState).project + ".appspot.com"
+				host = "https://" + parseTaskName(s.Name).project + ".appspot.com"
 				domainSeparator = "-dot-"
 			} else {
 				host = emulatorHost
@@ -152,21 +145,21 @@ func setInitialTaskState(taskState *tasks.Task, queueName string) {
 				panic(err)
 			}
 
-			if appEngineHTTPRequest.GetAppEngineRouting().GetService() != "" {
-				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetService() + domainSeparator + hostURL.Host
+			if ae.AppEngineRouting.Service != "" {
+				hostURL.Host = ae.AppEngineRouting.Service + domainSeparator + hostURL.Host
 			}
-			if appEngineHTTPRequest.GetAppEngineRouting().GetVersion() != "" {
-				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetVersion() + domainSeparator + hostURL.Host
+			if ae.AppEngineRouting.Version != "" {
+				hostURL.Host = ae.AppEngineRouting.Version + domainSeparator + hostURL.Host
 			}
-			if appEngineHTTPRequest.GetAppEngineRouting().GetInstance() != "" {
-				hostURL.Host = appEngineHTTPRequest.GetAppEngineRouting().GetInstance() + domainSeparator + hostURL.Host
+			if ae.AppEngineRouting.Instance != "" {
+				hostURL.Host = ae.AppEngineRouting.Instance + domainSeparator + hostURL.Host
 			}
 
-			appEngineHTTPRequest.GetAppEngineRouting().Host = hostURL.String()
+			ae.AppEngineRouting.Host = hostURL.String()
 		}
 
-		if appEngineHTTPRequest.GetRelativeUri() == "" {
-			appEngineHTTPRequest.RelativeUri = "/"
+		if ae.RelativeURI == "" {
+			ae.RelativeURI = "/"
 		}
 	}
 }
@@ -180,12 +173,12 @@ func (task *Task) Attempt() {
 
 // Run runs the task outside of the normal queueing mechanism.
 // This method is called directly by request.
-func (task *Task) Run() *tasks.Task {
-	taskState := updateStateForDispatch(task)
+func (task *Task) Run() TaskState {
+	frozen := updateStateForDispatch(task)
 
 	go task.doDispatch(false)
 
-	return taskState
+	return frozen
 }
 
 // Delete cancels the task if it is queued for execution.
@@ -199,9 +192,7 @@ func (task *Task) Delete() {
 // Schedule schedules the task for execution.
 // It is initially called by the queue, later by the task reschedule.
 func (task *Task) Schedule() {
-	scheduled, _ := ptypes.Timestamp(task.state.GetScheduleTime())
-
-	fromNow := time.Until(scheduled)
+	fromNow := time.Until(task.state.ScheduleTime)
 
 	go func() {
 		select {

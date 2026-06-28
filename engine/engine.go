@@ -5,9 +5,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/golang/protobuf/proto"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 )
 
 // Engine owns all queue/task state and the runtime that drives task dispatch.
@@ -95,9 +92,8 @@ func (e *Engine) GetQueue(name string) (*Queue, error) {
 }
 
 // CreateQueue creates a new queue under the given parent.
-func (e *Engine) CreateQueue(parent string, queueState *tasks.Queue) (*Queue, error) {
-	name := queueState.GetName()
-	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", name)
+func (e *Engine) CreateQueue(parent string, qs QueueState) (*Queue, error) {
+	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", qs.Name)
 	if !nameMatched {
 		return nil, ErrInvalidQueueName
 	}
@@ -105,7 +101,7 @@ func (e *Engine) CreateQueue(parent string, queueState *tasks.Queue) (*Queue, er
 	if !parentMatched {
 		return nil, ErrInvalidParent
 	}
-	existing, ok := e.fetchQueue(name)
+	existing, ok := e.fetchQueue(qs.Name)
 	if ok {
 		if existing != nil {
 			return nil, ErrQueueAlreadyExists
@@ -113,15 +109,10 @@ func (e *Engine) CreateQueue(parent string, queueState *tasks.Queue) (*Queue, er
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	// Make a deep copy so that the original is frozen for the http response
-	queue, _ := newQueue(
-		name,
-		proto.Clone(queueState).(*tasks.Queue),
-		func(task *Task) {
-			e.removeTaskEntry(task.state.GetName())
-		},
-	)
-	e.setQueue(name, queue)
+	queue := newQueue(qs, func(task *Task) {
+		e.removeTaskEntry(task.state.Name)
+	})
+	e.setQueue(qs.Name, queue)
 	queue.Run()
 
 	return queue, nil
@@ -229,33 +220,33 @@ func (e *Engine) GetTask(name string) (*Task, error) {
 }
 
 // CreateTask creates a new task on the queue identified by parent.
-// The returned *Task wraps the live engine state; the second return value is a frozen
-// proto snapshot suitable for returning to the caller without racing future mutations.
-func (e *Engine) CreateTask(parent string, taskState *tasks.Task) (*Task, *tasks.Task, error) {
+// The returned *Task wraps the live engine state; the second return value is a
+// snapshot suitable for returning to the caller without observing future mutations.
+func (e *Engine) CreateTask(parent string, ts TaskState) (*Task, TaskState, error) {
 	queue, ok := e.fetchQueue(parent)
 	if !ok {
-		return nil, nil, ErrQueueNotFound
+		return nil, TaskState{}, ErrQueueNotFound
 	}
 	if queue == nil {
-		return nil, nil, ErrQueueRecentlyDeleted
+		return nil, TaskState{}, ErrQueueRecentlyDeleted
 	}
 
-	if taskState.GetName() != "" {
+	if ts.Name != "" {
 		// If a name is specified, it must be valid, it must be unique, and it must belong to this queue
-		if !isValidTaskName(taskState.GetName()) {
-			return nil, nil, ErrInvalidTaskName
+		if !isValidTaskName(ts.Name) {
+			return nil, TaskState{}, ErrInvalidTaskName
 		}
-		if !strings.HasPrefix(taskState.GetName(), parent+"/tasks/") {
-			return nil, nil, ErrTaskQueueMismatch
+		if !strings.HasPrefix(ts.Name, parent+"/tasks/") {
+			return nil, TaskState{}, ErrTaskQueueMismatch
 		}
-		if _, exists := e.fetchTask(taskState.GetName()); exists {
-			return nil, nil, ErrTaskAlreadyExists
+		if _, exists := e.fetchTask(ts.Name); exists {
+			return nil, TaskState{}, ErrTaskAlreadyExists
 		}
 	}
 
-	task, frozenState := queue.NewTask(taskState)
-	e.setTask(frozenState.GetName(), task)
-	return task, frozenState, nil
+	task, frozen := queue.NewTask(ts)
+	e.setTask(frozen.Name, task)
+	return task, frozen, nil
 }
 
 // DeleteTask removes the named task.
@@ -275,13 +266,13 @@ func (e *Engine) DeleteTask(name string) error {
 }
 
 // RunTask executes a task immediately and returns its snapshotted state.
-func (e *Engine) RunTask(name string) (*Task, *tasks.Task, error) {
+func (e *Engine) RunTask(name string) (*Task, TaskState, error) {
 	task, ok := e.fetchTask(name)
 	if !ok {
-		return nil, nil, ErrTaskNotFound
+		return nil, TaskState{}, ErrTaskNotFound
 	}
 	if task == nil {
-		return nil, nil, ErrTaskRecentlyDeleted
+		return nil, TaskState{}, ErrTaskRecentlyDeleted
 	}
 	frozen := task.Run()
 	return task, frozen, nil

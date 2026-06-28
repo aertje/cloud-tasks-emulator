@@ -1,0 +1,288 @@
+package engine
+
+import (
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/golang/protobuf/proto"
+	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+)
+
+// Engine owns all queue/task state and the runtime that drives task dispatch.
+// It is the core layer; gRPC handlers should wrap an Engine and translate
+// proto requests/responses + sentinel errors at the edge.
+type Engine struct {
+	qs map[string]*Queue
+	ts map[string]*Task
+
+	qsMux sync.Mutex
+	tsMux sync.Mutex
+}
+
+// New creates a new engine with empty queue/task bookkeeping.
+func New() *Engine {
+	return &Engine{
+		qs: make(map[string]*Queue),
+		ts: make(map[string]*Task),
+	}
+}
+
+func (e *Engine) setQueue(queueName string, queue *Queue) {
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	e.qs[queueName] = queue
+}
+
+func (e *Engine) fetchQueue(queueName string) (*Queue, bool) {
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	queue, ok := e.qs[queueName]
+	return queue, ok
+}
+
+func (e *Engine) removeQueueEntry(queueName string) {
+	e.setQueue(queueName, nil)
+}
+
+func (e *Engine) setTask(taskName string, task *Task) {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	e.ts[taskName] = task
+}
+
+func (e *Engine) fetchTask(taskName string) (*Task, bool) {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	task, ok := e.ts[taskName]
+	return task, ok
+}
+
+func (e *Engine) removeTaskEntry(taskName string) {
+	e.setTask(taskName, nil)
+}
+
+func (e *Engine) hardDeleteTask(taskName string) {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	delete(e.ts, taskName)
+}
+
+// ListQueues returns all live queues.
+func (e *Engine) ListQueues() ([]*Queue, error) {
+	// TODO: Implement paging
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+
+	var queues []*Queue
+	for _, queue := range e.qs {
+		if queue != nil {
+			queues = append(queues, queue)
+		}
+	}
+	return queues, nil
+}
+
+// GetQueue returns the named queue.
+func (e *Engine) GetQueue(name string) (*Queue, error) {
+	queue, ok := e.fetchQueue(name)
+	// Cloud responds with the same error message whether the queue was recently deleted or never existed
+	if !ok || queue == nil {
+		return nil, ErrQueueNotFound
+	}
+	return queue, nil
+}
+
+// CreateQueue creates a new queue under the given parent.
+func (e *Engine) CreateQueue(parent string, queueState *tasks.Queue) (*Queue, error) {
+	name := queueState.GetName()
+	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", name)
+	if !nameMatched {
+		return nil, ErrInvalidQueueName
+	}
+	parentMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+", parent)
+	if !parentMatched {
+		return nil, ErrInvalidParent
+	}
+	existing, ok := e.fetchQueue(name)
+	if ok {
+		if existing != nil {
+			return nil, ErrQueueAlreadyExists
+		}
+		return nil, ErrQueueRecentlyDeleted
+	}
+
+	// Make a deep copy so that the original is frozen for the http response
+	queue, _ := newQueue(
+		name,
+		proto.Clone(queueState).(*tasks.Queue),
+		func(task *Task) {
+			e.removeTaskEntry(task.state.GetName())
+		},
+	)
+	e.setQueue(name, queue)
+	queue.Run()
+
+	return queue, nil
+}
+
+// DeleteQueue removes the named queue.
+func (e *Engine) DeleteQueue(name string) error {
+	queue, ok := e.fetchQueue(name)
+	if !ok || queue == nil {
+		return ErrQueueNotFound
+	}
+
+	queue.Delete()
+	e.removeQueueEntry(name)
+	return nil
+}
+
+// PurgeQueue purges the named queue. When hardReset is true, also releases
+// all task name handles so the names become reusable - this mirrors the
+// emulator's optional "development environment" behaviour rather than prod.
+func (e *Engine) PurgeQueue(name string, hardReset bool) (*Queue, error) {
+	queue, _ := e.fetchQueue(name)
+	// Pre-existing behaviour: no nil check on queue; tests do not exercise the missing-queue path here.
+	if hardReset {
+		e.hardResetQueue(queue)
+	} else {
+		queue.Purge()
+	}
+	return queue, nil
+}
+
+// hardResetQueue synchronously purges all tasks and releases their name handles.
+func (e *Engine) hardResetQueue(queue *Queue) {
+	waitGroup := queue.Purge()
+	waitGroup.Wait()
+
+	// This is still a bit awkward - we can't *guarantee* the task is fully deleted even after the WaitGroup because:
+	// - Purge() calls task.Delete()
+	// - task.Delete() writes to a buffered `cancel` channel
+	// - task.Schedule() reads from that buffered channel in a separate goroutine
+	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
+	//
+	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
+	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
+	// period to allow the tasks' internal goroutines to fire first.
+	time.Sleep(10 * time.Millisecond)
+
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
+	for taskName, task := range queue.ts {
+		if task != nil {
+			// The naive "sleep till it deletes" approach described above is too naive...
+			panic("Expected task to be deleted by now!")
+		}
+
+		delete(queue.ts, taskName)
+		e.hardDeleteTask(taskName)
+	}
+}
+
+// PauseQueue pauses queue dispatch.
+func (e *Engine) PauseQueue(name string) (*Queue, error) {
+	queue, _ := e.fetchQueue(name)
+	queue.Pause()
+	return queue, nil
+}
+
+// ResumeQueue resumes a paused queue.
+func (e *Engine) ResumeQueue(name string) (*Queue, error) {
+	queue, _ := e.fetchQueue(name)
+	queue.Resume()
+	return queue, nil
+}
+
+// ListTasks lists all tasks in the named queue.
+func (e *Engine) ListTasks(parent string) ([]*Task, error) {
+	// TODO: Implement paging
+	queue, ok := e.fetchQueue(parent)
+	if !ok || queue == nil {
+		return nil, ErrQueueNotFound
+	}
+
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
+
+	var taskList []*Task
+	for _, task := range queue.ts {
+		if task != nil {
+			taskList = append(taskList, task)
+		}
+	}
+	return taskList, nil
+}
+
+// GetTask returns the named task.
+func (e *Engine) GetTask(name string) (*Task, error) {
+	task, ok := e.fetchTask(name)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	if task == nil {
+		return nil, ErrTaskRecentlyDeleted
+	}
+	return task, nil
+}
+
+// CreateTask creates a new task on the queue identified by parent.
+// The returned *Task wraps the live engine state; the second return value is a frozen
+// proto snapshot suitable for returning to the caller without racing future mutations.
+func (e *Engine) CreateTask(parent string, taskState *tasks.Task) (*Task, *tasks.Task, error) {
+	queue, ok := e.fetchQueue(parent)
+	if !ok {
+		return nil, nil, ErrQueueNotFound
+	}
+	if queue == nil {
+		return nil, nil, ErrQueueRecentlyDeleted
+	}
+
+	if taskState.GetName() != "" {
+		// If a name is specified, it must be valid, it must be unique, and it must belong to this queue
+		if !isValidTaskName(taskState.GetName()) {
+			return nil, nil, ErrInvalidTaskName
+		}
+		if !strings.HasPrefix(taskState.GetName(), parent+"/tasks/") {
+			return nil, nil, ErrTaskQueueMismatch
+		}
+		if _, exists := e.fetchTask(taskState.GetName()); exists {
+			return nil, nil, ErrTaskAlreadyExists
+		}
+	}
+
+	task, frozenState := queue.NewTask(taskState)
+	e.setTask(frozenState.GetName(), task)
+	return task, frozenState, nil
+}
+
+// DeleteTask removes the named task.
+func (e *Engine) DeleteTask(name string) error {
+	task, ok := e.fetchTask(name)
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if task == nil {
+		// Cloud uses NotFound here, not FailedPrecondition - see emulator.go:307
+		return ErrTaskRecentlyDeleted
+	}
+
+	// The removal of the task from the engine map is handled via the queue's onTaskDone callback
+	task.Delete()
+	return nil
+}
+
+// RunTask executes a task immediately and returns its snapshotted state.
+func (e *Engine) RunTask(name string) (*Task, *tasks.Task, error) {
+	task, ok := e.fetchTask(name)
+	if !ok {
+		return nil, nil, ErrTaskNotFound
+	}
+	if task == nil {
+		return nil, nil, ErrTaskRecentlyDeleted
+	}
+	frozen := task.Run()
+	return task, frozen, nil
+}

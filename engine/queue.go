@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"log"
@@ -42,8 +42,8 @@ type Queue struct {
 	onTaskDone func(task *Task)
 }
 
-// NewQueue creates a new task queue
-func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Queue, *tasks.Queue) {
+// newQueue creates a new task queue
+func newQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Queue, *tasks.Queue) {
 	setInitialQueueState(state)
 
 	queue := &Queue{
@@ -65,6 +65,11 @@ func NewQueue(name string, state *tasks.Queue, onTaskDone func(task *Task)) (*Qu
 	}
 
 	return queue, state
+}
+
+// State returns the proto-backed queue state.
+func (q *Queue) State() *tasks.Queue {
+	return q.state
 }
 
 func (queue *Queue) setTask(taskName string, task *Task) {
@@ -185,7 +190,7 @@ func (queue *Queue) Run() {
 
 // NewTask creates a new task on the queue
 func (queue *Queue) NewTask(newTaskState *tasks.Task) (*Task, *tasks.Task) {
-	task := NewTask(queue, newTaskState, func(task *Task) {
+	task := newTask(queue, newTaskState, func(task *Task) {
 		queue.removeTask(task.state.GetName())
 		queue.onTaskDone(task)
 	})
@@ -233,35 +238,6 @@ func (queue *Queue) Purge() *sync.WaitGroup {
 	}()
 
 	return &waitGroup
-}
-
-// Goes beyond `Purge` behaviour to synchronously delete all tasks and their name handles
-func (queue *Queue) HardReset(s *Server) {
-	waitGroup := queue.Purge()
-	waitGroup.Wait()
-
-	// This is still a bit awkward - we can't *guarantee* the task is fully deleted even after the WaitGroup because:
-	// - Purge() calls task.Delete()
-	// - task.Delete() writes to a buffered `cancel` channel
-	// - task.Schedule() reads from that buffered channel in a separate goroutine
-	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
-	//
-	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
-	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
-	// period to allow the tasks' internal goroutines to fire first.
-	time.Sleep(10 * time.Millisecond)
-
-	queue.tsMux.Lock()
-	defer queue.tsMux.Unlock()
-	for taskName, task := range queue.ts {
-		if task != nil {
-			// The naive "sleep till it deletes" approach described above is too naive...
-			panic("Expected task to be deleted by now!")
-		}
-
-		delete(queue.ts, taskName)
-		s.hardDeleteTask(taskName)
-	}
 }
 
 // Pause pauses the queue

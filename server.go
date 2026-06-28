@@ -1,0 +1,171 @@
+package main
+
+import (
+	"context"
+
+	"github.com/aertje/cloud-tasks-emulator/engine"
+
+	"github.com/golang/protobuf/ptypes/empty"
+	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	v1 "google.golang.org/genproto/googleapis/iam/v1"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
+)
+
+// ServerOptions tunes runtime behaviour of the emulator server.
+type ServerOptions struct {
+	HardResetOnPurgeQueue bool
+}
+
+// Server is the gRPC CloudTasksServer implementation. It is a thin handler that
+// translates proto requests and responses on/off the engine.
+type Server struct {
+	engine  *engine.Engine
+	Options ServerOptions
+}
+
+// NewServer creates a new emulator server with its own engine and default options.
+func NewServer() *Server {
+	return &Server{
+		engine: engine.New(),
+		Options: ServerOptions{
+			HardResetOnPurgeQueue: false,
+		},
+	}
+}
+
+// ListQueues lists the existing queues
+func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*tasks.ListQueuesResponse, error) {
+	queues, err := s.engine.ListQueues()
+	if err != nil {
+		return nil, mapErr(err)
+	}
+
+	var queueStates []*tasks.Queue
+	for _, q := range queues {
+		queueStates = append(queueStates, q.State())
+	}
+	return &tasks.ListQueuesResponse{Queues: queueStates}, nil
+}
+
+// GetQueue returns the requested queue
+func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
+	q, err := s.engine.GetQueue(in.GetName())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return q.State(), nil
+}
+
+// CreateQueue creates a new queue
+func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) (*tasks.Queue, error) {
+	q, err := s.engine.CreateQueue(in.GetParent(), in.GetQueue())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return q.State(), nil
+}
+
+// UpdateQueue updates an existing queue (not implemented yet)
+func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) (*tasks.Queue, error) {
+	return nil, mapErr(engine.ErrUnimplemented)
+}
+
+// DeleteQueue removes an existing queue.
+func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*empty.Empty, error) {
+	if err := s.engine.DeleteQueue(in.GetName()); err != nil {
+		return nil, mapErrForDeleteQueue(err)
+	}
+	return &empty.Empty{}, nil
+}
+
+// PurgeQueue purges the specified queue
+func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
+	q, err := s.engine.PurgeQueue(in.GetName(), s.Options.HardResetOnPurgeQueue)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return q.State(), nil
+}
+
+// PauseQueue pauses queue execution
+func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*tasks.Queue, error) {
+	q, err := s.engine.PauseQueue(in.GetName())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return q.State(), nil
+}
+
+// ResumeQueue resumes a paused queue
+func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) (*tasks.Queue, error) {
+	q, err := s.engine.ResumeQueue(in.GetName())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return q.State(), nil
+}
+
+// GetIamPolicy doesn't do anything
+func (s *Server) GetIamPolicy(ctx context.Context, in *v1.GetIamPolicyRequest) (*v1.Policy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
+}
+
+// SetIamPolicy doesn't do anything
+func (s *Server) SetIamPolicy(ctx context.Context, in *v1.SetIamPolicyRequest) (*v1.Policy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
+}
+
+// TestIamPermissions doesn't do anything
+func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissionsRequest) (*v1.TestIamPermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
+}
+
+// ListTasks lists the tasks in the specified queue
+func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
+	taskList, err := s.engine.ListTasks(in.GetParent())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+
+	var taskStates []*tasks.Task
+	for _, t := range taskList {
+		taskStates = append(taskStates, t.State())
+	}
+	return &tasks.ListTasksResponse{Tasks: taskStates}, nil
+}
+
+// GetTask returns the specified task
+func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
+	t, err := s.engine.GetTask(in.GetName())
+	if err != nil {
+		return nil, mapErrForGetTask(err)
+	}
+	return t.State(), nil
+}
+
+// CreateTask creates a new task
+func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*tasks.Task, error) {
+	_, frozenState, err := s.engine.CreateTask(in.GetParent(), in.GetTask())
+	if err != nil {
+		return nil, mapErrForCreateTask(err, in)
+	}
+	return frozenState, nil
+}
+
+// DeleteTask removes an existing task
+func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*empty.Empty, error) {
+	if err := s.engine.DeleteTask(in.GetName()); err != nil {
+		return nil, mapErr(err)
+	}
+	return &empty.Empty{}, nil
+}
+
+// RunTask executes an existing task immediately
+func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.Task, error) {
+	_, frozenState, err := s.engine.RunTask(in.GetName())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return frozenState, nil
+}

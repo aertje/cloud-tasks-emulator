@@ -1,0 +1,180 @@
+[
+  {
+    "name": "queue/create/already-exists",
+    "rpc": "CreateQueue",
+    "category": "queue-already-exists",
+    "code": "AlreadyExists",
+    "template": "Queue already exists",
+    "stable": false
+  },
+  {
+    "name": "queue/create/invalid-name",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-name",
+    "code": "InvalidArgument",
+    "template": "Queue name must be formatted: \"projects/\u003cPROJECT_ID\u003e/locations/\u003cLOCATION_ID\u003e/queues/\u003cQUEUE_ID\u003e\".",
+    "details": [
+      {
+        "type": "*errdetails.Help",
+        "template": "links:{description:\"Definition of queue name\"  url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues#Queue.FIELDS.name\"}"
+      }
+    ],
+    "stable": true
+  },
+  {
+    "name": "queue/create/invalid-parent",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-parent",
+    "code": "PermissionDenied",
+    "template": "Permission denied on resource project not-a-valid-parent.",
+    "details": [
+      {
+        "type": "*errdetails.ErrorInfo",
+        "template": "reason:\"CONSUMER_INVALID\"  domain:\"googleapis.com\"  metadata:{key:\"consumer\"  value:\"projects/not-a-valid-parent\"}  metadata:{key:\"containerInfo\"  value:\"not-a-valid-parent\"}  metadata:{key:\"service\"  value:\"cloudtasks.googleapis.com\"}"
+      },
+      {
+        "type": "*errdetails.LocalizedMessage",
+        "template": "locale:\"en-US\"  message:\"Permission denied on resource project not-a-valid-parent.\""
+      },
+      {
+        "type": "*errdetails.Help",
+        "template": "links:{description:\"Google developers console\"  url:\"https://console.developers.google.com\"}"
+      }
+    ],
+    "stable": true
+  },
+  {
+    "name": "queue/create/recently-deleted",
+    "rpc": "CreateQueue",
+    "category": "queue-recently-deleted",
+    "code": "FailedPrecondition",
+    "template": "The queue cannot be created because a queue with this name existed too recently.",
+    "stable": true
+  },
+  {
+    "name": "queue/delete/not-found",
+    "rpc": "DeleteQueue",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Requested entity was not found.",
+    "stable": true
+  },
+  {
+    "name": "queue/get/not-found",
+    "rpc": "GetQueue",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "queue/get/recently-deleted",
+    "rpc": "GetQueue",
+    "category": "queue-recently-deleted",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "queue/pause/not-found",
+    "rpc": "PauseQueue",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "queue/purge/not-found",
+    "rpc": "PurgeQueue",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "queue/resume/not-found",
+    "rpc": "ResumeQueue",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/create/already-exists",
+    "rpc": "CreateTask",
+    "category": "task-already-exists",
+    "code": "AlreadyExists",
+    "template": "Requested entity already exists",
+    "stable": true
+  },
+  {
+    "name": "task/create/invalid-name",
+    "rpc": "CreateTask",
+    "category": "task-invalid-name",
+    "code": "InvalidArgument",
+    "template": "Task ID \"not a valid id\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+    "details": [
+      {
+        "type": "*errdetails.Help",
+        "template": "links:{description:\"Definition of task ID\"  url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name\"}"
+      }
+    ],
+    "stable": true
+  },
+  {
+    "name": "task/create/queue-mismatch",
+    "rpc": "CreateTask",
+    "category": "task-queue-mismatch",
+    "code": "InvalidArgument",
+    "template": "The queue name from request ('{queue_path}') must be the same as the queue name in the named task ('{queue_path}-other').",
+    "stable": true
+  },
+  {
+    "name": "task/create/queue-not-found",
+    "rpc": "CreateTask",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/create/queue-recently-deleted",
+    "rpc": "CreateTask",
+    "category": "queue-recently-deleted",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/delete/not-found",
+    "rpc": "DeleteTask",
+    "category": "task-not-found",
+    "code": "NotFound",
+    "template": "Requested entity was not found.",
+    "stable": true
+  },
+  {
+    "name": "task/get/not-found",
+    "rpc": "GetTask",
+    "category": "task-not-found",
+    "code": "NotFound",
+    "template": "Requested entity was not found.",
+    "stable": true
+  },
+  {
+    "name": "task/get/recently-deleted",
+    "rpc": "GetTask",
+    "category": "task-recently-deleted",
+    "code": "NotFound",
+    "template": "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.",
+    "stable": true
+  },
+  {
+    "name": "task/run/not-found",
+    "rpc": "RunTask",
+    "category": "task-not-found",
+    "code": "NotFound",
+    "template": "Requested entity was not found.",
+    "stable": true
+  }
+]

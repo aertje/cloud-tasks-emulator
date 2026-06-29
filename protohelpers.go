@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/engine"
@@ -311,11 +312,12 @@ func mapErr(err error) error {
 	case engine.ErrQueueAlreadyExists:
 		return status.Errorf(codes.AlreadyExists, "Queue already exists")
 	case engine.ErrInvalidQueueName:
-		return status.Errorf(codes.InvalidArgument, `Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>"`)
+		return status.Errorf(codes.InvalidArgument, `Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>".`)
 	case engine.ErrInvalidParent:
 		return status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
 	case engine.ErrTaskNotFound:
-		return status.Errorf(codes.NotFound, "Task does not exist.")
+		// GetTask/DeleteTask/RunTask all report a missing task with this generic message.
+		return status.Errorf(codes.NotFound, "Requested entity was not found.")
 	case engine.ErrTaskRecentlyDeleted:
 		return status.Errorf(codes.NotFound, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
 	case engine.ErrTaskAlreadyExists:
@@ -338,30 +340,38 @@ func mapErrForDeleteQueue(err error) error {
 	return mapErr(err)
 }
 
-// CreateTask uses a shorter queue-not-found message and treats the
-// recently-deleted case as FailedPrecondition. It also formats the mismatch
-// error with the offending names from the request.
+// CreateQueue is the one RPC that distinguishes a recently-deleted queue from a
+// missing one: re-creating a name still under its post-deletion cooldown fails
+// with FailedPrecondition rather than the generic not-found. Every other queue
+// RPC (and CreateTask) collapses recently-deleted into plain not-found.
+func mapErrForCreateQueue(err error) error {
+	if err == engine.ErrQueueRecentlyDeleted {
+		return status.Errorf(codes.FailedPrecondition, "The queue cannot be created because a queue with this name existed too recently.")
+	}
+	return mapErr(err)
+}
+
+// CreateTask treats a missing or recently-deleted queue identically to GetQueue
+// (the generic queue-not-found message, via mapErr). It only needs a bespoke
+// case for the task-name/parent mismatch, whose message names the request
+// parent and the queue embedded in the task name.
 func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
-	switch err {
-	case engine.ErrQueueNotFound:
-		return status.Errorf(codes.NotFound, "Queue does not exist.")
-	case engine.ErrQueueRecentlyDeleted:
-		return status.Errorf(codes.FailedPrecondition, "The queue no longer exists, though a queue with this name existed recently.")
-	case engine.ErrTaskQueueMismatch:
+	if err == engine.ErrTaskQueueMismatch {
 		return status.Errorf(codes.InvalidArgument,
 			"The queue name from request ('%s') must be the same as the queue name in the named task ('%s').",
-			in.GetTask().GetName(),
 			in.GetParent(),
+			queueNameFromTaskName(in.GetTask().GetName()),
 		)
 	}
 	return mapErr(err)
 }
 
-// GetTask reports the recently-deleted case as FailedPrecondition, unlike
-// DeleteTask/RunTask which use NotFound (the default).
-func mapErrForGetTask(err error) error {
-	if err == engine.ErrTaskRecentlyDeleted {
-		return status.Errorf(codes.FailedPrecondition, "The task no longer exists, though a task with this name existed recently. The task either successfully completed or was deleted.")
+// queueNameFromTaskName strips the "/tasks/<id>" suffix off a task resource
+// name, yielding the queue it belongs to. Returns the input unchanged if it has
+// no task segment.
+func queueNameFromTaskName(taskName string) string {
+	if i := strings.LastIndex(taskName, "/tasks/"); i >= 0 {
+		return taskName[:i]
 	}
-	return mapErr(err)
+	return taskName
 }

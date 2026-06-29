@@ -318,7 +318,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 	// Wait a moment for that to work, then verify nothing in the list and cannot retrieve by name
 	time.Sleep(100 * time.Millisecond)
 	assertTaskListIsEmpty(t, client, createdQueue)
-	assertGetTaskFails(t, grpcCodes.FailedPrecondition, client, createdTask.GetName())
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
 
 	// BUT - Verify that the task name is still not available for new tasks
 	_, err = client.CreateTask(context.Background(), &createTaskRequest)

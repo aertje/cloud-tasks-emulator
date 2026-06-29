@@ -160,8 +160,10 @@ func (e *Engine) DeleteQueue(name string) error {
 // mirrors the emulator's optional development-environment behaviour rather
 // than production Cloud Tasks.
 func (e *Engine) PurgeQueue(name string) (*Queue, error) {
-	queue, _ := e.fetchQueue(name)
-	// Pre-existing behaviour: no nil check on queue; tests do not exercise the missing-queue path here.
+	queue, ok := e.fetchQueue(name)
+	if !ok || queue == nil {
+		return nil, ErrQueueNotFound
+	}
 	if e.opts.HardResetOnPurgeQueue {
 		e.hardResetQueue(queue)
 	} else {
@@ -201,14 +203,20 @@ func (e *Engine) hardResetQueue(queue *Queue) {
 
 // PauseQueue pauses queue dispatch.
 func (e *Engine) PauseQueue(name string) (*Queue, error) {
-	queue, _ := e.fetchQueue(name)
+	queue, ok := e.fetchQueue(name)
+	if !ok || queue == nil {
+		return nil, ErrQueueNotFound
+	}
 	queue.Pause()
 	return queue, nil
 }
 
 // ResumeQueue resumes a paused queue.
 func (e *Engine) ResumeQueue(name string) (*Queue, error) {
-	queue, _ := e.fetchQueue(name)
+	queue, ok := e.fetchQueue(name)
+	if !ok || queue == nil {
+		return nil, ErrQueueNotFound
+	}
 	queue.Resume()
 	return queue, nil
 }

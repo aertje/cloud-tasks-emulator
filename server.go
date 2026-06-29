@@ -61,7 +61,7 @@ func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*task
 func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) (*tasks.Queue, error) {
 	q, err := s.engine.CreateQueue(in.GetParent(), queueFromProto(in.GetQueue()))
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrForCreateQueue(err)
 	}
 	return queueToProto(q.State()), nil
 }
@@ -139,7 +139,7 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
 	t, err := s.engine.GetTask(in.GetName())
 	if err != nil {
-		return nil, mapErrForGetTask(err)
+		return nil, mapErr(err)
 	}
 	return taskToProto(t.State()), nil
 }

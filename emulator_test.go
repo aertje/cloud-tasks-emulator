@@ -19,11 +19,13 @@ import (
 	. "cloud.google.com/go/cloudtasks/apiv2"
 	. "github.com/aertje/cloud-tasks-emulator"
 	"github.com/aertje/cloud-tasks-emulator/engine"
+	"github.com/golang/protobuf/ptypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpcCodes "google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
@@ -198,6 +200,41 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 	assertIsGrpcError(t, "^Task name must be formatted", grpcCodes.InvalidArgument, err)
 }
 
+func TestCreateTaskRejectsInvalidTaskID(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			// Structurally a valid task name, but the ID contains spaces - a
+			// different failure from a wholly malformed name (see above).
+			Name: createdQueue.GetName() + "/tasks/not a valid id",
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://www.google.com",
+				},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, createdTask)
+	assertIsGrpcError(t, `^Task ID "not a valid id" can contain only`, grpcCodes.InvalidArgument, err)
+
+	// Real Cloud Tasks attaches a Help detail pointing at the task-name field.
+	rsp, _ := grpcStatus.FromError(err)
+	require.Len(t, rsp.Details(), 1)
+	help, ok := rsp.Details()[0].(*errdetails.Help)
+	require.True(t, ok, "detail should be a Help")
+	require.Len(t, help.GetLinks(), 1)
+	assert.Equal(t, "Definition of task ID", help.GetLinks()[0].GetDescription())
+}
+
 func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)
@@ -221,6 +258,44 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 
 	assert.Nil(t, createdTask)
 	assertIsGrpcError(t, "^The queue name from request", grpcCodes.InvalidArgument, err)
+}
+
+func TestDeleteTaskTombstonesName(t *testing.T) {
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	// Schedule the task well into the future so it never dispatches; the test is
+	// purely about delete semantics, not execution.
+	scheduleTime, err := ptypes.TimestampProto(time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name:         createdQueue.GetName() + "/tasks/to-be-deleted",
+			ScheduleTime: scheduleTime,
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success",
+				},
+			},
+		},
+	}
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	err = client.DeleteTask(context.Background(), &taskspb.DeleteTaskRequest{Name: createdTask.GetName()})
+	require.NoError(t, err)
+
+	// A GetTask immediately after the delete must observe the tombstone, not the
+	// task, and re-creating the name must report it as still reserved.
+	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
+
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
 }
 
 func TestGetQueueExists(t *testing.T) {

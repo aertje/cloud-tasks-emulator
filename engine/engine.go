@@ -266,9 +266,16 @@ func (e *Engine) CreateTask(parent string, ts TaskState) (*Task, TaskState, erro
 	}
 
 	if ts.Name != "" {
-		// If a name is specified, it must be valid, it must be unique, and it must belong to this queue
-		if !isValidTaskName(ts.Name) {
+		// If a name is specified, it must be structurally a task resource name,
+		// its task ID must be valid, it must belong to this queue, and it must
+		// be unique. A malformed name and a well-formed name carrying an illegal
+		// task ID are distinct errors (real Cloud Tasks reports them differently).
+		taskID, structured := splitTaskName(ts.Name)
+		if !structured {
 			return nil, TaskState{}, ErrInvalidTaskName
+		}
+		if !isValidTaskID(taskID) {
+			return nil, TaskState{}, ErrInvalidTaskID
 		}
 		if !strings.HasPrefix(ts.Name, parent+"/tasks/") {
 			return nil, TaskState{}, ErrTaskQueueMismatch
@@ -290,12 +297,18 @@ func (e *Engine) DeleteTask(name string) error {
 		return ErrTaskNotFound
 	}
 	if task == nil {
-		// Cloud uses NotFound here, not FailedPrecondition - see emulator.go:307
+		// Cloud uses NotFound here, not FailedPrecondition.
 		return ErrTaskRecentlyDeleted
 	}
 
-	// The removal of the task from the engine map is handled via the queue's onTaskDone callback
+	// Cancel any pending dispatch, then tombstone the name synchronously so a
+	// GetTask immediately following the delete observes it: real Cloud Tasks
+	// reports a recently-deleted task as NotFound and keeps the name reserved.
+	// The task's onDone callback may also run later; setting the tombstone (a
+	// nil map entry) is idempotent, so the two paths don't conflict.
 	task.Delete()
+	task.queue.removeTask(name)
+	e.removeTaskEntry(name)
 	return nil
 }
 

@@ -11,7 +11,19 @@ import (
 	"time"
 )
 
-var taskNameRE *regexp.Regexp
+var (
+	taskNameRE *regexp.Regexp
+
+	// taskNameStructureRE matches the resource-name shape of a task without
+	// constraining the task-ID charset: the trailing capture is the task ID,
+	// validated separately by taskIDRE. This lets a structurally-valid name
+	// carrying an illegal ID be told apart from a malformed name - real Cloud
+	// Tasks reports those two cases with different messages.
+	taskNameStructureRE = regexp.MustCompile(`^projects/[a-zA-Z0-9:.-]+/locations/[a-zA-Z0-9-]+/queues/[a-zA-Z0-9-]+/tasks/(.+)$`)
+
+	// taskIDRE matches a syntactically valid task ID.
+	taskIDRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,500}$`)
+)
 
 func init() {
 	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
@@ -28,8 +40,20 @@ func parseTaskName(name string) TaskNameParts {
 	}
 }
 
-func isValidTaskName(name string) bool {
-	return taskNameRE.MatchString(name)
+// splitTaskName returns the task-ID segment of a task resource name and whether
+// the name has the required projects/.../queues/.../tasks/<id> structure. The
+// ID is returned even when it contains illegal characters so the caller can
+// report the offending value; validate it with isValidTaskID.
+func splitTaskName(name string) (taskID string, structured bool) {
+	m := taskNameStructureRE.FindStringSubmatch(name)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+func isValidTaskID(id string) bool {
+	return taskIDRE.MatchString(id)
 }
 
 type TaskNameParts struct {

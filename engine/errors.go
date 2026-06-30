@@ -13,6 +13,7 @@ var (
 	ErrTaskRecentlyDeleted = errors.New("task recently deleted")
 	ErrTaskAlreadyExists   = errors.New("task already exists")
 	ErrInvalidTaskName     = errors.New("invalid task name")
+	ErrInvalidTaskID       = errors.New("invalid task id")
 	ErrTaskQueueMismatch   = errors.New("task name does not belong to queue")
 
 	ErrUnimplemented = errors.New("not yet implemented")

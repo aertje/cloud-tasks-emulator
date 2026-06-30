@@ -92,10 +92,6 @@ unfaithful for reasons beyond message mapping (real behaviour gaps we've
 deferred). The validation test reports these as `KNOWN` instead of failing, and
 fails if one starts matching (so the entry gets removed). Current entries:
 
-- `task/create/invalid-name` — the engine doesn't validate task-ID format, so it
-  accepts IDs real Cloud Tasks rejects (`InvalidArgument` + a `Help` detail).
-- `task/get/recently-deleted` — a singly-deleted task isn't tombstoned, so
-  `GetTask` returns it instead of `NotFound`. (Purge tombstoning does work.)
 - `queue/create/invalid-parent` — real resolves any parent string to a project
   and returns `PermissionDenied` via IAM; the emulator has no project/IAM concept
   and returns `InvalidArgument`. Not reproducible by design.

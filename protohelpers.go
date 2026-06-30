@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -374,15 +375,28 @@ func mapErrForCreateQueue(err error) error {
 }
 
 // CreateTask treats a missing or recently-deleted queue identically to GetQueue
-// (the generic queue-not-found message, via mapErr). It only needs a bespoke
-// case for the task-name/parent mismatch, whose message names the request
-// parent and the queue embedded in the task name.
+// (the generic queue-not-found message, via mapErr). It needs bespoke cases for
+// the errors whose messages interpolate request values: the task-name/parent
+// mismatch (naming the request parent and the queue in the task name) and an
+// invalid task ID (naming the offending ID, plus a Help detail).
 func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
-	if err == engine.ErrTaskQueueMismatch {
+	switch err {
+	case engine.ErrTaskQueueMismatch:
 		return status.Errorf(codes.InvalidArgument,
 			"The queue name from request ('%s') must be the same as the queue name in the named task ('%s').",
 			in.GetParent(),
 			queueNameFromTaskName(in.GetTask().GetName()),
+		)
+	case engine.ErrInvalidTaskID:
+		// The message names the offending task ID; real Cloud Tasks also
+		// attaches a Help detail pointing at the task-name field definition.
+		msg := fmt.Sprintf(
+			`Task ID "%s" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.`,
+			taskIDFromTaskName(in.GetTask().GetName()),
+		)
+		return statusWithHelp(codes.InvalidArgument, msg,
+			"Definition of task ID",
+			"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name",
 		)
 	}
 	return mapErr(err)
@@ -394,6 +408,15 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 func queueNameFromTaskName(taskName string) string {
 	if i := strings.LastIndex(taskName, "/tasks/"); i >= 0 {
 		return taskName[:i]
+	}
+	return taskName
+}
+
+// taskIDFromTaskName returns the task-ID segment of a task resource name (the
+// part after "/tasks/"), or the input unchanged if it has no task segment.
+func taskIDFromTaskName(taskName string) string {
+	if i := strings.LastIndex(taskName, "/tasks/"); i >= 0 {
+		return taskName[i+len("/tasks/"):]
 	}
 	return taskName
 }

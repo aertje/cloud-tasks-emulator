@@ -62,8 +62,13 @@ go test -tags conformance ./...
 ```
 
 The test builds and starts the emulator (from the parent module) on a free port,
-replays the battery, and reports every code/template that differs from the
-golden. It skips if no golden snapshot is present.
+replays the battery, and reports every status code, message template or error
+detail that differs from the golden. It skips if no golden snapshot is present.
+
+Error details (the `*errdetails.*` payloads Cloud Tasks attaches to some errors,
+e.g. a `Help` link on an invalid-name `InvalidArgument`) are compared as part of
+the contract. Their text is prototext, whose field separator is deliberately
+unstable, so the comparison collapses whitespace before diffing.
 
 To eyeball the emulator's current behaviour without a golden:
 

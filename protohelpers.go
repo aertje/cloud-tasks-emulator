@@ -10,6 +10,7 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	ptimestamp "github.com/golang/protobuf/ptypes/timestamp"
 	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -312,7 +313,13 @@ func mapErr(err error) error {
 	case engine.ErrQueueAlreadyExists:
 		return status.Errorf(codes.AlreadyExists, "Queue already exists")
 	case engine.ErrInvalidQueueName:
-		return status.Errorf(codes.InvalidArgument, `Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>".`)
+		// Real Cloud Tasks attaches a Help detail pointing at the queue-name
+		// field definition; conformance validates it (see conformance/golden).
+		return statusWithHelp(codes.InvalidArgument,
+			`Queue name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>".`,
+			"Definition of queue name",
+			"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues#Queue.FIELDS.name",
+		)
 	case engine.ErrInvalidParent:
 		return status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
 	case engine.ErrTaskNotFound:
@@ -329,6 +336,21 @@ func mapErr(err error) error {
 	default:
 		return status.Errorf(codes.Internal, "unmapped engine error: %v", err)
 	}
+}
+
+// statusWithHelp builds an error with a single Help detail (a description plus a
+// documentation link), matching the detail real Cloud Tasks attaches to some
+// InvalidArgument responses. If attaching the detail fails it degrades to a
+// plain status so callers always get a usable error.
+func statusWithHelp(code codes.Code, msg, linkDesc, linkURL string) error {
+	st := status.New(code, msg)
+	withDetails, err := st.WithDetails(&errdetails.Help{
+		Links: []*errdetails.Help_Link{{Description: linkDesc, Url: linkURL}},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
 }
 
 // DeleteQueue collapses missing/recently-deleted into a single short message.

@@ -5,7 +5,7 @@
     "category": "queue-already-exists",
     "code": "AlreadyExists",
     "template": "Queue already exists",
-    "stable": false
+    "stable": true
   },
   {
     "name": "queue/create/invalid-name",

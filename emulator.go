@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"

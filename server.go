@@ -5,11 +5,11 @@ import (
 
 	"github.com/aertje/cloud-tasks-emulator/engine"
 
-	"github.com/golang/protobuf/ptypes/empty"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
-	v1 "google.golang.org/genproto/googleapis/iam/v1"
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // ServerOptions tunes runtime behaviour of the emulator server.
@@ -72,11 +72,11 @@ func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) 
 }
 
 // DeleteQueue removes an existing queue.
-func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*empty.Empty, error) {
+func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*emptypb.Empty, error) {
 	if err := s.engine.DeleteQueue(in.GetName()); err != nil {
 		return nil, mapErrForDeleteQueue(err)
 	}
-	return &empty.Empty{}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // PurgeQueue purges the specified queue
@@ -107,17 +107,17 @@ func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) 
 }
 
 // GetIamPolicy doesn't do anything
-func (s *Server) GetIamPolicy(ctx context.Context, in *v1.GetIamPolicyRequest) (*v1.Policy, error) {
+func (s *Server) GetIamPolicy(ctx context.Context, in *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // SetIamPolicy doesn't do anything
-func (s *Server) SetIamPolicy(ctx context.Context, in *v1.SetIamPolicyRequest) (*v1.Policy, error) {
+func (s *Server) SetIamPolicy(ctx context.Context, in *iampb.SetIamPolicyRequest) (*iampb.Policy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
 // TestIamPermissions doesn't do anything
-func (s *Server) TestIamPermissions(ctx context.Context, in *v1.TestIamPermissionsRequest) (*v1.TestIamPermissionsResponse, error) {
+func (s *Server) TestIamPermissions(ctx context.Context, in *iampb.TestIamPermissionsRequest) (*iampb.TestIamPermissionsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "Not yet implemented")
 }
 
@@ -154,11 +154,11 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 }
 
 // DeleteTask removes an existing task
-func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*empty.Empty, error) {
+func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*emptypb.Empty, error) {
 	if err := s.engine.DeleteTask(in.GetName()); err != nil {
 		return nil, mapErr(err)
 	}
-	return &empty.Empty{}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // RunTask executes an existing task immediately

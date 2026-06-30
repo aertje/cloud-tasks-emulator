@@ -14,21 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 
 	. "cloud.google.com/go/cloudtasks/apiv2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	. "github.com/aertje/cloud-tasks-emulator"
 	"github.com/aertje/cloud-tasks-emulator/engine"
-	"github.com/golang/protobuf/ptypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpcCodes "google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var formattedParent = formatParent("TestProject", "TestLocation")
@@ -269,8 +269,7 @@ func TestDeleteTaskTombstonesName(t *testing.T) {
 
 	// Schedule the task well into the future so it never dispatches; the test is
 	// purely about delete semantics, not execution.
-	scheduleTime, err := ptypes.TimestampProto(time.Now().Add(time.Hour))
-	require.NoError(t, err)
+	scheduleTime := timestamppb.New(time.Now().Add(time.Hour))
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -751,7 +750,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	claims := token.Claims.(*engine.OpenIDConnectClaims)
-	assert.Equal(t, "http://localhost:5000/success?foo=bar", claims.Audience, "Specifies audience")
+	assert.Equal(t, jwt.ClaimStrings{"http://localhost:5000/success?foo=bar"}, claims.Audience, "Specifies audience")
 	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
 }

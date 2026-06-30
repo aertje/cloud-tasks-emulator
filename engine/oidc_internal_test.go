@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +20,7 @@ func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 
 	claims := token.Claims.(*OpenIDConnectClaims)
 
-	assert.Equal(t, "http://my.service/foo?bar=v", claims.Audience, "Specifies audience")
+	assert.Equal(t, jwt.ClaimStrings{"http://my.service/foo?bar=v"}, claims.Audience, "Specifies audience")
 	assert.Equal(t, config.IssuerURL, claims.Issuer, "Specifies issuer")
 	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
 	assert.Equal(t, "foobar@service.com", claims.Subject, "Specifies subject")
@@ -41,7 +41,7 @@ func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
 
 	claims := token.Claims.(*OpenIDConnectClaims)
 
-	assert.Equal(t, "http://my.api", claims.Audience, "Specifies audience")
+	assert.Equal(t, jwt.ClaimStrings{"http://my.api"}, claims.Audience, "Specifies audience")
 	assert.Equal(t, config.IssuerURL, claims.Issuer, "Specifies issuer")
 	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
 	assert.True(t, claims.EmailVerified, "Specifies email")
@@ -66,12 +66,12 @@ func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func assertRoughTimestamp(t *testing.T, expectOffset time.Duration, timestamp int64, msg string) {
+func assertRoughTimestamp(t *testing.T, expectOffset time.Duration, timestamp *jwt.NumericDate, msg string) {
 	// Ensures that the timestamp is roughly correct, and that it is *less* than
 	// the expected value. So e.g. a timestamp that should be 5 minutes in the
 	// future might be slightly under due to the clock ticking since creation,
 	// but it should not be over.
-	actual := time.Unix(timestamp, 0)
+	actual := timestamp.Time
 	expect := time.Now().Add(expectOffset)
 	assert.WithinDuration(t, expect, actual, 1*time.Second, msg)
 	assert.LessOrEqual(t, expect.Unix(), actual.Unix(), msg+"(must be less than expected)")

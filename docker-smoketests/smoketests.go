@@ -15,11 +15,11 @@ import (
 	"time"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
-	"github.com/golang-jwt/jwt"
-	"github.com/lestrrat-go/jwx/jwk"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
 	"google.golang.org/grpc"
 )
 
@@ -27,7 +27,7 @@ import (
 type OpenIDConnectClaims struct {
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 func runTaskHttpServer(listenAddr string) <-chan *http.Request {
@@ -151,23 +151,26 @@ func readRequestBody(req *http.Request) string {
 }
 
 func getUnverifiedIssuerFromJWT(tokenStr string) string {
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &jwt.StandardClaims{})
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &jwt.RegisteredClaims{})
 	fatalIfError(err)
-	claims := token.Claims.(*jwt.StandardClaims)
+	claims := token.Claims.(*jwt.RegisteredClaims)
 	return claims.Issuer
 }
 
-func parseOpenIDConnectToken(tokenStr string, keySet *jwk.Set) (*jwt.Token, *OpenIDConnectClaims) {
+func parseOpenIDConnectToken(tokenStr string, keySet jwk.Set) (*jwt.Token, *OpenIDConnectClaims) {
 
 	token, err := new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&OpenIDConnectClaims{},
 		func(token *jwt.Token) (interface{}, error) {
 			keyId := token.Header["kid"].(string)
-			keys := keySet.LookupKeyID(keyId)
+			jwkKey, ok := keySet.LookupKeyID(keyId)
+			if !ok {
+				return nil, fmt.Errorf("no key found for kid %q", keyId)
+			}
 
 			var key rsa.PublicKey
-			err := keys[0].Raw(&key)
+			err := jwkKey.Raw(&key)
 
 			return &key, err
 		},
@@ -238,7 +241,7 @@ func main() {
 	discovery := fetchJsonFromUrl(issuer + "/.well-known/openid-configuration")
 
 	jwks_uri := discovery["jwks_uri"].(string)
-	keySet, err := jwk.Fetch(jwks_uri)
+	keySet, err := jwk.Fetch(context.Background(), jwks_uri)
 	fatalIfError(err)
 	log.Printf("Retrieved issuer keys from %v", jwks_uri)
 

@@ -8,13 +8,13 @@ import (
 
 	"github.com/aertje/cloud-tasks-emulator/engine"
 
-	"github.com/golang/protobuf/ptypes"
-	ptimestamp "github.com/golang/protobuf/ptypes/timestamp"
-	tasks "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // queueFromProto maps the subset of *tasks.Queue fields that the engine cares
@@ -38,10 +38,10 @@ func queueFromProto(q *tasks.Queue) engine.QueueState {
 			MaxDoublings: rc.GetMaxDoublings(),
 		}
 		if rc.GetMinBackoff() != nil {
-			s.RetryConfig.MinBackoff, _ = ptypes.Duration(rc.GetMinBackoff())
+			s.RetryConfig.MinBackoff = rc.GetMinBackoff().AsDuration()
 		}
 		if rc.GetMaxBackoff() != nil {
-			s.RetryConfig.MaxBackoff, _ = ptypes.Duration(rc.GetMaxBackoff())
+			s.RetryConfig.MaxBackoff = rc.GetMaxBackoff().AsDuration()
 		}
 	}
 	return s
@@ -59,8 +59,8 @@ func queueToProto(s engine.QueueState) *tasks.Queue {
 		RetryConfig: &tasks.RetryConfig{
 			MaxAttempts:  s.RetryConfig.MaxAttempts,
 			MaxDoublings: s.RetryConfig.MaxDoublings,
-			MinBackoff:   ptypes.DurationProto(s.RetryConfig.MinBackoff),
-			MaxBackoff:   ptypes.DurationProto(s.RetryConfig.MaxBackoff),
+			MinBackoff:   durationpb.New(s.RetryConfig.MinBackoff),
+			MaxBackoff:   durationpb.New(s.RetryConfig.MaxBackoff),
 		},
 	}
 }
@@ -100,13 +100,13 @@ func taskFromProto(t *tasks.Task) engine.TaskState {
 		ResponseCount: t.GetResponseCount(),
 	}
 	if ct := t.GetCreateTime(); ct != nil {
-		s.CreateTime, _ = ptypes.Timestamp(ct)
+		s.CreateTime = ct.AsTime()
 	}
 	if st := t.GetScheduleTime(); st != nil {
-		s.ScheduleTime, _ = ptypes.Timestamp(st)
+		s.ScheduleTime = st.AsTime()
 	}
 	if dd := t.GetDispatchDeadline(); dd != nil {
-		s.DispatchDeadline, _ = ptypes.Duration(dd)
+		s.DispatchDeadline = dd.AsDuration()
 	}
 	if fa := t.GetFirstAttempt(); fa != nil {
 		s.FirstAttempt = attemptFromProto(fa)
@@ -162,7 +162,7 @@ func taskToProto(s engine.TaskState) *tasks.Task {
 		t.ScheduleTime = timestampToProto(s.ScheduleTime)
 	}
 	if s.DispatchDeadline != 0 {
-		t.DispatchDeadline = ptypes.DurationProto(s.DispatchDeadline)
+		t.DispatchDeadline = durationpb.New(s.DispatchDeadline)
 	}
 	if s.FirstAttempt != nil {
 		t.FirstAttempt = attemptToProto(s.FirstAttempt)
@@ -209,13 +209,13 @@ func taskToProto(s engine.TaskState) *tasks.Task {
 func attemptFromProto(a *tasks.Attempt) *engine.Attempt {
 	out := &engine.Attempt{}
 	if a.GetScheduleTime() != nil {
-		out.ScheduleTime, _ = ptypes.Timestamp(a.GetScheduleTime())
+		out.ScheduleTime = a.GetScheduleTime().AsTime()
 	}
 	if a.GetDispatchTime() != nil {
-		out.DispatchTime, _ = ptypes.Timestamp(a.GetDispatchTime())
+		out.DispatchTime = a.GetDispatchTime().AsTime()
 	}
 	if a.GetResponseTime() != nil {
-		out.ResponseTime, _ = ptypes.Timestamp(a.GetResponseTime())
+		out.ResponseTime = a.GetResponseTime().AsTime()
 	}
 	if rs := a.GetResponseStatus(); rs != nil {
 		out.ResponseStatus = &engine.AttemptStatus{Code: rs.GetCode(), Message: rs.GetMessage()}
@@ -243,9 +243,8 @@ func attemptToProto(a *engine.Attempt) *tasks.Attempt {
 	return out
 }
 
-func timestampToProto(t time.Time) *ptimestamp.Timestamp {
-	p, _ := ptypes.TimestampProto(t)
-	return p
+func timestampToProto(t time.Time) *timestamppb.Timestamp {
+	return timestamppb.New(t)
 }
 
 func copyHeaders(in map[string]string) map[string]string {

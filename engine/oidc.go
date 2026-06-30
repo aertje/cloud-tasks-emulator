@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // This private key is, of course, not actually private!
@@ -53,7 +53,7 @@ type OIDCConfig struct {
 type OpenIDConnectClaims struct {
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 // DefaultOIDCConfig builds an OIDCConfig from the baked-in development key.
@@ -80,13 +80,13 @@ func (c *OIDCConfig) CreateToken(serviceAccountEmail string, handlerUrl string, 
 	claims := OpenIDConnectClaims{
 		Email:         serviceAccountEmail,
 		EmailVerified: true,
-		StandardClaims: jwt.StandardClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   serviceAccountEmail,
-			Audience:  audience,
+			Audience:  jwt.ClaimStrings{audience},
 			Issuer:    c.IssuerURL,
-			IssuedAt:  now.Unix(),
-			NotBefore: now.Unix(),
-			ExpiresAt: now.Add(5 * time.Minute).Unix(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
 		},
 	}
 

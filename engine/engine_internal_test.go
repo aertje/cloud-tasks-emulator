@@ -84,6 +84,43 @@ func newTestEngine(t *testing.T, d Dispatcher) *Engine {
 	return e
 }
 
+// fakeClock is a manually advanced clock, letting the tombstone-expiry tests
+// jump past the cooldown without real sleeps. Its Now method is safe to call
+// concurrently with Advance (e.g. from the background sweep goroutine).
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock(t time.Time) *fakeClock {
+	return &fakeClock{t: t}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// newClockedTestEngine returns an engine driven by the supplied clock and
+// tombstone TTL, with the queues and sweep goroutine cancelled on cleanup.
+func newClockedTestEngine(t *testing.T, clock *fakeClock, ttl time.Duration) *Engine {
+	t.Helper()
+	e := New(&Options{
+		Dispatcher:   newFakeDispatcher(200),
+		TombstoneTTL: ttl,
+		clock:        clock.Now,
+	})
+	t.Cleanup(e.Stop)
+	return e
+}
+
 // createRunningQueue creates the standard test queue on the engine.
 func createRunningQueue(t *testing.T, e *Engine) *Queue {
 	t.Helper()
@@ -425,4 +462,129 @@ func TestPauseAndResume(t *testing.T) {
 
 	d.awaitDispatches(t, 1, 2*time.Second)
 	assert.GreaterOrEqual(t, d.count(), 1)
+}
+
+// countQueueTombstones / countTaskTombstones expose the tombstone map sizes for
+// the sweep test.
+func (e *Engine) countQueueTombstones() int {
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	return len(e.qTombstones)
+}
+
+func (e *Engine) countTaskTombstones() int {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	return len(e.tTombstones)
+}
+
+func TestTombstoneExpiry(t *testing.T) {
+	const ttl = time.Minute
+	base := time.Unix(1_700_000_000, 0)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T, e *Engine, clock *fakeClock)
+	}{
+		{
+			name: "queue name reusable after cooldown",
+			run: func(t *testing.T, e *Engine, clock *fakeClock) {
+				_, err := e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+				require.NoError(t, err)
+				require.NoError(t, e.DeleteQueue(testParent))
+
+				// During the cooldown the name is reserved. GetQueue reports the same
+				// not-found as a name that never existed; recreate is rejected as
+				// recently-deleted.
+				_, err = e.GetQueue(testParent)
+				assert.ErrorIs(t, err, ErrQueueNotFound)
+				_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+				assert.ErrorIs(t, err, ErrQueueRecentlyDeleted)
+
+				// Creating a task under the recently-deleted parent surfaces the
+				// cooldown too.
+				_, _, err = e.CreateTask(testParent, httpTaskState("", time.Now().Add(time.Hour)))
+				assert.ErrorIs(t, err, ErrQueueRecentlyDeleted)
+
+				// Still reserved right up to the cooldown boundary.
+				clock.Advance(ttl - time.Nanosecond)
+				_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+				assert.ErrorIs(t, err, ErrQueueRecentlyDeleted)
+
+				// Once the cooldown elapses the name is reusable again.
+				clock.Advance(time.Nanosecond)
+				_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name: "task name reusable after cooldown",
+			run: func(t *testing.T, e *Engine, clock *fakeClock) {
+				createRunningQueue(t, e)
+				name := testParent + "/tasks/tomb"
+				future := time.Now().Add(time.Hour)
+
+				_, _, err := e.CreateTask(testParent, httpTaskState(name, future))
+				require.NoError(t, err)
+				require.NoError(t, e.DeleteTask(name))
+
+				// During the cooldown the task reads as recently-deleted and the name
+				// stays reserved against recreate.
+				_, err = e.GetTask(name)
+				assert.ErrorIs(t, err, ErrTaskRecentlyDeleted)
+				_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+				assert.ErrorIs(t, err, ErrTaskAlreadyExists)
+
+				// Still reserved right up to the cooldown boundary.
+				clock.Advance(ttl - time.Nanosecond)
+				_, err = e.GetTask(name)
+				assert.ErrorIs(t, err, ErrTaskRecentlyDeleted)
+
+				// Past the cooldown the task is unknown and the name is reusable.
+				clock.Advance(time.Nanosecond)
+				_, err = e.GetTask(name)
+				assert.ErrorIs(t, err, ErrTaskNotFound)
+				_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+				assert.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newFakeClock(base)
+			e := newClockedTestEngine(t, clock, ttl)
+			tc.run(t, e, clock)
+		})
+	}
+}
+
+func TestSweepRemovesExpiredTombstones(t *testing.T) {
+	const ttl = time.Minute
+	clock := newFakeClock(time.Unix(1_700_000_000, 0))
+	e := newClockedTestEngine(t, clock, ttl)
+
+	// Tombstone one task and one queue.
+	_, err := e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+	require.NoError(t, err)
+	taskName := testParent + "/tasks/swept"
+	_, _, err = e.CreateTask(testParent, httpTaskState(taskName, time.Now().Add(time.Hour)))
+	require.NoError(t, err)
+	require.NoError(t, e.DeleteTask(taskName))
+	require.NoError(t, e.DeleteQueue(testParent))
+
+	require.Equal(t, 1, e.countQueueTombstones())
+	require.Equal(t, 1, e.countTaskTombstones())
+
+	// Before the cooldown elapses the sweep keeps both tombstones.
+	clock.Advance(ttl - time.Nanosecond)
+	e.sweepTombstones()
+	assert.Equal(t, 1, e.countQueueTombstones())
+	assert.Equal(t, 1, e.countTaskTombstones())
+
+	// Once the cooldown elapses the sweep prunes them.
+	clock.Advance(time.Nanosecond)
+	e.sweepTombstones()
+	assert.Zero(t, e.countQueueTombstones())
+	assert.Zero(t, e.countTaskTombstones())
 }

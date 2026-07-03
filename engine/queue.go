@@ -94,6 +94,18 @@ func (queue *Queue) removeTask(taskName string) {
 	queue.setTask(taskName, nil)
 }
 
+// retireTask tombstones a task's slot in the queue map (a nil entry) when it
+// terminates, but only while the task still owns that slot. A task deleted long
+// ago may fire its terminal callback late; the ownership check stops it from
+// clobbering a same-named task created after the name became reusable.
+func (queue *Queue) retireTask(task *Task) {
+	queue.tsMux.Lock()
+	defer queue.tsMux.Unlock()
+	if cur, ok := queue.ts[task.state.Name]; ok && cur == task {
+		queue.ts[task.state.Name] = nil
+	}
+}
+
 func setInitialQueueState(s *QueueState) {
 	if s.RateLimits.MaxDispatchesPerSecond == 0 {
 		s.RateLimits.MaxDispatchesPerSecond = 500.0
@@ -205,7 +217,7 @@ func (queue *Queue) Run() {
 // of its state immediately after creation.
 func (queue *Queue) NewTask(taskState TaskState) (*Task, TaskState) {
 	task := newTask(queue, taskState, func(task *Task) {
-		queue.removeTask(task.state.Name)
+		queue.retireTask(task)
 		queue.onTaskDone(task)
 	})
 

@@ -5,7 +5,14 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
+
+// defaultTombstoneTTL is how long a deleted queue/task name stays reserved
+// before it becomes reusable again. It matches the "wait a minute" guidance in
+// the recently-deleted error messages; real Cloud Tasks uses a cooldown of a
+// few minutes.
+const defaultTombstoneTTL = time.Minute
 
 // Options tunes runtime behaviour of the engine.
 type Options struct {
@@ -22,14 +29,35 @@ type Options struct {
 	// Dispatcher delivers tasks. New defaults it to HTTPDispatcher when nil;
 	// tests supply a fake to drive lifecycle/retry logic without network I/O.
 	Dispatcher Dispatcher
+
+	// TombstoneTTL is how long a deleted queue/task name stays reserved before
+	// it becomes reusable. New reads it once at construction (defaulting to
+	// defaultTombstoneTTL when zero) and drives the background sweep with it, so
+	// unlike the lazily-read fields above it is not observed if mutated later.
+	TombstoneTTL time.Duration
+
+	// clock supplies the current time. It defaults to time.Now; tests inject a
+	// fake to exercise tombstone expiry without real sleeps.
+	clock func() time.Time
 }
 
 // Engine owns all queue/task state and the runtime that drives task dispatch.
 // It is the core layer; gRPC handlers should wrap an Engine and translate
 // proto requests/responses + sentinel errors at the edge.
 type Engine struct {
+	// qs/ts hold only live queues and tasks. A deleted name is recorded in the
+	// matching tombstone map (below) instead of lingering as a nil entry here,
+	// so live-object maps never carry tombstones.
 	qs map[string]*Queue
 	ts map[string]*Task
+
+	// qTombstones/tTombstones record when a queue/task name was deleted. A name
+	// with a live tombstone reads back as recently-deleted and cannot be
+	// recreated; once TombstoneTTL has elapsed the tombstone is treated as if the
+	// name never existed (see the sweep in sweepLoop). Guarded by qsMux/tsMux
+	// respectively.
+	qTombstones map[string]time.Time
+	tTombstones map[string]time.Time
 
 	qsMux sync.Mutex
 	tsMux sync.Mutex
@@ -37,10 +65,24 @@ type Engine struct {
 	// opts is held via pointer so callers retain ownership of the value and
 	// mutations made after construction (e.g. test setup) are observed.
 	opts *Options
+
+	// now supplies the current time, injectable for tests. Set once in New and
+	// never reassigned, so it is safe to read without a lock.
+	now func() time.Time
+
+	// ttl is the resolved tombstone cooldown. Set once in New (so the sweep
+	// goroutine can read it without racing later opts mutations) and never
+	// reassigned.
+	ttl time.Duration
+
+	// stop is closed by Stop to terminate the tombstone sweep goroutine.
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
-// New creates a new engine with empty queue/task bookkeeping. opts may be nil
-// to accept defaults.
+// New creates a new engine with empty queue/task bookkeeping and starts the
+// background tombstone sweep. opts may be nil to accept defaults. Callers must
+// invoke Stop to release the sweep goroutine.
 func New(opts *Options) *Engine {
 	if opts == nil {
 		opts = &Options{}
@@ -48,25 +90,85 @@ func New(opts *Options) *Engine {
 	if opts.OIDC == nil {
 		opts.OIDC = DefaultOIDCConfig()
 	}
-	return &Engine{
-		qs:   make(map[string]*Queue),
-		ts:   make(map[string]*Task),
-		opts: opts,
+	now := time.Now
+	if opts.clock != nil {
+		now = opts.clock
+	}
+	ttl := opts.TombstoneTTL
+	if ttl <= 0 {
+		ttl = defaultTombstoneTTL
+	}
+	e := &Engine{
+		qs:          make(map[string]*Queue),
+		ts:          make(map[string]*Task),
+		qTombstones: make(map[string]time.Time),
+		tTombstones: make(map[string]time.Time),
+		opts:        opts,
+		now:         now,
+		ttl:         ttl,
+		stop:        make(chan struct{}),
+	}
+	go e.sweepLoop()
+	return e
+}
+
+// tombstoneActive reports whether a tombstone recorded at deletedAt is still
+// within the cooldown window as of now.
+func (e *Engine) tombstoneActive(deletedAt time.Time) bool {
+	return e.now().Sub(deletedAt) < e.ttl
+}
+
+// sweepLoop periodically prunes expired tombstones so the queue/task
+// bookkeeping does not grow without bound. It runs until Stop closes e.stop, so
+// no goroutine outlives the engine.
+func (e *Engine) sweepLoop() {
+	ticker := time.NewTicker(e.ttl)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			e.sweepTombstones()
+		case <-e.stop:
+			return
+		}
 	}
 }
 
+// sweepTombstones removes every tombstone whose cooldown has elapsed, freeing
+// the name for reuse and bounding map growth.
+func (e *Engine) sweepTombstones() {
+	e.qsMux.Lock()
+	for name, deletedAt := range e.qTombstones {
+		if !e.tombstoneActive(deletedAt) {
+			delete(e.qTombstones, name)
+		}
+	}
+	e.qsMux.Unlock()
+
+	e.tsMux.Lock()
+	for name, deletedAt := range e.tTombstones {
+		if !e.tombstoneActive(deletedAt) {
+			delete(e.tTombstones, name)
+		}
+	}
+	e.tsMux.Unlock()
+}
+
 // Stop cancels every queue - and thereby every queue's token generator,
-// dispatcher, workers and pending tasks - so no engine goroutine outlives the
-// engine. It is idempotent and safe to call from shutdown paths and test
-// teardown. After Stop, the engine's bookkeeping still reflects the (now
-// cancelled) queues; callers that want a fresh engine should create a new one.
+// dispatcher, workers and pending tasks - and stops the tombstone sweep, so no
+// engine goroutine outlives the engine. It is idempotent and safe to call from
+// shutdown paths and test teardown. After Stop, the engine's bookkeeping still
+// reflects the (now cancelled) queues; callers that want a fresh engine should
+// create a new one.
 func (e *Engine) Stop() {
+	e.stopOnce.Do(func() {
+		close(e.stop)
+	})
+
 	e.qsMux.Lock()
 	queues := make([]*Queue, 0, len(e.qs))
 	for _, queue := range e.qs {
-		if queue != nil {
-			queues = append(queues, queue)
-		}
+		queues = append(queues, queue)
 	}
 	e.qsMux.Unlock()
 
@@ -79,6 +181,8 @@ func (e *Engine) setQueue(queueName string, queue *Queue) {
 	e.qsMux.Lock()
 	defer e.qsMux.Unlock()
 	e.qs[queueName] = queue
+	// A (re)created name is no longer tombstoned.
+	delete(e.qTombstones, queueName)
 }
 
 func (e *Engine) fetchQueue(queueName string) (*Queue, bool) {
@@ -88,14 +192,42 @@ func (e *Engine) fetchQueue(queueName string) (*Queue, bool) {
 	return queue, ok
 }
 
+// removeQueueEntry drops a queue from the live map and tombstones its name so
+// it reads back as recently-deleted until the cooldown elapses. The deletion
+// time is recorded only for a name that is not already tombstoned, so a
+// redundant call cannot extend the cooldown.
 func (e *Engine) removeQueueEntry(queueName string) {
-	e.setQueue(queueName, nil)
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	delete(e.qs, queueName)
+	if _, ok := e.qTombstones[queueName]; !ok {
+		e.qTombstones[queueName] = e.now()
+	}
+}
+
+// queueRecentlyDeleted reports whether the name carries a live tombstone. It
+// prunes the tombstone opportunistically once the cooldown has elapsed, so an
+// expired name is treated as if it never existed.
+func (e *Engine) queueRecentlyDeleted(queueName string) bool {
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	deletedAt, ok := e.qTombstones[queueName]
+	if !ok {
+		return false
+	}
+	if e.tombstoneActive(deletedAt) {
+		return true
+	}
+	delete(e.qTombstones, queueName)
+	return false
 }
 
 func (e *Engine) setTask(taskName string, task *Task) {
 	e.tsMux.Lock()
 	defer e.tsMux.Unlock()
 	e.ts[taskName] = task
+	// A (re)created name is no longer tombstoned.
+	delete(e.tTombstones, taskName)
 }
 
 func (e *Engine) fetchTask(taskName string) (*Task, bool) {
@@ -105,14 +237,61 @@ func (e *Engine) fetchTask(taskName string) (*Task, bool) {
 	return task, ok
 }
 
+// removeTaskEntry drops a task from the live map and tombstones its name so it
+// reads back as recently-deleted until the cooldown elapses. DeleteTask calls
+// it to tombstone synchronously; the deletion time is recorded only for a name
+// that is not already tombstoned, so the task's later terminal callback cannot
+// extend the cooldown.
 func (e *Engine) removeTaskEntry(taskName string) {
-	e.setTask(taskName, nil)
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	delete(e.ts, taskName)
+	if _, ok := e.tTombstones[taskName]; !ok {
+		e.tTombstones[taskName] = e.now()
+	}
 }
 
+// retireTask is a task's terminal (onDone) callback: it tombstones the name when
+// the task reaches a terminal state, but only while the task still owns the live
+// entry. A task deleted long ago may fire this callback late; the ownership
+// check stops it from clobbering a same-named task created after the name became
+// reusable.
+func (e *Engine) retireTask(task *Task) {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	if cur, ok := e.ts[task.state.Name]; !ok || cur != task {
+		return
+	}
+	delete(e.ts, task.state.Name)
+	if _, ok := e.tTombstones[task.state.Name]; !ok {
+		e.tTombstones[task.state.Name] = e.now()
+	}
+}
+
+// taskRecentlyDeleted reports whether the name carries a live tombstone. It
+// prunes the tombstone opportunistically once the cooldown has elapsed, so an
+// expired name is treated as if it never existed.
+func (e *Engine) taskRecentlyDeleted(taskName string) bool {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	deletedAt, ok := e.tTombstones[taskName]
+	if !ok {
+		return false
+	}
+	if e.tombstoneActive(deletedAt) {
+		return true
+	}
+	delete(e.tTombstones, taskName)
+	return false
+}
+
+// hardDeleteTask releases a task name entirely, dropping both the live entry and
+// any tombstone so the name becomes immediately reusable (hard reset).
 func (e *Engine) hardDeleteTask(taskName string) {
 	e.tsMux.Lock()
 	defer e.tsMux.Unlock()
 	delete(e.ts, taskName)
+	delete(e.tTombstones, taskName)
 }
 
 // ListQueues returns all live queues.
@@ -126,9 +305,7 @@ func (e *Engine) ListQueues(ctx context.Context) ([]*Queue, error) {
 
 	var queues []*Queue
 	for _, queue := range e.qs {
-		if queue != nil {
-			queues = append(queues, queue)
-		}
+		queues = append(queues, queue)
 	}
 	return queues, nil
 }
@@ -139,8 +316,9 @@ func (e *Engine) GetQueue(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 	queue, ok := e.fetchQueue(name)
-	// Cloud responds with the same error message whether the queue was recently deleted or never existed
-	if !ok || queue == nil {
+	// Cloud responds with the same error message whether the queue was recently
+	// deleted or never existed, so a tombstone does not change the outcome here.
+	if !ok {
 		return nil, ErrQueueNotFound
 	}
 	return queue, nil
@@ -159,11 +337,10 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	if !parentMatched {
 		return nil, ErrInvalidParent
 	}
-	existing, ok := e.fetchQueue(qs.Name)
-	if ok {
-		if existing != nil {
-			return nil, ErrQueueAlreadyExists
-		}
+	if _, ok := e.fetchQueue(qs.Name); ok {
+		return nil, ErrQueueAlreadyExists
+	}
+	if e.queueRecentlyDeleted(qs.Name) {
 		return nil, ErrQueueRecentlyDeleted
 	}
 
@@ -175,7 +352,7 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	}
 
 	queue := newQueue(qs, e.opts.OIDC, dispatcher, func(task *Task) {
-		e.removeTaskEntry(task.state.Name)
+		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)
 	queue.Run()
@@ -189,7 +366,7 @@ func (e *Engine) DeleteQueue(ctx context.Context, name string) error {
 		return err
 	}
 	queue, ok := e.fetchQueue(name)
-	if !ok || queue == nil {
+	if !ok {
 		return ErrQueueNotFound
 	}
 
@@ -209,7 +386,7 @@ func (e *Engine) PurgeQueue(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 	queue, ok := e.fetchQueue(name)
-	if !ok || queue == nil {
+	if !ok {
 		return nil, ErrQueueNotFound
 	}
 	if e.opts.HardResetOnPurgeQueue {
@@ -278,7 +455,7 @@ func (e *Engine) PauseQueue(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 	queue, ok := e.fetchQueue(name)
-	if !ok || queue == nil {
+	if !ok {
 		return nil, ErrQueueNotFound
 	}
 	queue.Pause()
@@ -291,7 +468,7 @@ func (e *Engine) ResumeQueue(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 	queue, ok := e.fetchQueue(name)
-	if !ok || queue == nil {
+	if !ok {
 		return nil, ErrQueueNotFound
 	}
 	queue.Resume()
@@ -305,7 +482,7 @@ func (e *Engine) ListTasks(ctx context.Context, parent string) ([]*Task, error) 
 	}
 	// TODO: Implement paging
 	queue, ok := e.fetchQueue(parent)
-	if !ok || queue == nil {
+	if !ok {
 		return nil, ErrQueueNotFound
 	}
 
@@ -327,13 +504,15 @@ func (e *Engine) GetTask(ctx context.Context, name string) (*Task, error) {
 		return nil, err
 	}
 	task, ok := e.fetchTask(name)
-	if !ok {
-		return nil, ErrTaskNotFound
+	if ok {
+		return task, nil
 	}
-	if task == nil {
+	// A name within its deletion cooldown reads back as recently-deleted; once
+	// the cooldown elapses it is treated as if it never existed.
+	if e.taskRecentlyDeleted(name) {
 		return nil, ErrTaskRecentlyDeleted
 	}
-	return task, nil
+	return nil, ErrTaskNotFound
 }
 
 // CreateTask creates a new task on the queue identified by parent.
@@ -345,10 +524,10 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 	}
 	queue, ok := e.fetchQueue(parent)
 	if !ok {
+		if e.queueRecentlyDeleted(parent) {
+			return nil, TaskState{}, ErrQueueRecentlyDeleted
+		}
 		return nil, TaskState{}, ErrQueueNotFound
-	}
-	if queue == nil {
-		return nil, TaskState{}, ErrQueueRecentlyDeleted
 	}
 
 	if ts.Name != "" {
@@ -369,6 +548,13 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		if _, exists := e.fetchTask(ts.Name); exists {
 			return nil, TaskState{}, ErrTaskAlreadyExists
 		}
+		// A recently-deleted name stays reserved for the cooldown; Cloud reports a
+		// recreate against a still-reserved name as AlreadyExists. Once the
+		// cooldown elapses taskRecentlyDeleted prunes the tombstone and the name
+		// becomes reusable.
+		if e.taskRecentlyDeleted(ts.Name) {
+			return nil, TaskState{}, ErrTaskAlreadyExists
+		}
 	}
 
 	task, frozen := queue.NewTask(ts)
@@ -383,18 +569,18 @@ func (e *Engine) DeleteTask(ctx context.Context, name string) error {
 	}
 	task, ok := e.fetchTask(name)
 	if !ok {
+		if e.taskRecentlyDeleted(name) {
+			// Cloud uses NotFound here, not FailedPrecondition.
+			return ErrTaskRecentlyDeleted
+		}
 		return ErrTaskNotFound
-	}
-	if task == nil {
-		// Cloud uses NotFound here, not FailedPrecondition.
-		return ErrTaskRecentlyDeleted
 	}
 
 	// Cancel any pending dispatch, then tombstone the name synchronously so a
 	// GetTask immediately following the delete observes it: real Cloud Tasks
 	// reports a recently-deleted task as NotFound and keeps the name reserved.
-	// The task's onDone callback may also run later; setting the tombstone (a
-	// nil map entry) is idempotent, so the two paths don't conflict.
+	// The task's onDone callback may also run later; both paths route through
+	// removeTaskEntry, which is idempotent, so they don't conflict.
 	task.Delete()
 	task.queue.removeTask(name)
 	e.removeTaskEntry(name)
@@ -408,10 +594,10 @@ func (e *Engine) RunTask(ctx context.Context, name string) (*Task, TaskState, er
 	}
 	task, ok := e.fetchTask(name)
 	if !ok {
+		if e.taskRecentlyDeleted(name) {
+			return nil, TaskState{}, ErrTaskRecentlyDeleted
+		}
 		return nil, TaskState{}, ErrTaskNotFound
-	}
-	if task == nil {
-		return nil, TaskState{}, ErrTaskRecentlyDeleted
 	}
 	frozen := task.Run()
 	return task, frozen, nil

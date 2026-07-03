@@ -1,2 +1,8 @@
 .vscode
 __debug_bin
+/emulator
+*.test
+*.out
+coverage.out
+coverage.html
+.claude/settings.local.json

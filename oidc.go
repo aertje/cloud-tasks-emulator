@@ -23,7 +23,7 @@ type openIDServer struct {
 }
 
 func (s openIDServer) configHandler(w http.ResponseWriter, r *http.Request) {
-	config := map[string]interface{}{
+	config := map[string]any{
 		"issuer":                                s.config.IssuerURL,
 		"jwks_uri":                              s.config.IssuerURL + jwksUriPath,
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -33,15 +33,14 @@ func (s openIDServer) configHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, config, 24*time.Hour)
 }
 
-func respondJSON(w http.ResponseWriter, body interface{}, expiresAfter time.Duration) {
+func respondJSON(w http.ResponseWriter, body any, expiresAfter time.Duration) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	utc, _ := time.LoadLocation("UTC")
-	expires := time.Now().In(utc).Add(expiresAfter).Format(http.TimeFormat)
+	expires := time.Now().In(time.UTC).Add(expiresAfter).Format(http.TimeFormat)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public")
 	w.Header().Set("Expires", expires)
@@ -52,7 +51,7 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 	publicKey := s.config.PrivateKey.Public().(*rsa.PublicKey)
 	b64Url := base64.URLEncoding.WithPadding(base64.NoPadding)
 
-	config := map[string]interface{}{
+	config := map[string]any{
 		"keys": []map[string]string{
 			{
 				// Ideally we would export the exponent from the key too but frankly

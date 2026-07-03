@@ -32,7 +32,7 @@ func (i *arrayFlags) Set(value string) error {
 
 // Creates an initial queue on the emulator
 func createInitialQueue(emulatorServer *Server, name string) {
-	print(fmt.Sprintf("Creating initial queue %s\n", name))
+	fmt.Printf("Creating initial queue %s\n", name)
 
 	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
 	parentName := r.ReplaceAllString(name, "")
@@ -78,13 +78,13 @@ func main() {
 		panic(err)
 	}
 
-	print(fmt.Sprintf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port))
+	fmt.Printf("Starting cloud tasks emulator, listening on %v:%v\n", *host, *port)
 
 	grpcServer := grpc.NewServer()
 	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
 
-	for i := 0; i < len(initialQueues); i++ {
-		createInitialQueue(emulatorServer, initialQueues[i])
+	for _, queueName := range initialQueues {
+		createInitialQueue(emulatorServer, queueName)
 	}
 
 	if err := serve(grpcServer, lis, openIDServer); err != nil {

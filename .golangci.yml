@@ -1,0 +1,34 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - ineffassign
+  settings:
+    errcheck:
+      # Deferred/incidental error returns that are conventionally ignored across
+      # this codebase (e.g. best-effort response writes, deferred closes).
+      exclude-functions:
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+        - os.Setenv
+        - os.Unsetenv
+  exclusions:
+    rules:
+      # Error checking on setup/teardown calls in tests is not worth the noise.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # grpc.Dial/grpc.WithInsecure are deprecated in favour of grpc.NewClient
+      # and insecure.NewCredentials(), but changing dial helpers is out of
+      # scope for this workflow/Docker modernization pass.
+      - text: "grpc\\.(Dial|WithInsecure) is deprecated"
+        linters:
+          - staticcheck
+
+formatters:
+  enable:
+    - gofmt

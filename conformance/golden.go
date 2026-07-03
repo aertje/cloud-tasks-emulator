@@ -3,7 +3,6 @@ package conformance
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,12 +31,12 @@ func Save(path string, results []CaseResult) error {
 			return err
 		}
 	}
-	return ioutil.WriteFile(path, append(b, '\n'), 0644)
+	return os.WriteFile(path, append(b, '\n'), 0644)
 }
 
 // Load reads a golden snapshot keyed by case name.
 func Load(path string) (map[string]CaseResult, error) {
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -54,10 +53,10 @@ func Load(path string) (map[string]CaseResult, error) {
 
 // Diff describes one mismatch between a recorded result and the golden.
 type Diff struct {
-	Case    string
-	Field   string
-	Want    string // golden
-	Got     string // recorded
+	Case  string
+	Field string
+	Want  string // golden
+	Got   string // recorded
 }
 
 func (d Diff) String() string {

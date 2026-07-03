@@ -23,15 +23,23 @@ type Queue struct {
 	paused bool
 
 	// stopAll is closed once, by Delete, to stop the token generator and (via
-	// stopDispatch) the dispatcher and workers. stopDispatch is closed to stop
-	// the dispatcher and workers on Pause or Delete, and replaced with a fresh
-	// channel by Resume so a new generation of goroutines can be started.
+	// stopDispatch) the dispatcher. stopDispatch is closed to stop the dispatcher
+	// on Pause or Delete, and replaced with a fresh channel by Resume so a new
+	// generation of the dispatcher can be started. In-flight attempts launched by
+	// a stopped generation are allowed to run to completion, as they always were.
 	stopAll      chan struct{}
 	stopDispatch chan struct{}
 
 	fire chan *Task
 
-	work chan *Task
+	// sem bounds the number of concurrent in-flight task.Attempt() calls to
+	// MaxConcurrentDispatches. The dispatcher acquires a slot before launching a
+	// per-task worker goroutine and the worker releases it on return, so an idle
+	// queue holds no worker goroutines at all. It is a queue-level (not
+	// per-generation) channel so attempts still in flight from a paused
+	// generation keep holding their slots: a resumed generation must wait for
+	// them before the bound can be exceeded.
+	sem chan struct{}
 
 	ts map[string]*Task
 
@@ -69,7 +77,7 @@ func newQueue(state QueueState, oidc *OIDCConfig, dispatcher Dispatcher, onTaskD
 		name:                   state.Name,
 		state:                  state,
 		fire:                   make(chan *Task),
-		work:                   make(chan *Task),
+		sem:                    make(chan struct{}, int(state.RateLimits.MaxConcurrentDispatches)),
 		ts:                     make(map[string]*Task),
 		onTaskDone:             onTaskDone,
 		oidc:                   oidc,
@@ -133,25 +141,14 @@ func setInitialQueueState(s *QueueState) {
 	s.State = QueueRunStateRunning
 }
 
-// startDispatch launches the dispatcher and its worker pool, all listening on
-// the supplied stop channel. Closing that channel stops this generation of
-// goroutines; Resume starts a fresh generation with a new channel.
+// startDispatch launches the dispatcher listening on the supplied stop channel.
+// Closing that channel stops this generation of the dispatcher; Resume starts a
+// fresh generation with a new channel. The dispatcher spawns worker goroutines
+// lazily - at most one per task and never more than MaxConcurrentDispatches at
+// once - so an idle queue holds no worker goroutines beyond the dispatcher and
+// token generator.
 func (queue *Queue) startDispatch(stop <-chan struct{}) {
-	for i := 0; i < int(queue.state.RateLimits.MaxConcurrentDispatches); i++ {
-		go queue.runWorker(stop)
-	}
 	go queue.runDispatcher(stop)
-}
-
-func (queue *Queue) runWorker(stop <-chan struct{}) {
-	for {
-		select {
-		case task := <-queue.work:
-			task.Attempt()
-		case <-stop:
-			return
-		}
-	}
 }
 
 func (queue *Queue) runTokenGenerator(stop <-chan struct{}) {
@@ -186,10 +183,18 @@ func (queue *Queue) runDispatcher(stop <-chan struct{}) {
 			select {
 			// Wait for task
 			case task := <-queue.fire:
-				// Pass on to workers, unless we are stopping (in which case the
-				// workers may already have exited, so guard the send).
+				// Acquire a concurrency slot before dispatching, unless we are
+				// stopping (guard the acquire so Pause/Delete can't wedge here
+				// while every slot is held). The worker releases the slot on
+				// return; slots are shared across generations, so at most
+				// MaxConcurrentDispatches attempts run at once even across a
+				// pause/resume.
 				select {
-				case queue.work <- task:
+				case queue.sem <- struct{}{}:
+					go func() {
+						defer func() { <-queue.sem }()
+						task.Attempt()
+					}()
 				case <-stop:
 					return
 				}
@@ -202,7 +207,7 @@ func (queue *Queue) runDispatcher(stop <-chan struct{}) {
 	}
 }
 
-// Run starts the queue (workers, token generator and dispatcher)
+// Run starts the queue (token generator and dispatcher)
 func (queue *Queue) Run() {
 	queue.stateMutex.Lock()
 	stopAll := queue.stopAll
@@ -251,7 +256,8 @@ func (queue *Queue) Delete() {
 	queue.cancelled = true
 	log.Println("Stopping queue")
 	// Close-to-broadcast: stops the token generator (stopAll) and the dispatcher
-	// plus every worker (stopDispatch, idempotent if the queue is paused).
+	// (stopDispatch, idempotent if the queue is paused). In-flight attempts run
+	// to completion.
 	close(queue.stopAll)
 	queue.closeDispatchLocked()
 	// Abort any HTTP requests currently in flight on this queue.
@@ -291,8 +297,8 @@ func (queue *Queue) Pause() {
 	queue.paused = true
 	queue.state.State = QueueRunStatePaused
 
-	// Stop the dispatcher and workers; the token generator keeps filling the
-	// bucket so a resumed queue can dispatch immediately.
+	// Stop the dispatcher; the token generator keeps filling the bucket so a
+	// resumed queue can dispatch immediately.
 	queue.closeDispatchLocked()
 }
 
@@ -306,7 +312,7 @@ func (queue *Queue) Resume() {
 	queue.paused = false
 	queue.state.State = QueueRunStateRunning
 
-	// A fresh stop channel for the new generation of dispatcher/workers; the
+	// A fresh stop channel for the new generation of the dispatcher; the
 	// previous one stays closed.
 	queue.stopDispatch = make(chan struct{})
 	queue.startDispatch(queue.stopDispatch)

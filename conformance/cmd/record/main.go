@@ -49,7 +49,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dial %s: %v\n", *target, err)
 		os.Exit(1)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close client: %v\n", err)
+		}
+	}()
 
 	opts := conformance.RunOptions{
 		Project:  *project,

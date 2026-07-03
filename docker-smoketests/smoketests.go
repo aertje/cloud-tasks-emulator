@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -49,7 +49,11 @@ func runTaskHttpServer(listenAddr string) <-chan *http.Request {
 	socket, err := net.Listen("tcp", listenAddr)
 	fatalIfError(err)
 
-	go http.Serve(socket, nil)
+	go func() {
+		if err := http.Serve(socket, nil); err != nil {
+			log.Printf("test HTTP server stopped: %v", err)
+		}
+	}()
 
 	return receivedRequests
 }
@@ -128,7 +132,7 @@ func waitForRequestOrTimeout(channel <-chan *http.Request, timeout time.Duration
 	case result := <-channel:
 		return result, nil
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("Timed out after %v waiting for task delivery", timeout)
+		return nil, fmt.Errorf("timed out after %v waiting for task delivery", timeout)
 	}
 }
 
@@ -145,7 +149,7 @@ func fatalIfError(err error) {
 }
 
 func readRequestBody(req *http.Request) string {
-	body, err := ioutil.ReadAll(req.Body)
+	body, err := io.ReadAll(req.Body)
 	fatalIfError(err)
 	return string(body)
 }
@@ -190,7 +194,7 @@ func fetchJsonFromUrl(url string) map[string]interface{} {
 	res, err := client.Do(req)
 	fatalIfError(err)
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	fatalIfError(err)
 
 	var parsedBody map[string]interface{}

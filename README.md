@@ -40,7 +40,7 @@ Alternatively, you can define environment variables and then run the shell scrip
  ```sh
  export PORT=8124
  export HOST=localhost
- export HARD_RESET_ON_PURGE=true
+ export HARD_RESET_ON_PURGE_QUEUE=true
  export INITIAL_QUEUES=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
  export OPENID_ISSUER=http://localhost:8080
 
@@ -179,33 +179,43 @@ In Go it would go something like this.
 import (
 	"context"
 
-	taskspb "google.golang.org/genproto/googleapis/cloud/tasks/v2"
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-conn, _ := grpc.Dial("localhost:8123", grpc.WithInsecure())
-clientOpt := option.WithGRPCConn(conn)
-client, _ := NewClient(context.Background(), clientOpt)
+ctx := context.Background()
+
+// Point the official client at the emulator over an insecure local channel,
+// with no credentials.
+client, _ := cloudtasks.NewClient(ctx,
+	option.WithEndpoint("localhost:8123"),
+	option.WithoutAuthentication(),
+	option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+)
 
 parent := "projects/test-project/locations/us-central1"
+queueName := parent + "/queues/test"
 createQueueRequest := taskspb.CreateQueueRequest{
     Parent: parent,
-    Queue: parent + "/queues/test",
+    Queue: &taskspb.Queue{Name: queueName},
 }
 
-createQueueResp, _ := client.CreateQueue(context.Background(), &createQueueRequest)
+createQueueResp, _ := client.CreateQueue(ctx, &createQueueRequest)
 
 createTaskRequest := taskspb.CreateTaskRequest{
     Parent: createQueueResp.GetName(),
     Task: &taskspb.Task{
-        PayloadType: &taskspb.Task_HttpRequest{
+        MessageType: &taskspb.Task_HttpRequest{
             HttpRequest: &taskspb.HttpRequest{
                 Url: "http://www.google.com",
             },
         },
     },
 }
-createdTaskResp, _ := client.CreateTask(context.Background(), &createTaskRequest)
+createdTaskResp, _ := client.CreateTask(ctx, &createTaskRequest)
 ```
 
 ### PHP example

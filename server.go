@@ -34,6 +34,12 @@ func NewServer() *Server {
 	return s
 }
 
+// Stop cancels all engine queues and tasks so no background goroutine outlives
+// the server. It does not stop the gRPC server itself (the caller owns that).
+func (s *Server) Stop() {
+	s.engine.Stop()
+}
+
 // ListQueues lists the existing queues
 func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*tasks.ListQueuesResponse, error) {
 	queues, err := s.engine.ListQueues()

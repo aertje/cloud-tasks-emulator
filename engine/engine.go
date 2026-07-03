@@ -50,6 +50,26 @@ func New(opts *Options) *Engine {
 	}
 }
 
+// Stop cancels every queue - and thereby every queue's token generator,
+// dispatcher, workers and pending tasks - so no engine goroutine outlives the
+// engine. It is idempotent and safe to call from shutdown paths and test
+// teardown. After Stop, the engine's bookkeeping still reflects the (now
+// cancelled) queues; callers that want a fresh engine should create a new one.
+func (e *Engine) Stop() {
+	e.qsMux.Lock()
+	queues := make([]*Queue, 0, len(e.qs))
+	for _, queue := range e.qs {
+		if queue != nil {
+			queues = append(queues, queue)
+		}
+	}
+	e.qsMux.Unlock()
+
+	for _, queue := range queues {
+		queue.Delete()
+	}
+}
+
 func (e *Engine) setQueue(queueName string, queue *Queue) {
 	e.qsMux.Lock()
 	defer e.qsMux.Unlock()

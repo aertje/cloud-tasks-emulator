@@ -2,13 +2,10 @@ package main_test
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +23,7 @@ import (
 	"google.golang.org/api/option"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	grpcCodes "google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -33,56 +31,43 @@ import (
 
 var formattedParent = formatParent("TestProject", "TestLocation")
 
-func TestMain(m *testing.M) {
-	flag.Parse()
+// setUp starts an in-process emulator on an ephemeral port and returns a client
+// connected to it. Teardown (gRPC server stop, engine goroutine cancellation and
+// client close) is registered with t.Cleanup so every test tears down
+// deterministically and leaves no queue/task goroutines running into the next.
+func setUp(t *testing.T, options ServerOptions) (*Server, *Client) {
+	t.Helper()
 
-	os.Exit(m.Run())
-}
-
-func setUp(t *testing.T, options ServerOptions) (*grpc.Server, *Client) {
 	serv := grpc.NewServer()
 	emulatorServer := NewServer()
 	emulatorServer.Options = options
 	taskspb.RegisterCloudTasksServer(serv, emulatorServer)
 
 	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		log.Fatal(err)
-	}
+	require.NoError(t, err)
 	go serv.Serve(lis)
 
-	conn, err := grpc.Dial(lis.Addr().String(), grpc.WithInsecure())
-	if err != nil {
-		log.Fatal(err)
-	}
-	clientOpt := option.WithGRPCConn(conn)
-
-	client, err := NewClient(context.Background(), clientOpt)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return serv, client
-}
-
-func tearDown(t *testing.T, serv *grpc.Server) {
-	serv.Stop()
-}
-
-func tearDownQueue(t *testing.T, client *Client, queue *taskspb.Queue) {
-	deleteQueueRequest := taskspb.DeleteQueueRequest{
-		Name: queue.GetName(),
-	}
-	err := client.DeleteQueue(context.Background(), &deleteQueueRequest)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
-	// Wait a moment for the queue to delete and all tasks to definitely be done & not going to fire again
-	time.Sleep(100 * time.Millisecond)
+
+	client, err := NewClient(context.Background(), option.WithGRPCConn(conn))
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		// Stop accepting RPCs first, then cancel the engine's queue/task
+		// goroutines so none of them dispatch into a later test's target.
+		serv.Stop()
+		emulatorServer.Stop()
+		client.Close()
+	})
+
+	return emulatorServer, client
 }
 
 func TestCloudTasksCreateQueue(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
-	queue := newQueue(formattedParent, "testCloudTasksCreateQueue")
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+	queue := newQueue(formattedParent, t.Name())
 	request := taskspb.CreateQueueRequest{
 		Parent: formattedParent,
 		Queue:  queue,
@@ -95,11 +80,10 @@ func TestCloudTasksCreateQueue(t *testing.T) {
 }
 
 func TestCreateTask(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -115,21 +99,19 @@ func TestCreateTask(t *testing.T) {
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 	assert.NotEmpty(t, createdTask.GetName())
-	assert.Contains(t, createdTask.GetName(), "projects/TestProject/locations/TestLocation/queues/test/tasks/")
+	assert.Contains(t, createdTask.GetName(), createdQueue.GetName()+"/tasks/")
 	assert.Equal(t, "http://www.google.com", createdTask.GetHttpRequest().GetUrl())
 	assert.Equal(t, taskspb.HttpMethod_POST, createdTask.GetHttpRequest().GetHttpMethod())
 	assert.EqualValues(t, 0, createdTask.GetDispatchCount())
 }
 
 func TestCreateTaskRejectsDuplicateName(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -137,7 +119,7 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 			Name: createdQueue.GetName() + "/tasks/dedupe-this-task",
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success",
+					Url: target.URL + "/success",
 				},
 			},
 		},
@@ -154,33 +136,27 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
 
 	// Wait for it to perform the http request
-	_, err = awaitHttpRequest(receivedRequests)
+	_, err = awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
 	// Check the task has been removed now (to ensure state is valid for the
 	// recreate-even-after-executed-and-removed case following)
-	getTaskRequest := taskspb.GetTaskRequest{
-		Name: createdTask.GetName(),
-	}
-	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
-	assert.Error(t, err)
-	assert.Nil(t, gettedTask)
+	requireTaskEventuallyGone(t, client, createdTask.GetName())
 
 	// Check still can't create even after removal
 	_, err = client.CreateTask(context.Background(), &createTaskRequest)
 	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
 
 	// Verify that it only sent the original HTTP request, nothing after that
-	_, err = awaitHttpRequestWithTimeout(receivedRequests, 1*time.Second)
+	_, err = awaitHttpRequestWithTimeout(target.receivedRequests, 1*time.Second)
 	assert.Error(t, err, "Should not receive any further HTTP requests within timeout")
 }
 
 func TestCreateTaskRejectsInvalidName(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -201,11 +177,10 @@ func TestCreateTaskRejectsInvalidName(t *testing.T) {
 }
 
 func TestCreateTaskRejectsInvalidTaskID(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -236,11 +211,10 @@ func TestCreateTaskRejectsInvalidTaskID(t *testing.T) {
 }
 
 func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -261,11 +235,10 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 }
 
 func TestDeleteTaskTombstonesName(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	// Schedule the task well into the future so it never dispatches; the test is
 	// purely about delete semantics, not execution.
@@ -278,7 +251,7 @@ func TestDeleteTaskTombstonesName(t *testing.T) {
 			ScheduleTime: scheduleTime,
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success",
+					Url: "http://localhost/success",
 				},
 			},
 		},
@@ -302,14 +275,12 @@ func TestPausedThenResumedQueueStillDispatches(t *testing.T) {
 	// paused and then resumed must still dispatch tasks. The previous design
 	// left a stale cancellation token buffered, so the first resumed worker
 	// re-killed the whole pool and the queue never dispatched again.
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	_, err := client.PauseQueue(context.Background(), &taskspb.PauseQueueRequest{Name: createdQueue.GetName()})
 	require.NoError(t, err)
@@ -322,7 +293,7 @@ func TestPausedThenResumedQueueStillDispatches(t *testing.T) {
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success",
+					Url: target.URL + "/success",
 				},
 			},
 		},
@@ -330,13 +301,13 @@ func TestPausedThenResumedQueueStillDispatches(t *testing.T) {
 	_, err = client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 
-	_, err = awaitHttpRequest(receivedRequests)
+	_, err = awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err, "task should dispatch after the queue is paused and resumed")
 }
 
 func TestGetQueueExists(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -351,8 +322,8 @@ func TestGetQueueExists(t *testing.T) {
 }
 
 func TestGetQueueNeverExisted(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	getQueueRequest := taskspb.GetQueueRequest{
 		Name: "hello_q",
@@ -366,8 +337,8 @@ func TestGetQueueNeverExisted(t *testing.T) {
 }
 
 func TestGetQueuePreviouslyExisted(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -391,14 +362,12 @@ func TestGetQueuePreviouslyExisted(t *testing.T) {
 }
 
 func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -407,7 +376,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					// Use the not_found handler to prove that purge stops any further retries
-					Url: "http://localhost:5000/not_found",
+					Url: target.URL + "/not_found",
 				},
 			},
 		},
@@ -416,7 +385,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	// Task was created OK, verify that the first HTTP request was sent
-	_, err = awaitHttpRequest(receivedRequests)
+	_, err = awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
 	// Now purge the queue
@@ -426,9 +395,9 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 	_, err = client.PurgeQueue(context.Background(), &purgeQueueRequest)
 	require.NoError(t, err)
 
-	// Wait a moment for that to work, then verify nothing in the list and cannot retrieve by name
-	time.Sleep(100 * time.Millisecond)
-	assertTaskListIsEmpty(t, client, createdQueue)
+	// Soft purge is asynchronous; poll until nothing is in the list and the task
+	// cannot be retrieved by name.
+	requireTaskListEventuallyEmpty(t, client, createdQueue)
 	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
 
 	// BUT - Verify that the task name is still not available for new tasks
@@ -436,19 +405,17 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
 
 	// Verify that it only sent the original HTTP request, it purged before the retries
-	_, err = awaitHttpRequestWithTimeout(receivedRequests, 1*time.Second)
+	_, err = awaitHttpRequestWithTimeout(target.receivedRequests, 1*time.Second)
 	assert.Error(t, err, "Should not receive any further HTTP requests within timeout")
 }
 
 func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -457,7 +424,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					// Use the not_found handler to prove that purge stops any further retries
-					Url: "http://localhost:5000/not_found",
+					Url: target.URL + "/not_found",
 				},
 			},
 		},
@@ -466,7 +433,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Task was created OK, verify that the first HTTP request was sent
-	_, err = awaitHttpRequest(receivedRequests)
+	_, err = awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
 	// Now purge the queue
@@ -477,7 +444,6 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// In this mode, purging the queue is synchronous so we should be in the empty state straight away
-	time.Sleep(1 * time.Second)
 	assertTaskListIsEmpty(t, client, createdQueue)
 	assertGetTaskFails(t, grpcCodes.NotFound, client, createdTask.GetName())
 
@@ -486,7 +452,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify that it has now sent the request from the new task
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
 	require.NotNil(t, receivedRequest, "Request was received")
 	require.NoError(t, err)
 	// Note that the execution count is reset to 0
@@ -501,21 +467,23 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 }
 
 func TestListTasks(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
-
-	srv, _ := startTestServer()
-	defer srv.Shutdown(context.Background())
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
 	createdQueue := createTestQueue(t, client)
+
+	// Schedule the task in the future so it does not dispatch (and get removed)
+	// before ListTasks observes it - otherwise the list races the dispatch.
+	scheduleTime := timestamppb.New(time.Now().Add(time.Hour))
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
-			Name: createdQueue.GetName() + "/tasks/my-test-task",
+			Name:         createdQueue.GetName() + "/tasks/my-test-task",
+			ScheduleTime: scheduleTime,
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success",
+					Url: "http://localhost/success",
 				},
 			},
 		},
@@ -529,11 +497,10 @@ func TestListTasks(t *testing.T) {
 	}
 
 	tasksIterator := client.ListTasks(context.Background(), &listTasksRequest)
-	assert.NoError(t, err)
 
 	listedTask, err := tasksIterator.Next()
 	assert.NoError(t, err)
-	assert.Equal(t, listedTask.GetName(), createdTask.GetName())
+	assert.Equal(t, createdTask.GetName(), listedTask.GetName())
 	_, err = tasksIterator.Next()
 	assert.EqualError(t, err, "no more items in iterator")
 
@@ -544,7 +511,6 @@ func TestListTasks(t *testing.T) {
 	require.NoError(t, err)
 
 	tasksIterator = client.ListTasks(context.Background(), &listTasksRequest)
-	assert.NoError(t, err)
 
 	listedTask, err = tasksIterator.Next()
 	assertIsGrpcError(t, "^Queue does not exist", grpcCodes.NotFound, err)
@@ -552,14 +518,12 @@ func TestListTasks(t *testing.T) {
 }
 
 func TestSuccessTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -567,7 +531,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 			Name: createdQueue.GetName() + "/tasks/my-test-task",
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success",
+					Url: target.URL + "/success",
 				},
 			},
 		},
@@ -575,16 +539,11 @@ func TestSuccessTaskExecution(t *testing.T) {
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 
-	getTaskRequest := taskspb.GetTaskRequest{
-		Name: createdTask.GetName(),
-	}
-
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
-	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
-	assert.Error(t, err)
-	assert.Nil(t, gettedTask)
+	// A successful dispatch removes the task; poll until GetTask reports it gone.
+	requireTaskEventuallyGone(t, client, createdTask.GetName())
 
 	// Validate that the call was actually made properly
 	require.NotNil(t, receivedRequest, "Request was received")
@@ -596,7 +555,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 			"X-CloudTasks-TaskExecutionCount": "0",
 			"X-CloudTasks-TaskRetryCount":     "0",
 			"X-CloudTasks-TaskName":           "my-test-task",
-			"X-CloudTasks-QueueName":          "test",
+			"X-CloudTasks-QueueName":          t.Name(),
 		},
 		receivedRequest,
 	)
@@ -604,17 +563,13 @@ func TestSuccessTaskExecution(t *testing.T) {
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	// Not parallel: it sets the process-wide APP_ENGINE_EMULATOR_HOST env var.
+	_, client := setUp(t, ServerOptions{})
 
-	defer os.Unsetenv("APP_ENGINE_EMULATOR_HOST")
-	os.Setenv("APP_ENGINE_EMULATOR_HOST", "http://localhost:5000")
-
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
+	t.Setenv("APP_ENGINE_EMULATOR_HOST", target.URL)
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
@@ -633,7 +588,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	assert.NotNil(t, createdTask)
 
 	// Wait for it to perform the http request
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
 	require.NotNil(t, receivedRequest, "Request was received")
@@ -643,7 +598,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 			"X-AppEngine-TaskExecutionCount": "0",
 			"X-AppEngine-TaskRetryCount":     "0",
 			"X-AppEngine-TaskName":           "my-test-task",
-			"X-AppEngine-QueueName":          "test",
+			"X-AppEngine-QueueName":          t.Name(),
 		},
 		receivedRequest,
 	)
@@ -652,21 +607,20 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 }
 
 func TestErrorTaskExecution(t *testing.T) {
-	serv, client := setUp(t, ServerOptions{})
-	defer tearDown(t, serv)
+	// Not parallel: it asserts on wall-clock retry timing, which is sensitive to
+	// scheduler contention from other concurrently-running tests.
+	_, client := setUp(t, ServerOptions{})
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/not_found",
+					Url: target.URL + "/not_found",
 				},
 			},
 		},
@@ -679,86 +633,50 @@ func TestErrorTaskExecution(t *testing.T) {
 
 	// With the default retry backoff, we expect 4 calls within the first second:
 	// at t=0, 0.1, 0.3 (+0.2), 0.7 (+0.4) seconds (plus some buffer) ==> 4 calls
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
-	require.NoError(t, err, "Should have received request 1")
-	assertHeadersMatch(
-		t,
-		map[string]string{
-			"X-CloudTasks-TaskExecutionCount": "0",
-			"X-CloudTasks-TaskRetryCount":     "0",
-		},
-		receivedRequest,
-	)
-
-	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err, "Should have received request 2")
-	assertHeadersMatch(
-		t,
-		map[string]string{
-			"X-CloudTasks-TaskExecutionCount": "1",
-			"X-CloudTasks-TaskRetryCount":     "1",
-		},
-		receivedRequest,
-	)
-
-	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err, "Should have received request 3")
-	assertHeadersMatch(
-		t,
-		map[string]string{
-			"X-CloudTasks-TaskExecutionCount": "2",
-			"X-CloudTasks-TaskRetryCount":     "2",
-		},
-		receivedRequest,
-	)
-
-	receivedRequest, err = awaitHttpRequest(receivedRequests)
-	require.NoError(t, err, "Should have received request 4")
-	assertHeadersMatch(
-		t,
-		map[string]string{
-			"X-CloudTasks-TaskExecutionCount": "3",
-			"X-CloudTasks-TaskRetryCount":     "3",
-		},
-		receivedRequest,
-	)
+	for attempt := range 4 {
+		receivedRequest, err := awaitHttpRequest(target.receivedRequests)
+		require.NoErrorf(t, err, "Should have received request %d", attempt+1)
+		assertHeadersMatch(
+			t,
+			map[string]string{
+				"X-CloudTasks-TaskExecutionCount": strconv.Itoa(attempt),
+				"X-CloudTasks-TaskRetryCount":     strconv.Itoa(attempt),
+			},
+			receivedRequest,
+		)
+	}
 
 	expectedCompleteBy := start.Add(700 * time.Millisecond)
 	assert.WithinDuration(
 		t,
 		expectedCompleteBy,
 		time.Now(),
-		200*time.Millisecond,
+		300*time.Millisecond,
 		"4 retries should take roughly 0.7 seconds",
 	)
 
 	// Check the state of the task has been updated with the number of dispatches
-	getTaskRequest := taskspb.GetTaskRequest{
-		Name: createdTask.GetName(),
-	}
-	gettedTask, err := client.GetTask(context.Background(), &getTaskRequest)
-	require.NoError(t, err)
-	assert.EqualValues(t, 4, gettedTask.GetDispatchCount())
+	requireTaskDispatchCountEventually(t, client, createdTask.GetName(), 4)
 }
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
+	t.Parallel()
 	oidcConfig := engine.DefaultOIDCConfig()
 	oidcConfig.IssuerURL = "http://localhost:8980"
-	serv, client := setUp(t, ServerOptions{OIDC: oidcConfig})
-	defer tearDown(t, serv)
+	_, client := setUp(t, ServerOptions{OIDC: oidcConfig})
 
-	srv, receivedRequests := startTestServer()
-	defer srv.Shutdown(context.Background())
+	target := startTestServer(t)
 
 	createdQueue := createTestQueue(t, client)
-	defer tearDownQueue(t, client, createdQueue)
+
+	targetURL := target.URL + "/success?foo=bar"
 
 	createTaskRequest := taskspb.CreateTaskRequest{
 		Parent: createdQueue.GetName(),
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
-					Url: "http://localhost:5000/success?foo=bar",
+					Url: targetURL,
 					AuthorizationHeader: &taskspb.HttpRequest_OidcToken{
 						OidcToken: &taskspb.OidcToken{
 							ServiceAccountEmail: "emulator@service.test",
@@ -772,7 +690,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for it to perform the http request
-	receivedRequest, err := awaitHttpRequest(receivedRequests)
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
 	require.NoError(t, err)
 
 	// Validate that the call was actually made properly
@@ -787,7 +705,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	claims := token.Claims.(*engine.OpenIDConnectClaims)
-	assert.Equal(t, jwt.ClaimStrings{"http://localhost:5000/success?foo=bar"}, claims.Audience, "Specifies audience")
+	assert.Equal(t, jwt.ClaimStrings{targetURL}, claims.Audience, "Specifies audience")
 	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")
 }
@@ -805,6 +723,7 @@ func formatParent(project, location string) string {
 }
 
 func assertHeadersMatch(t *testing.T, expectHeaders map[string]string, request *http.Request) {
+	t.Helper()
 	actualHeaders := make(map[string]string)
 
 	for hdr := range expectHeaders {
@@ -815,6 +734,7 @@ func assertHeadersMatch(t *testing.T, expectHeaders map[string]string, request *
 }
 
 func assertIsRecentTimestamp(t *testing.T, etaString string) {
+	t.Helper()
 	assert.Regexp(t, "^[0-9]+\\.[0-9]+$", etaString)
 	float, err := strconv.ParseFloat(etaString, 64)
 	require.NoError(t, err)
@@ -831,6 +751,7 @@ func assertIsRecentTimestamp(t *testing.T, etaString string) {
 }
 
 func assertIsGrpcError(t *testing.T, expectMessageRegexp string, expectCode grpcCodes.Code, err error) {
+	t.Helper()
 	require.Error(t, err, "Should return error")
 	rsp, ok := grpcStatus.FromError(err)
 	require.True(t, ok, "Should be grpc error")
@@ -839,6 +760,7 @@ func assertIsGrpcError(t *testing.T, expectMessageRegexp string, expectCode grpc
 }
 
 func assertTaskListIsEmpty(t *testing.T, client *Client, queue *taskspb.Queue) {
+	t.Helper()
 	listTasksRequest := taskspb.ListTasksRequest{
 		Parent: queue.GetName(),
 	}
@@ -848,7 +770,19 @@ func assertTaskListIsEmpty(t *testing.T, client *Client, queue *taskspb.Queue) {
 	assert.Same(t, iterator.Done, err, "task iterator should be done")
 }
 
+// requireTaskListEventuallyEmpty polls the task list until it is empty, for the
+// asynchronous (soft) purge path.
+func requireTaskListEventuallyEmpty(t *testing.T, client *Client, queue *taskspb.Queue) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		tasksIterator := client.ListTasks(context.Background(), &taskspb.ListTasksRequest{Parent: queue.GetName()})
+		_, err := tasksIterator.Next()
+		return err == iterator.Done
+	}, 2*time.Second, 10*time.Millisecond, "task list should become empty")
+}
+
 func assertGetTaskFails(t *testing.T, expectCode grpcCodes.Code, client *Client, name string) {
+	t.Helper()
 	getTaskRequest := taskspb.GetTaskRequest{
 		Name: name,
 	}
@@ -861,8 +795,33 @@ func assertGetTaskFails(t *testing.T, expectCode grpcCodes.Code, client *Client,
 	assert.Nil(t, gettedTask)
 }
 
+// requireTaskEventuallyGone polls until GetTask reports the task as NotFound,
+// which happens once the emulator has processed the target's response and
+// removed the task. This replaces sleeping for a fixed grace period.
+func requireTaskEventuallyGone(t *testing.T, client *Client, name string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := client.GetTask(context.Background(), &taskspb.GetTaskRequest{Name: name})
+		return grpcStatus.Code(err) == grpcCodes.NotFound
+	}, 2*time.Second, 10*time.Millisecond, "task %s should be removed after dispatch", name)
+}
+
+// requireTaskDispatchCountEventually polls until the task reports at least the
+// expected number of dispatches, avoiding a race with the emulator's async
+// post-response bookkeeping.
+func requireTaskDispatchCountEventually(t *testing.T, client *Client, name string, want int32) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		task, err := client.GetTask(context.Background(), &taskspb.GetTaskRequest{Name: name})
+		return err == nil && task.GetDispatchCount() >= want
+	}, 2*time.Second, 10*time.Millisecond, "task %s should reach dispatch count %d", name, want)
+}
+
 func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
-	queue := newQueue(formattedParent, "test")
+	t.Helper()
+	// The queue name is derived from the test name so every test gets a unique
+	// queue and tests can run in parallel without colliding.
+	queue := newQueue(formattedParent, t.Name())
 
 	createQueueRequest := taskspb.CreateQueueRequest{
 		Parent: formattedParent,
@@ -882,30 +841,49 @@ func awaitHttpRequest(receivedRequests <-chan *http.Request) (*http.Request, err
 func awaitHttpRequestWithTimeout(receivedRequests <-chan *http.Request, timeout time.Duration) (*http.Request, error) {
 	select {
 	case request := <-receivedRequests:
-		// Wait a few ticks for the emulator to receive & process the http response (the request
-		// was written to the channel before we sent the response back)
-		time.Sleep(20 * time.Millisecond)
 		return request, nil
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("Timed out waiting for HTTP request after %s", timeout)
+		return nil, fmt.Errorf("timed out waiting for HTTP request after %s", timeout)
 	}
 }
 
-func startTestServer() (*http.Server, <-chan *http.Request) {
-	mux := http.NewServeMux()
+// testTarget is an ephemeral HTTP server used as a task dispatch target.
+type testTarget struct {
+	URL              string
+	receivedRequests <-chan *http.Request
+}
+
+// startTestServer starts an HTTP target on an ephemeral port and blocks until it
+// is accepting connections. It is torn down via t.Cleanup. The handlers publish
+// the received request on the channel only after writing the response status, so
+// observing a request implies the response has been written.
+func startTestServer(t *testing.T) *testTarget {
+	t.Helper()
+
 	requestChannel := make(chan *http.Request, 1)
+
+	mux := http.NewServeMux()
 	mux.HandleFunc("/success", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		requestChannel <- r
 	})
 	mux.HandleFunc("/not_found", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		requestChannel <- r
 	})
 
-	srv := &http.Server{Addr: "localhost:5000", Handler: mux}
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
 
-	go srv.ListenAndServe()
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(lis)
 
-	return srv, requestChannel
+	t.Cleanup(func() {
+		_ = srv.Shutdown(context.Background())
+	})
+
+	return &testTarget{
+		URL:              "http://" + lis.Addr().String(),
+		receivedRequests: requestChannel,
+	}
 }

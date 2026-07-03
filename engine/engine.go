@@ -17,6 +17,10 @@ type Options struct {
 	// with an OIDC token, and published via the issuer's HTTP endpoints. New
 	// defaults it to DefaultOIDCConfig when nil.
 	OIDC *OIDCConfig
+
+	// Dispatcher delivers tasks. New defaults it to HTTPDispatcher when nil;
+	// tests supply a fake to drive lifecycle/retry logic without network I/O.
+	Dispatcher Dispatcher
 }
 
 // Engine owns all queue/task state and the runtime that drives task dispatch.
@@ -153,7 +157,14 @@ func (e *Engine) CreateQueue(parent string, qs QueueState) (*Queue, error) {
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	queue := newQueue(qs, e.opts.OIDC, func(task *Task) {
+	// Options are read lazily (they may be mutated after New, e.g. by the server
+	// wiring), so default the dispatcher here rather than in New.
+	dispatcher := e.opts.Dispatcher
+	if dispatcher == nil {
+		dispatcher = HTTPDispatcher{}
+	}
+
+	queue := newQueue(qs, e.opts.OIDC, dispatcher, func(task *Task) {
 		e.removeTaskEntry(task.state.Name)
 	})
 	e.setQueue(qs.Name, queue)

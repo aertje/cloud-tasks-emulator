@@ -93,6 +93,23 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	task.Schedule()
 }
 
+// Dispatcher performs a single delivery attempt for a task-state snapshot and
+// returns the resulting HTTP-equivalent status code (or -1 on transport
+// failure). The default implementation (HTTPDispatcher) delivers over HTTP;
+// tests inject a fake to exercise queue/task lifecycle and retry behaviour
+// without real network I/O.
+type Dispatcher interface {
+	Dispatch(state TaskState, oidc *OIDCConfig) int
+}
+
+// HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
+type HTTPDispatcher struct{}
+
+// Dispatch delivers the task over HTTP.
+func (HTTPDispatcher) Dispatch(state TaskState, oidc *OIDCConfig) int {
+	return dispatch(state, oidc)
+}
+
 // dispatch performs a single HTTP delivery for the supplied task-state snapshot
 // and returns the target's HTTP status code (or -1 if the request could not be
 // built or sent). It never mutates the snapshot: injected Cloud Tasks headers
@@ -192,7 +209,7 @@ func dispatch(state TaskState, oidc *OIDCConfig) int {
 }
 
 func (task *Task) doDispatch(retry bool, state TaskState) {
-	respCode := dispatch(state, task.queue.oidc)
+	respCode := task.queue.dispatcher.Dispatch(state, task.queue.oidc)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

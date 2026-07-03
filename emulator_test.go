@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcCodes "google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -365,7 +366,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 
-	createdQueue := createTestQueue(t, client)
+	createdQueue := createTestQueueWithSlowRetry(t, client)
 
 	target := startTestServer(t)
 
@@ -413,7 +414,7 @@ func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
 
-	createdQueue := createTestQueue(t, client)
+	createdQueue := createTestQueueWithSlowRetry(t, client)
 
 	target := startTestServer(t)
 
@@ -829,6 +830,27 @@ func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
 	}
 
 	createdQueue, err := client.CreateQueue(context.Background(), &createQueueRequest)
+	require.NoError(t, err)
+
+	return createdQueue
+}
+
+// createTestQueueWithSlowRetry creates a queue whose retry backoff is an hour,
+// so a failed task's retry is scheduled far beyond the test window. This lets
+// the purge tests deterministically prove that purging cancels the pending
+// retry, without racing the default 100ms backoff.
+func createTestQueueWithSlowRetry(t *testing.T, client *Client) *taskspb.Queue {
+	t.Helper()
+	queue := newQueue(formattedParent, t.Name())
+	queue.RetryConfig = &taskspb.RetryConfig{
+		MinBackoff: durationpb.New(time.Hour),
+		MaxBackoff: durationpb.New(time.Hour),
+	}
+
+	createdQueue, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	})
 	require.NoError(t, err)
 
 	return createdQueue

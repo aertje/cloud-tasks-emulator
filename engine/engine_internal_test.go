@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func newFakeDispatcher(status int) *fakeDispatcher {
 	}
 }
 
-func (f *fakeDispatcher) Dispatch(state TaskState, _ *OIDCConfig) int {
+func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *OIDCConfig) int {
 	f.mu.Lock()
 	attempt := len(f.calls)
 	f.calls = append(f.calls, state)
@@ -87,7 +88,7 @@ func newTestEngine(t *testing.T, d Dispatcher) *Engine {
 // createRunningQueue creates the standard test queue on the engine.
 func createRunningQueue(t *testing.T, e *Engine) *Queue {
 	t.Helper()
-	q, err := e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+	q, err := e.CreateQueue(t.Context(), "projects/p/locations/l", QueueState{Name: testParent})
 	require.NoError(t, err)
 	return q
 }
@@ -206,33 +207,34 @@ func TestBackoffReschedule(t *testing.T) {
 
 func TestQueueLifecycle(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
+	ctx := t.Context()
 
 	// Invalid name / parent.
-	_, err := e.CreateQueue("projects/p/locations/l", QueueState{Name: "not a queue"})
+	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: "not a queue"})
 	assert.ErrorIs(t, err, ErrInvalidQueueName)
-	_, err = e.CreateQueue("bad-parent", QueueState{Name: testParent})
+	_, err = e.CreateQueue(ctx, "bad-parent", QueueState{Name: testParent})
 	assert.ErrorIs(t, err, ErrInvalidParent)
 
 	// Create then duplicate.
-	_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: testParent})
 	require.NoError(t, err)
-	_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: testParent})
 	assert.ErrorIs(t, err, ErrQueueAlreadyExists)
 
 	// Get.
-	q, err := e.GetQueue(testParent)
+	q, err := e.GetQueue(ctx, testParent)
 	require.NoError(t, err)
 	assert.Equal(t, testParent, q.State().Name)
 
 	// Delete, then get and recreate observe the tombstone.
-	require.NoError(t, e.DeleteQueue(testParent))
-	_, err = e.GetQueue(testParent)
+	require.NoError(t, e.DeleteQueue(ctx, testParent))
+	_, err = e.GetQueue(ctx, testParent)
 	assert.ErrorIs(t, err, ErrQueueNotFound)
-	_, err = e.CreateQueue("projects/p/locations/l", QueueState{Name: testParent})
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: testParent})
 	assert.ErrorIs(t, err, ErrQueueRecentlyDeleted)
 
 	// Deleting a missing queue.
-	assert.ErrorIs(t, e.DeleteQueue("projects/p/locations/l/queues/absent"), ErrQueueNotFound)
+	assert.ErrorIs(t, e.DeleteQueue(ctx, "projects/p/locations/l/queues/absent"), ErrQueueNotFound)
 }
 
 func TestCreateTaskValidation(t *testing.T) {
@@ -254,7 +256,7 @@ func TestCreateTaskValidation(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := e.CreateTask(tc.parent, tc.state)
+			_, _, err := e.CreateTask(t.Context(), tc.parent, tc.state)
 			assert.ErrorIs(t, err, tc.wantErr)
 		})
 	}
@@ -263,59 +265,62 @@ func TestCreateTaskValidation(t *testing.T) {
 func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)
+	ctx := t.Context()
 
 	name := testParent + "/tasks/dupe"
 	future := time.Now().Add(time.Hour)
 
-	_, _, err := e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err := e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	require.NoError(t, err)
 
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	assert.ErrorIs(t, err, ErrTaskAlreadyExists)
 }
 
 func TestDeleteTaskTombstonesName(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)
+	ctx := t.Context()
 
 	name := testParent + "/tasks/to-delete"
 	future := time.Now().Add(time.Hour)
 
-	_, _, err := e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err := e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	require.NoError(t, err)
 
-	require.NoError(t, e.DeleteTask(name))
+	require.NoError(t, e.DeleteTask(ctx, name))
 
 	// A deleted task reads back as recently-deleted, and the name stays reserved.
-	_, err = e.GetTask(name)
+	_, err = e.GetTask(ctx, name)
 	assert.ErrorIs(t, err, ErrTaskRecentlyDeleted)
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	assert.ErrorIs(t, err, ErrTaskAlreadyExists)
 
 	// Deleting again reports recently-deleted, not a hard not-found.
-	assert.ErrorIs(t, e.DeleteTask(name), ErrTaskRecentlyDeleted)
+	assert.ErrorIs(t, e.DeleteTask(ctx, name), ErrTaskRecentlyDeleted)
 }
 
 func TestSoftPurgeKeepsNamesReserved(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	q := createRunningQueue(t, e)
+	ctx := t.Context()
 
 	name := testParent + "/tasks/purged"
 	future := time.Now().Add(time.Hour)
-	_, _, err := e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err := e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	require.NoError(t, err)
 
-	_, err = e.PurgeQueue(testParent)
+	_, err = e.PurgeQueue(ctx, testParent)
 	require.NoError(t, err)
 
 	// Soft purge is asynchronous; wait until the task is tombstoned.
 	require.Eventually(t, func() bool {
-		tasks, err := e.ListTasks(testParent)
+		tasks, err := e.ListTasks(ctx, testParent)
 		return err == nil && len(tasks) == 0
 	}, 2*time.Second, 5*time.Millisecond)
 
 	// The name is still reserved.
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	assert.ErrorIs(t, err, ErrTaskAlreadyExists)
 	assert.Equal(t, testParent, q.State().Name)
 }
@@ -324,26 +329,64 @@ func TestHardResetReleasesNames(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	e.opts.HardResetOnPurgeQueue = true
 	createRunningQueue(t, e)
+	ctx := t.Context()
 
 	name := testParent + "/tasks/reset"
 	future := time.Now().Add(time.Hour)
-	_, _, err := e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err := e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	require.NoError(t, err)
 
 	// Hard reset is synchronous: on return the task and its name handle are gone.
-	_, err = e.PurgeQueue(testParent)
+	_, err = e.PurgeQueue(ctx, testParent)
 	require.NoError(t, err)
 
-	tasks, err := e.ListTasks(testParent)
+	tasks, err := e.ListTasks(ctx, testParent)
 	require.NoError(t, err)
 	assert.Empty(t, tasks)
 
-	_, err = e.GetTask(name)
+	_, err = e.GetTask(ctx, name)
 	assert.ErrorIs(t, err, ErrTaskNotFound)
 
 	// The name is reusable after a hard reset.
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, future))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, future))
 	assert.NoError(t, err)
+}
+
+// TestHardResetPurgeRespectsContext exercises the meaningful cancellation path:
+// hard-reset purge waits for in-flight tasks to finish, so a ctx that expires
+// mid-wait must make PurgeQueue return promptly with a context error instead
+// of blocking until every task completes.
+func TestHardResetPurgeRespectsContext(t *testing.T) {
+	blockDispatch := make(chan struct{})
+	d := newFakeDispatcher(200)
+	d.statusFor = func(int) int {
+		<-blockDispatch // Never returns until the test unblocks it.
+		return 200
+	}
+	e := newTestEngine(t, d)
+	e.opts.HardResetOnPurgeQueue = true
+	createRunningQueue(t, e)
+	t.Cleanup(func() { close(blockDispatch) })
+
+	name := testParent + "/tasks/stuck"
+	_, _, err := e.CreateTask(t.Context(), testParent, httpTaskState(name, time.Time{}))
+	require.NoError(t, err)
+
+	// Wait until the task is actually in flight (blocked inside Dispatch) so the
+	// purge below genuinely has something to wait on, rather than racing it. Poll
+	// count() directly rather than awaitDispatches: the latter's "dispatched"
+	// signal only fires after statusFor returns, which here never happens until
+	// the test's cleanup unblocks it.
+	require.Eventually(t, func() bool { return d.count() >= 1 }, 2*time.Second, time.Millisecond)
+
+	// The deadline is still in the future when PurgeQueue is called (so it enters
+	// the wait loop) but expires while it is blocked on the stuck task's done
+	// channel, exercising the mid-wait select rather than the entry check.
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err = e.PurgeQueue(ctx, testParent)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestTaskRetriesUntilSuccess(t *testing.T) {
@@ -356,23 +399,24 @@ func TestTaskRetriesUntilSuccess(t *testing.T) {
 		return 200
 	}
 	e := newTestEngine(t, d)
+	ctx := t.Context()
 
 	// Short backoff so the retries land quickly.
-	_, err := e.CreateQueue("projects/p/locations/l", QueueState{
+	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{
 		Name:        testParent,
 		RetryConfig: RetryConfig{MinBackoff: time.Millisecond, MaxBackoff: 10 * time.Millisecond, MaxAttempts: 100, MaxDoublings: 1},
 	})
 	require.NoError(t, err)
 
 	name := testParent + "/tasks/retry"
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, time.Time{}))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, time.Time{}))
 	require.NoError(t, err)
 
 	d.awaitDispatches(t, 3, 2*time.Second)
 
 	// After the successful third attempt the task is removed.
 	require.Eventually(t, func() bool {
-		_, err := e.GetTask(name)
+		_, err := e.GetTask(ctx, name)
 		return errors.Is(err, ErrTaskRecentlyDeleted)
 	}, 2*time.Second, 5*time.Millisecond)
 
@@ -385,22 +429,23 @@ func TestTaskRetriesUntilSuccess(t *testing.T) {
 func TestTaskStopsAfterMaxAttempts(t *testing.T) {
 	d := newFakeDispatcher(404) // always fails
 	e := newTestEngine(t, d)
+	ctx := t.Context()
 
-	_, err := e.CreateQueue("projects/p/locations/l", QueueState{
+	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{
 		Name:        testParent,
 		RetryConfig: RetryConfig{MinBackoff: time.Millisecond, MaxBackoff: 5 * time.Millisecond, MaxAttempts: 3, MaxDoublings: 1},
 	})
 	require.NoError(t, err)
 
 	name := testParent + "/tasks/doomed"
-	_, _, err = e.CreateTask(testParent, httpTaskState(name, time.Time{}))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(name, time.Time{}))
 	require.NoError(t, err)
 
 	d.awaitDispatches(t, 3, 2*time.Second)
 
 	// It must not dispatch a fourth time, and the exhausted task is removed.
 	require.Eventually(t, func() bool {
-		_, err := e.GetTask(name)
+		_, err := e.GetTask(ctx, name)
 		return errors.Is(err, ErrTaskRecentlyDeleted)
 	}, 2*time.Second, 5*time.Millisecond)
 	assert.Equal(t, 3, d.count(), "must not exceed MaxAttempts dispatches")
@@ -410,17 +455,18 @@ func TestPauseAndResume(t *testing.T) {
 	d := newFakeDispatcher(200)
 	e := newTestEngine(t, d)
 	q := createRunningQueue(t, e)
+	ctx := t.Context()
 
-	_, err := e.PauseQueue(testParent)
+	_, err := e.PauseQueue(ctx, testParent)
 	require.NoError(t, err)
 	assert.Equal(t, QueueRunStatePaused, q.State().State)
 
-	_, err = e.ResumeQueue(testParent)
+	_, err = e.ResumeQueue(ctx, testParent)
 	require.NoError(t, err)
 	assert.Equal(t, QueueRunStateRunning, q.State().State)
 
 	// A task created after resume must still dispatch.
-	_, _, err = e.CreateTask(testParent, httpTaskState(testParent+"/tasks/after-resume", time.Time{}))
+	_, _, err = e.CreateTask(ctx, testParent, httpTaskState(testParent+"/tasks/after-resume", time.Time{}))
 	require.NoError(t, err)
 
 	d.awaitDispatches(t, 1, 2*time.Second)

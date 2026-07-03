@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -305,8 +306,17 @@ func httpMethodToProto(m string) tasks.HttpMethod {
 // below override specific cases where the same sentinel maps to a different
 // status in different RPCs - the real-cloud error-mapping work will collapse
 // those once the actual upstream behaviour is known.
+//
+// It also maps the context errors that an Engine method returns when the
+// caller's ctx is cancelled or its deadline expires (e.g. PurgeQueue in
+// hard-reset mode waiting on task completion), so gRPC callers see the
+// standard Canceled/DeadlineExceeded status instead of an opaque Internal.
 func mapErr(err error) error {
 	switch err {
+	case context.Canceled:
+		return status.Errorf(codes.Canceled, "context canceled")
+	case context.DeadlineExceeded:
+		return status.Errorf(codes.DeadlineExceeded, "context deadline exceeded")
 	case engine.ErrQueueNotFound, engine.ErrQueueRecentlyDeleted:
 		// Cloud responds with the same error message whether the queue was recently deleted or never existed.
 		return status.Errorf(codes.NotFound, "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.")

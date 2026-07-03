@@ -95,27 +95,30 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 
 // Dispatcher performs a single delivery attempt for a task-state snapshot and
 // returns the resulting HTTP-equivalent status code (or -1 on transport
-// failure). The default implementation (HTTPDispatcher) delivers over HTTP;
-// tests inject a fake to exercise queue/task lifecycle and retry behaviour
-// without real network I/O.
+// failure). ctx bounds the delivery to the queue's lifetime (see Queue.ctx):
+// it is not the gRPC request that created the task, which is long gone by
+// dispatch time. The default implementation (HTTPDispatcher) delivers over
+// HTTP; tests inject a fake to exercise queue/task lifecycle and retry
+// behaviour without real network I/O.
 type Dispatcher interface {
-	Dispatch(state TaskState, oidc *OIDCConfig) int
+	Dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
 type HTTPDispatcher struct{}
 
 // Dispatch delivers the task over HTTP.
-func (HTTPDispatcher) Dispatch(state TaskState, oidc *OIDCConfig) int {
-	return dispatch(state, oidc)
+func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
+	return dispatch(ctx, state, oidc)
 }
 
 // dispatch performs a single HTTP delivery for the supplied task-state snapshot
 // and returns the target's HTTP status code (or -1 if the request could not be
 // built or sent). It never mutates the snapshot: injected Cloud Tasks headers
 // are merged into a fresh request header map, because the task's live header map
-// is read concurrently by gRPC handlers.
-func dispatch(state TaskState, oidc *OIDCConfig) int {
+// is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
+// Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
+func dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
 	client := &http.Client{Timeout: state.DispatchDeadline}
 
 	nameParts, ok := parseTaskName(state.Name)
@@ -181,7 +184,7 @@ func dispatch(state TaskState, oidc *OIDCConfig) int {
 		return -1
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch: build request for %q: %v\n", state.Name, err)
 		return -1
@@ -209,7 +212,7 @@ func dispatch(state TaskState, oidc *OIDCConfig) int {
 }
 
 func (task *Task) doDispatch(retry bool, state TaskState) {
-	respCode := task.queue.dispatcher.Dispatch(state, task.queue.oidc)
+	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidc)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

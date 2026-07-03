@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"sync"
@@ -115,7 +116,10 @@ func (e *Engine) hardDeleteTask(taskName string) {
 }
 
 // ListQueues returns all live queues.
-func (e *Engine) ListQueues() ([]*Queue, error) {
+func (e *Engine) ListQueues(ctx context.Context) ([]*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// TODO: Implement paging
 	e.qsMux.Lock()
 	defer e.qsMux.Unlock()
@@ -130,7 +134,10 @@ func (e *Engine) ListQueues() ([]*Queue, error) {
 }
 
 // GetQueue returns the named queue.
-func (e *Engine) GetQueue(name string) (*Queue, error) {
+func (e *Engine) GetQueue(ctx context.Context, name string) (*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	queue, ok := e.fetchQueue(name)
 	// Cloud responds with the same error message whether the queue was recently deleted or never existed
 	if !ok || queue == nil {
@@ -140,7 +147,10 @@ func (e *Engine) GetQueue(name string) (*Queue, error) {
 }
 
 // CreateQueue creates a new queue under the given parent.
-func (e *Engine) CreateQueue(parent string, qs QueueState) (*Queue, error) {
+func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) (*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", qs.Name)
 	if !nameMatched {
 		return nil, ErrInvalidQueueName
@@ -174,7 +184,10 @@ func (e *Engine) CreateQueue(parent string, qs QueueState) (*Queue, error) {
 }
 
 // DeleteQueue removes the named queue.
-func (e *Engine) DeleteQueue(name string) error {
+func (e *Engine) DeleteQueue(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	queue, ok := e.fetchQueue(name)
 	if !ok || queue == nil {
 		return ErrQueueNotFound
@@ -188,14 +201,21 @@ func (e *Engine) DeleteQueue(name string) error {
 // PurgeQueue purges the named queue. When Options.HardResetOnPurgeQueue is set,
 // also releases all task name handles so the names become reusable - this
 // mirrors the emulator's optional development-environment behaviour rather
-// than production Cloud Tasks.
-func (e *Engine) PurgeQueue(name string) (*Queue, error) {
+// than production Cloud Tasks. Hard reset can block waiting for in-flight
+// tasks to finish; ctx bounds that wait and, if it expires first, PurgeQueue
+// returns ctx.Err() promptly instead of hanging the caller.
+func (e *Engine) PurgeQueue(ctx context.Context, name string) (*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	queue, ok := e.fetchQueue(name)
 	if !ok || queue == nil {
 		return nil, ErrQueueNotFound
 	}
 	if e.opts.HardResetOnPurgeQueue {
-		e.hardResetQueue(queue)
+		if err := e.hardResetQueue(ctx, queue); err != nil {
+			return nil, err
+		}
 	} else {
 		queue.Purge()
 	}
@@ -209,7 +229,12 @@ func (e *Engine) PurgeQueue(name string) (*Queue, error) {
 // releasing the name handles. Waiting on that real completion signal - rather
 // than sleeping and hoping - guarantees no late onDone re-inserts a tombstone
 // after we delete the entry, so there is nothing to panic about.
-func (e *Engine) hardResetQueue(queue *Queue) {
+//
+// If ctx is cancelled or its deadline expires before every task has finished,
+// hardResetQueue returns immediately with ctx.Err() and leaves the still-running
+// tasks' name handles reserved; they release themselves normally once their own
+// onDone callback runs.
+func (e *Engine) hardResetQueue(ctx context.Context, queue *Queue) error {
 	// Snapshot the live tasks under the queue lock, then release it: the tasks'
 	// onDone callbacks need the same lock to tombstone themselves, so we must not
 	// hold it while waiting for them.
@@ -226,7 +251,11 @@ func (e *Engine) hardResetQueue(queue *Queue) {
 		task.Delete()
 	}
 	for _, task := range tasks {
-		<-task.done
+		select {
+		case <-task.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	// Every purged task has now tombstoned itself (a nil map entry). Release only
@@ -240,10 +269,14 @@ func (e *Engine) hardResetQueue(queue *Queue) {
 			e.hardDeleteTask(taskName)
 		}
 	}
+	return nil
 }
 
 // PauseQueue pauses queue dispatch.
-func (e *Engine) PauseQueue(name string) (*Queue, error) {
+func (e *Engine) PauseQueue(ctx context.Context, name string) (*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	queue, ok := e.fetchQueue(name)
 	if !ok || queue == nil {
 		return nil, ErrQueueNotFound
@@ -253,7 +286,10 @@ func (e *Engine) PauseQueue(name string) (*Queue, error) {
 }
 
 // ResumeQueue resumes a paused queue.
-func (e *Engine) ResumeQueue(name string) (*Queue, error) {
+func (e *Engine) ResumeQueue(ctx context.Context, name string) (*Queue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	queue, ok := e.fetchQueue(name)
 	if !ok || queue == nil {
 		return nil, ErrQueueNotFound
@@ -263,7 +299,10 @@ func (e *Engine) ResumeQueue(name string) (*Queue, error) {
 }
 
 // ListTasks lists all tasks in the named queue.
-func (e *Engine) ListTasks(parent string) ([]*Task, error) {
+func (e *Engine) ListTasks(ctx context.Context, parent string) ([]*Task, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// TODO: Implement paging
 	queue, ok := e.fetchQueue(parent)
 	if !ok || queue == nil {
@@ -283,7 +322,10 @@ func (e *Engine) ListTasks(parent string) ([]*Task, error) {
 }
 
 // GetTask returns the named task.
-func (e *Engine) GetTask(name string) (*Task, error) {
+func (e *Engine) GetTask(ctx context.Context, name string) (*Task, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	task, ok := e.fetchTask(name)
 	if !ok {
 		return nil, ErrTaskNotFound
@@ -297,7 +339,10 @@ func (e *Engine) GetTask(name string) (*Task, error) {
 // CreateTask creates a new task on the queue identified by parent.
 // The returned *Task wraps the live engine state; the second return value is a
 // snapshot suitable for returning to the caller without observing future mutations.
-func (e *Engine) CreateTask(parent string, ts TaskState) (*Task, TaskState, error) {
+func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*Task, TaskState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, TaskState{}, err
+	}
 	queue, ok := e.fetchQueue(parent)
 	if !ok {
 		return nil, TaskState{}, ErrQueueNotFound
@@ -332,7 +377,10 @@ func (e *Engine) CreateTask(parent string, ts TaskState) (*Task, TaskState, erro
 }
 
 // DeleteTask removes the named task.
-func (e *Engine) DeleteTask(name string) error {
+func (e *Engine) DeleteTask(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	task, ok := e.fetchTask(name)
 	if !ok {
 		return ErrTaskNotFound
@@ -354,7 +402,10 @@ func (e *Engine) DeleteTask(name string) error {
 }
 
 // RunTask executes a task immediately and returns its snapshotted state.
-func (e *Engine) RunTask(name string) (*Task, TaskState, error) {
+func (e *Engine) RunTask(ctx context.Context, name string) (*Task, TaskState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, TaskState{}, err
+	}
 	task, ok := e.fetchTask(name)
 	if !ok {
 		return nil, TaskState{}, ErrTaskNotFound

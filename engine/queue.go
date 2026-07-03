@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"log"
 	"sync"
 	"time"
@@ -49,11 +50,20 @@ type Queue struct {
 	// dispatcher delivers tasks on this queue. Threaded down from the engine so
 	// tests can substitute a fake. Never nil for a live queue.
 	dispatcher Dispatcher
+
+	// ctx bounds the lifetime of in-flight dispatches on this queue; cancel is
+	// called exactly once, by Delete, to abort any HTTP requests still in
+	// flight. It is deliberately not derived from a gRPC request context: the
+	// request that created a task is long gone by the time it dispatches.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // newQueue creates a new task queue
 func newQueue(state QueueState, oidc *OIDCConfig, dispatcher Dispatcher, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	queue := &Queue{
 		name:                   state.Name,
@@ -68,6 +78,8 @@ func newQueue(state QueueState, oidc *OIDCConfig, dispatcher Dispatcher, onTaskD
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
 		stopAll:                make(chan struct{}),
 		stopDispatch:           make(chan struct{}),
+		ctx:                    ctx,
+		cancel:                 cancel,
 	}
 	// Fill the token bucket
 	for i := 0; i < int(state.RateLimits.MaxBurstSize); i++ {
@@ -242,6 +254,8 @@ func (queue *Queue) Delete() {
 	// plus every worker (stopDispatch, idempotent if the queue is paused).
 	close(queue.stopAll)
 	queue.closeDispatchLocked()
+	// Abort any HTTP requests currently in flight on this queue.
+	queue.cancel()
 	queue.stateMutex.Unlock()
 
 	queue.Purge()

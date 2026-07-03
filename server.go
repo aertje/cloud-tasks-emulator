@@ -42,7 +42,7 @@ func (s *Server) Stop() {
 
 // ListQueues lists the existing queues
 func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*tasks.ListQueuesResponse, error) {
-	queues, err := s.engine.ListQueues()
+	queues, err := s.engine.ListQueues(ctx)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -56,7 +56,7 @@ func (s *Server) ListQueues(ctx context.Context, in *tasks.ListQueuesRequest) (*
 
 // GetQueue returns the requested queue
 func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.GetQueue(in.GetName())
+	q, err := s.engine.GetQueue(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -65,7 +65,7 @@ func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*task
 
 // CreateQueue creates a new queue
 func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.CreateQueue(in.GetParent(), queueFromProto(in.GetQueue()))
+	q, err := s.engine.CreateQueue(ctx, in.GetParent(), queueFromProto(in.GetQueue()))
 	if err != nil {
 		return nil, mapErrForCreateQueue(err)
 	}
@@ -79,7 +79,7 @@ func (s *Server) UpdateQueue(ctx context.Context, in *tasks.UpdateQueueRequest) 
 
 // DeleteQueue removes an existing queue.
 func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) (*emptypb.Empty, error) {
-	if err := s.engine.DeleteQueue(in.GetName()); err != nil {
+	if err := s.engine.DeleteQueue(ctx, in.GetName()); err != nil {
 		return nil, mapErrForDeleteQueue(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -87,7 +87,7 @@ func (s *Server) DeleteQueue(ctx context.Context, in *tasks.DeleteQueueRequest) 
 
 // PurgeQueue purges the specified queue
 func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.PurgeQueue(in.GetName())
+	q, err := s.engine.PurgeQueue(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -96,7 +96,7 @@ func (s *Server) PurgeQueue(ctx context.Context, in *tasks.PurgeQueueRequest) (*
 
 // PauseQueue pauses queue execution
 func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.PauseQueue(in.GetName())
+	q, err := s.engine.PauseQueue(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -105,7 +105,7 @@ func (s *Server) PauseQueue(ctx context.Context, in *tasks.PauseQueueRequest) (*
 
 // ResumeQueue resumes a paused queue
 func (s *Server) ResumeQueue(ctx context.Context, in *tasks.ResumeQueueRequest) (*tasks.Queue, error) {
-	q, err := s.engine.ResumeQueue(in.GetName())
+	q, err := s.engine.ResumeQueue(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -129,7 +129,7 @@ func (s *Server) TestIamPermissions(ctx context.Context, in *iampb.TestIamPermis
 
 // ListTasks lists the tasks in the specified queue
 func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*tasks.ListTasksResponse, error) {
-	taskList, err := s.engine.ListTasks(in.GetParent())
+	taskList, err := s.engine.ListTasks(ctx, in.GetParent())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -143,7 +143,7 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 
 // GetTask returns the specified task
 func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.Task, error) {
-	t, err := s.engine.GetTask(in.GetName())
+	t, err := s.engine.GetTask(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -152,7 +152,7 @@ func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.
 
 // CreateTask creates a new task
 func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*tasks.Task, error) {
-	_, frozen, err := s.engine.CreateTask(in.GetParent(), taskFromProto(in.GetTask()))
+	_, frozen, err := s.engine.CreateTask(ctx, in.GetParent(), taskFromProto(in.GetTask()))
 	if err != nil {
 		return nil, mapErrForCreateTask(err, in)
 	}
@@ -161,7 +161,7 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 
 // DeleteTask removes an existing task
 func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*emptypb.Empty, error) {
-	if err := s.engine.DeleteTask(in.GetName()); err != nil {
+	if err := s.engine.DeleteTask(ctx, in.GetName()); err != nil {
 		return nil, mapErr(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -169,7 +169,7 @@ func (s *Server) DeleteTask(ctx context.Context, in *tasks.DeleteTaskRequest) (*
 
 // RunTask executes an existing task immediately
 func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.Task, error) {
-	_, frozen, err := s.engine.RunTask(in.GetName())
+	_, frozen, err := s.engine.RunTask(ctx, in.GetName())
 	if err != nil {
 		return nil, mapErr(err)
 	}

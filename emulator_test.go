@@ -297,6 +297,43 @@ func TestDeleteTaskTombstonesName(t *testing.T) {
 	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
 }
 
+func TestPausedThenResumedQueueStillDispatches(t *testing.T) {
+	// Regression test for the worker-cancellation rewrite: a queue that is
+	// paused and then resumed must still dispatch tasks. The previous design
+	// left a stale cancellation token buffered, so the first resumed worker
+	// re-killed the whole pool and the queue never dispatched again.
+	serv, client := setUp(t, ServerOptions{})
+	defer tearDown(t, serv)
+
+	srv, receivedRequests := startTestServer()
+	defer srv.Shutdown(context.Background())
+
+	createdQueue := createTestQueue(t, client)
+	defer tearDownQueue(t, client, createdQueue)
+
+	_, err := client.PauseQueue(context.Background(), &taskspb.PauseQueueRequest{Name: createdQueue.GetName()})
+	require.NoError(t, err)
+
+	_, err = client.ResumeQueue(context.Background(), &taskspb.ResumeQueueRequest{Name: createdQueue.GetName()})
+	require.NoError(t, err)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url: "http://localhost:5000/success",
+				},
+			},
+		},
+	}
+	_, err = client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	_, err = awaitHttpRequest(receivedRequests)
+	require.NoError(t, err, "task should dispatch after the queue is paused and resumed")
+}
+
 func TestGetQueueExists(t *testing.T) {
 	serv, client := setUp(t, ServerOptions{})
 	defer tearDown(t, serv)

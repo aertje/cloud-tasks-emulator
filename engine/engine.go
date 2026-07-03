@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Options tunes runtime behaviour of the engine.
@@ -173,31 +172,42 @@ func (e *Engine) PurgeQueue(name string) (*Queue, error) {
 }
 
 // hardResetQueue synchronously purges all tasks and releases their name handles.
+//
+// It cancels every live task and waits for each to reach its terminal state
+// (task.done, closed after the task's onDone callback has tombstoned it) before
+// releasing the name handles. Waiting on that real completion signal - rather
+// than sleeping and hoping - guarantees no late onDone re-inserts a tombstone
+// after we delete the entry, so there is nothing to panic about.
 func (e *Engine) hardResetQueue(queue *Queue) {
-	waitGroup := queue.Purge()
-	waitGroup.Wait()
+	// Snapshot the live tasks under the queue lock, then release it: the tasks'
+	// onDone callbacks need the same lock to tombstone themselves, so we must not
+	// hold it while waiting for them.
+	queue.tsMux.Lock()
+	tasks := make([]*Task, 0, len(queue.ts))
+	for _, task := range queue.ts {
+		if task != nil {
+			tasks = append(tasks, task)
+		}
+	}
+	queue.tsMux.Unlock()
 
-	// This is still a bit awkward - we can't *guarantee* the task is fully deleted even after the WaitGroup because:
-	// - Purge() calls task.Delete()
-	// - task.Delete() writes to a buffered `cancel` channel
-	// - task.Schedule() reads from that buffered channel in a separate goroutine
-	// - When that goroutine sees the task is cancelled, it sets the task value to nil in the tasks map
-	//
-	// We need to be certain that we only remove the task from map *after* that completes, otherwise the task name will
-	// be reinserted with the nil value. At the moment the only easy way I can think of is to sleep for a very short
-	// period to allow the tasks' internal goroutines to fire first.
-	time.Sleep(10 * time.Millisecond)
+	for _, task := range tasks {
+		task.Delete()
+	}
+	for _, task := range tasks {
+		<-task.done
+	}
 
+	// Every purged task has now tombstoned itself (a nil map entry). Release only
+	// those name handles, leaving any task created concurrently with the purge
+	// (a non-nil entry) untouched.
 	queue.tsMux.Lock()
 	defer queue.tsMux.Unlock()
 	for taskName, task := range queue.ts {
-		if task != nil {
-			// The naive "sleep till it deletes" approach described above is too naive...
-			panic("Expected task to be deleted by now!")
+		if task == nil {
+			delete(queue.ts, taskName)
+			e.hardDeleteTask(taskName)
 		}
-
-		delete(queue.ts, taskName)
-		e.hardDeleteTask(taskName)
 	}
 }
 

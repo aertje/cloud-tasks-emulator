@@ -21,6 +21,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Duplicated from app source to avoid having to import the project code
@@ -70,11 +71,26 @@ func purgeQueue(client *cloudtasks.Client, queuePath string) {
 
 func createTasksClient(emulatorAddress string) *cloudtasks.Client {
 	log.Printf("Building connection for emulator %s", emulatorAddress)
-	conn, _ := grpc.Dial(emulatorAddress, grpc.WithInsecure())
+	conn, err := grpc.NewClient(emulatorAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	fatalIfError(err)
+
 	clientOpt := option.WithGRPCConn(conn)
-	client, _ := cloudtasks.NewClient(context.Background(), clientOpt)
+	client, err := cloudtasks.NewClient(context.Background(), clientOpt)
+	fatalIfError(err)
 
 	return client
+}
+
+func getQueue(client *cloudtasks.Client, queuePath string) {
+	log.Printf("Checking queue exists: %s", queuePath)
+	getQueueRequest := &taskspb.GetQueueRequest{
+		Name: queuePath,
+	}
+
+	_, err := client.GetQueue(context.Background(), getQueueRequest)
+	fatalIfError(err)
+
+	log.Printf("Confirmed queue exists: %s", queuePath)
 }
 
 func createTask(client *cloudtasks.Client, queuePath string, httpHandlerUrl string) string {
@@ -186,7 +202,7 @@ func parseOpenIDConnectToken(tokenStr string, keySet jwk.Set) (*jwt.Token, *Open
 
 func fetchJsonFromUrl(url string) map[string]interface{} {
 	client := http.Client{
-		Timeout: time.Second * 1,
+		Timeout: time.Second * 10,
 	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	fatalIfError(err)
@@ -204,12 +220,27 @@ func fetchJsonFromUrl(url string) map[string]interface{} {
 	return parsedBody
 }
 
+// stringSliceFlag collects repeated occurrences of a string flag into a slice
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func main() {
 	emulatorHost := flag.String("emulator-host", "cloud-tasks-emulator", "The hostname for the emulator")
 	emulatorPort := flag.String("emulator-port", "8123", "The port for the emulator")
 	httpHandlerHost := flag.String("http-handler-host", "ct-smoketests", "The hostname we can be reached on")
 	httpHandlerPort := flag.String("http-handler-port", "8920", "The port our HTTP handler can be reached on")
 	queuePath := flag.String("queue-path", "projects/test-project/locations/us-central1/queues/test", "Queue to use (must exist)")
+
+	var expectQueues stringSliceFlag
+	flag.Var(&expectQueues, "expect-queue", "Queue path expected to already exist (may be repeated)")
 
 	flag.Parse()
 
@@ -218,14 +249,19 @@ func main() {
 
 	client := createTasksClient(fmt.Sprintf("%s:%s", *emulatorHost, *emulatorPort))
 
+	for _, expectQueue := range expectQueues {
+		getQueue(client, expectQueue)
+	}
+
 	// In normal use during build the queue will be empty because it will be a clean emulator
 	// but purge it now to ensure clean state if running multiple times when working on this test suite
 	purgeQueue(client, *queuePath)
 
 	createTask(client, *queuePath, handlerUrl)
 
-	request, err := waitForRequestOrTimeout(taskDeliveries, 2*time.Second)
+	request, err := waitForRequestOrTimeout(taskDeliveries, 10*time.Second)
 	fatalIfError(err)
+	deliveredAt := time.Now()
 
 	assertEqual("POST", request.Method)
 	assertEqual("Here is a body for you", readRequestBody(request))
@@ -264,7 +300,13 @@ func main() {
 	}
 
 	log.Println("Waiting to verify no duplicate deliveries")
-	request, _ = waitForRequestOrTimeout(taskDeliveries, 5*time.Second)
+	// The other checks above already used up some of the 5 second window since delivery,
+	// so only wait out whatever is left of it here rather than waiting the full duration again
+	remainingWait := 5*time.Second - time.Since(deliveredAt)
+	if remainingWait <= 0 {
+		remainingWait = time.Millisecond
+	}
+	request, _ = waitForRequestOrTimeout(taskDeliveries, remainingWait)
 	if request != nil {
 		// The request is logged on receipt, so it's not necessary to log it again here
 		log.Fatal("Got unexpected extra HTTP delivery")

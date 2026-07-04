@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 )
 
 // defaultTombstoneTTL is how long a deleted queue/task name stays reserved
@@ -23,8 +25,8 @@ type Options struct {
 
 	// OIDC holds the token-signing configuration used when dispatching tasks
 	// with an OIDC token, and published via the issuer's HTTP endpoints. New
-	// defaults it to DefaultOIDCConfig when nil.
-	OIDC *OIDCConfig
+	// defaults it to oidc.DefaultConfig when nil.
+	OIDC *oidc.Config
 
 	// Dispatcher delivers tasks. New defaults it to HTTPDispatcher when nil;
 	// tests supply a fake to drive lifecycle/retry logic without network I/O.
@@ -88,7 +90,7 @@ func New(opts *Options) *Engine {
 		opts = &Options{}
 	}
 	if opts.OIDC == nil {
-		opts.OIDC = DefaultOIDCConfig()
+		opts.OIDC = oidc.DefaultConfig()
 	}
 	now := time.Now
 	if opts.clock != nil {

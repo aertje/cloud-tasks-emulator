@@ -23,13 +23,13 @@ It also has a few outstanding things to address;
 ## Running the emulator
 Fire it up; you can specify host and port (defaults to localhost:8123):
 ```sh
-go run ./ -host localhost -port 8000
+go run ./cmd/emulator -host localhost -port 8000
 ```
 
 You can also optionally specify one or more queues to create automatically on startup:
 
 ```sh
-go run ./ -host localhost \
+go run ./cmd/emulator -host localhost \
   -port 8000 \
   -queue projects/dev/locations/here/queues/firstq \
   -queue projects/dev/locations/here/queues/anotherq
@@ -103,7 +103,7 @@ your application to verify tokens at runtime with the full online flow.
 To enable this, specify an issuer value at startup:
 
 ```sh
-go run ./ -openid-issuer http://localhost:8980
+go run ./cmd/emulator -openid-issuer http://localhost:8980
 ```
 
 With this flag:
@@ -139,7 +139,7 @@ course, still fire during the PurgeQueue operation - but they cannot fire after 
 returned.
 
 ```sh
-go run ./ --hard-reset-on-purge-queue
+go run ./cmd/emulator --hard-reset-on-purge-queue
 ```
 
 ## Examples

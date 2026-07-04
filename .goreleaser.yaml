@@ -6,7 +6,7 @@ before:
 
 builds:
   - id: cloud-tasks-emulator
-    main: .
+    main: ./cmd/emulator
     binary: emulator
     env:
       - CGO_ENABLED=0

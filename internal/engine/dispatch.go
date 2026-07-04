@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 )
 
 func updateStateForReschedule(task *Task) {
@@ -101,15 +103,15 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 // HTTP; tests inject a fake to exercise queue/task lifecycle and retry
 // behaviour without real network I/O.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int
+	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
 type HTTPDispatcher struct{}
 
 // Dispatch delivers the task over HTTP.
-func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
-	return dispatch(ctx, state, oidc)
+func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
+	return dispatch(ctx, state, oidcCfg)
 }
 
 // dispatch performs a single HTTP delivery for the supplied task-state snapshot
@@ -118,7 +120,7 @@ func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidc *OIDCC
 // are merged into a fresh request header map, because the task's live header map
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
-func dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
+func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
 	client := &http.Client{Timeout: state.DispatchDeadline}
 
 	nameParts, ok := parseTaskName(state.Name)
@@ -159,7 +161,7 @@ func dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
 		}
 
 		if auth := state.HTTPRequest.OIDCToken; auth != nil {
-			tokenStr := oidc.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
+			tokenStr := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
 			injected["Authorization"] = "Bearer " + tokenStr
 		}
 	case state.AppEngineHTTPRequest != nil:
@@ -212,7 +214,7 @@ func dispatch(ctx context.Context, state TaskState, oidc *OIDCConfig) int {
 }
 
 func (task *Task) doDispatch(retry bool, state TaskState) {
-	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidc)
+	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

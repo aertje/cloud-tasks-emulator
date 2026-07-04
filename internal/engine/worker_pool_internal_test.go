@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func newBlockingDispatcher(status int) *blockingDispatcher {
 	return &blockingDispatcher{status: status, release: make(chan struct{})}
 }
 
-func (b *blockingDispatcher) Dispatch(_ context.Context, _ TaskState, _ *OIDCConfig) int {
+func (b *blockingDispatcher) Dispatch(_ context.Context, _ TaskState, _ *oidc.Config) int {
 	n := b.active.Add(1)
 	for {
 		m := b.maxSeen.Load()

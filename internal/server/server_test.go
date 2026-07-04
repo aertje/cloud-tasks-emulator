@@ -1,4 +1,4 @@
-package main_test
+package server_test
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 
 	. "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	. "github.com/aertje/cloud-tasks-emulator"
-	"github.com/aertje/cloud-tasks-emulator/engine"
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	. "github.com/aertje/cloud-tasks-emulator/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
@@ -662,7 +662,7 @@ func TestErrorTaskExecution(t *testing.T) {
 
 func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	t.Parallel()
-	oidcConfig := engine.DefaultOIDCConfig()
+	oidcConfig := oidc.DefaultConfig()
 	oidcConfig.IssuerURL = "http://localhost:8980"
 	_, client := setUp(t, ServerOptions{OIDC: oidcConfig})
 
@@ -702,10 +702,10 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	tokenStr := strings.Replace(authHeader, "Bearer ", "", 1)
 
 	// Full token validation is done in the docker smoketests and the oidc internal tests
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &engine.OpenIDConnectClaims{})
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &oidc.Claims{})
 	require.NoError(t, err)
 
-	claims := token.Claims.(*engine.OpenIDConnectClaims)
+	claims := token.Claims.(*oidc.Claims)
 	assert.Equal(t, jwt.ClaimStrings{targetURL}, claims.Audience, "Specifies audience")
 	assert.Equal(t, "emulator@service.test", claims.Email, "Specifies email")
 	assert.Equal(t, "http://localhost:8980", claims.Issuer, "Specifies issuer")

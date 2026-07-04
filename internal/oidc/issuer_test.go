@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"context"
@@ -8,14 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/engine"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOpenIdConfigHttpHandler(t *testing.T) {
-	config := engine.DefaultOIDCConfig()
+	config := DefaultConfig()
 	config.IssuerURL = "http://foo.bar:8080"
 	s := openIDServer{config: config}
 
@@ -30,7 +28,7 @@ func TestOpenIdConfigHttpHandler(t *testing.T) {
 }
 
 func TestOpenIdJWKSHttpHandler(t *testing.T) {
-	config := engine.DefaultOIDCConfig()
+	config := DefaultConfig()
 	config.KeyID = "any-key-id"
 	s := openIDServer{config: config}
 
@@ -66,19 +64,19 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
 
 func TestConfigureOpenIdIssuerRejectsInvalidUrl(t *testing.T) {
 	var err error
-	_, err = configureOpenIdIssuer("junk", engine.DefaultOIDCConfig())
+	_, err = ConfigureIssuer("junk", DefaultConfig())
 	assert.Error(t, err, "-openid-issuer must be a base URL e.g. http://any-host:8237")
 
-	_, err = configureOpenIdIssuer("https://foo:8900", engine.DefaultOIDCConfig())
+	_, err = ConfigureIssuer("https://foo:8900", DefaultConfig())
 	assert.Error(t, err, "-openid-issuer only supports http protocol")
 
-	_, err = configureOpenIdIssuer("http://foo:8900/deep", engine.DefaultOIDCConfig())
+	_, err = ConfigureIssuer("http://foo:8900/deep", DefaultConfig())
 	assert.Error(t, err, "-openid-issuer must not contain a path")
 }
 
 func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
-	config := engine.DefaultOIDCConfig()
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me:8200", config)
+	config := DefaultConfig()
+	srv, err := ConfigureIssuer("http://my-external.route.to.me:8200", config)
 	require.NoError(t, err)
 	assert.Equal(t, "http://my-external.route.to.me:8200", config.IssuerURL)
 	assert.Equal(t, "0.0.0.0:8200", srv.Addr)
@@ -86,8 +84,8 @@ func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
 }
 
 func TestConfigureOpenIdIssuerSupportsPort80(t *testing.T) {
-	config := engine.DefaultOIDCConfig()
-	srv, err := configureOpenIdIssuer("http://my-external.route.to.me", config)
+	config := DefaultConfig()
+	srv, err := ConfigureIssuer("http://my-external.route.to.me", config)
 	require.NoError(t, err)
 	assert.Equal(t, "http://my-external.route.to.me", config.IssuerURL)
 	assert.Equal(t, "0.0.0.0:80", srv.Addr)

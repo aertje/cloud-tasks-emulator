@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/engine"
+	"github.com/aertje/cloud-tasks-emulator/internal/engine"
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"

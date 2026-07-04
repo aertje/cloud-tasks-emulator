@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func newFakeDispatcher(status int) *fakeDispatcher {
 	}
 }
 
-func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *OIDCConfig) int {
+func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *oidc.Config) int {
 	f.mu.Lock()
 	attempt := len(f.calls)
 	f.calls = append(f.calls, state)

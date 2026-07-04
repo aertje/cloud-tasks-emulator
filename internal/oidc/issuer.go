@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto/rsa"
@@ -9,8 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/aertje/cloud-tasks-emulator/engine"
 )
 
 const jwksUriPath = "/jwks"
@@ -19,7 +17,7 @@ const jwksUriPath = "/jwks"
 // configuration. It holds the config explicitly rather than reaching for package
 // state, so the HTTP endpoints publish exactly the key the engine signs with.
 type openIDServer struct {
-	config *engine.OIDCConfig
+	config *Config
 }
 
 func (s openIDServer) configHandler(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +70,7 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 
 // newOpenIDConfigurationServer builds the OpenID discovery/JWKS HTTP server. The
 // caller owns its lifecycle (starting it and shutting it down); see main.
-func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *engine.OIDCConfig) *http.Server {
+func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *Config) *http.Server {
 	s := openIDServer{config: config}
 
 	mux := http.NewServeMux()
@@ -82,7 +80,7 @@ func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *
 	return &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
 }
 
-func configureOpenIdIssuer(issuerUrl string, config *engine.OIDCConfig) (*http.Server, error) {
+func ConfigureIssuer(issuerUrl string, config *Config) (*http.Server, error) {
 	url, err := url.ParseRequestURI(issuerUrl)
 	if err != nil {
 		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")

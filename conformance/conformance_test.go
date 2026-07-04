@@ -80,7 +80,7 @@ func startEmulator(t *testing.T) string {
 	}
 
 	bin := filepath.Join(t.TempDir(), "emulator")
-	build := exec.Command("go", "build", "-o", bin, ".")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/emulator")
 	build.Dir = repoRoot
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build emulator: %v\n%s", err, out)

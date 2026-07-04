@@ -12,7 +12,7 @@
 //
 // Dump the emulator's current behaviour for ad-hoc comparison:
 //
-//	go run . -port 8123 &   # from repo root
+//	go run ./cmd/emulator -port 8123 &   # from repo root
 //	go run ./cmd/record -target=emulator -addr=localhost:8123 -out=/tmp/emu.json
 package main
 

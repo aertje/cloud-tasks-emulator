@@ -1,4 +1,4 @@
-package engine
+package oidc
 
 import (
 	"testing"
@@ -10,53 +10,53 @@ import (
 )
 
 func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
-	config := DefaultOIDCConfig()
+	config := DefaultConfig()
 	tokenStr := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "")
 	parser := new(jwt.Parser)
-	token, _, err := parser.ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
 	require.NoError(t, err)
 	assert.Equal(t, "RS256", token.Header["alg"], "Uses RS256")
 	assert.Equal(t, config.KeyID, token.Header["kid"], "Specifies kid")
 
-	claims := token.Claims.(*OpenIDConnectClaims)
+	claims := token.Claims.(*Claims)
 
 	assert.Equal(t, jwt.ClaimStrings{"http://my.service/foo?bar=v"}, claims.Audience, "Specifies audience")
 	assert.Equal(t, config.IssuerURL, claims.Issuer, "Specifies issuer")
 	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
 	assert.Equal(t, "foobar@service.com", claims.Subject, "Specifies subject")
 	assert.True(t, claims.EmailVerified, "Specifies email")
-	assertRoughTimestamp(t, 0*time.Second, claims.IssuedAt, "Issued now")
-	assertRoughTimestamp(t, 0*time.Second, claims.NotBefore, "Not before now")
-	assertRoughTimestamp(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
+	assertRoughNumericDate(t, 0*time.Second, claims.IssuedAt, "Issued now")
+	assertRoughNumericDate(t, 0*time.Second, claims.NotBefore, "Not before now")
+	assertRoughNumericDate(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
 }
 
 func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
-	config := DefaultOIDCConfig()
+	config := DefaultConfig()
 	tokenStr := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
 	parser := new(jwt.Parser)
-	token, _, err := parser.ParseUnverified(tokenStr, &OpenIDConnectClaims{})
+	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
 	require.NoError(t, err)
 	assert.Equal(t, "RS256", token.Header["alg"], "Uses RS256")
 	assert.Equal(t, config.KeyID, token.Header["kid"], "Specifies kid")
 
-	claims := token.Claims.(*OpenIDConnectClaims)
+	claims := token.Claims.(*Claims)
 
 	assert.Equal(t, jwt.ClaimStrings{"http://my.api"}, claims.Audience, "Specifies audience")
 	assert.Equal(t, config.IssuerURL, claims.Issuer, "Specifies issuer")
 	assert.Equal(t, "foobar@service.com", claims.Email, "Specifies email")
 	assert.True(t, claims.EmailVerified, "Specifies email")
-	assertRoughTimestamp(t, 0*time.Second, claims.IssuedAt, "Issued now")
-	assertRoughTimestamp(t, 0*time.Second, claims.NotBefore, "Not before now")
-	assertRoughTimestamp(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
+	assertRoughNumericDate(t, 0*time.Second, claims.IssuedAt, "Issued now")
+	assertRoughNumericDate(t, 0*time.Second, claims.NotBefore, "Not before now")
+	assertRoughNumericDate(t, 5*time.Minute, claims.ExpiresAt, "Expires in 5 mins")
 }
 
 func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	// Sanity check that the token is valid if we have the private key in go format
-	config := DefaultOIDCConfig()
+	config := DefaultConfig()
 	tokenStr := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
 	_, err := new(jwt.Parser).ParseWithClaims(
 		tokenStr,
-		&OpenIDConnectClaims{},
+		&Claims{},
 		func(token *jwt.Token) (interface{}, error) {
 			// Can safely skip kid checking as we check it in the data test above
 			assert.IsType(t, jwt.SigningMethodRS256, token.Method)
@@ -66,7 +66,7 @@ func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func assertRoughTimestamp(t *testing.T, expectOffset time.Duration, timestamp *jwt.NumericDate, msg string) {
+func assertRoughNumericDate(t *testing.T, expectOffset time.Duration, timestamp *jwt.NumericDate, msg string) {
 	// Ensures that the timestamp is roughly correct, and that it is *less* than
 	// the expected value. So e.g. a timestamp that should be 5 minutes in the
 	// future might be slightly under due to the clock ticking since creation,

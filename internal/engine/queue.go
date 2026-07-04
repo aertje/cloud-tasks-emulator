@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 )
 
 // Queue holds all internals for a task queue
@@ -51,9 +53,9 @@ type Queue struct {
 
 	onTaskDone func(task *Task)
 
-	// oidc is the token-signing configuration used by tasks on this queue when
+	// oidcCfg is the token-signing configuration used by tasks on this queue when
 	// dispatching with an OIDC token. Threaded down from the engine.
-	oidc *OIDCConfig
+	oidcCfg *oidc.Config
 
 	// dispatcher delivers tasks on this queue. Threaded down from the engine so
 	// tests can substitute a fake. Never nil for a live queue.
@@ -68,7 +70,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidc *OIDCConfig, dispatcher Dispatcher, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg *oidc.Config, dispatcher Dispatcher, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -80,7 +82,7 @@ func newQueue(state QueueState, oidc *OIDCConfig, dispatcher Dispatcher, onTaskD
 		sem:                    make(chan struct{}, int(state.RateLimits.MaxConcurrentDispatches)),
 		ts:                     make(map[string]*Task),
 		onTaskDone:             onTaskDone,
-		oidc:                   oidc,
+		oidcCfg:                oidcCfg,
 		dispatcher:             dispatcher,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,

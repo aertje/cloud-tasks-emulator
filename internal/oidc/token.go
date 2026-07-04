@@ -1,4 +1,4 @@
-package engine
+package oidc
 
 import (
 	"crypto/rsa"
@@ -40,30 +40,30 @@ FSkhEKj2YXWlriv3hyPIC8Aq
 -----END PRIVATE KEY-----
 `
 
-// OIDCConfig holds the key material and issuer identity used to mint OIDC tokens
+// Config holds the key material and issuer identity used to mint OIDC tokens
 // during dispatch and to publish the matching discovery/JWKS endpoints. It is
-// created per-engine (see DefaultOIDCConfig) and threaded through to dispatch
+// created per-engine (see DefaultConfig) and threaded through to dispatch
 // rather than held as mutable package state.
-type OIDCConfig struct {
+type Config struct {
 	IssuerURL  string
 	KeyID      string
 	PrivateKey *rsa.PrivateKey
 }
 
-type OpenIDConnectClaims struct {
+type Claims struct {
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
 	jwt.RegisteredClaims
 }
 
-// DefaultOIDCConfig builds an OIDCConfig from the baked-in development key.
-func DefaultOIDCConfig() *OIDCConfig {
+// DefaultConfig builds a Config from the baked-in development key.
+func DefaultConfig() *Config {
 	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(openIdPrivateKeyStr))
 	if err != nil {
 		panic(err)
 	}
 
-	return &OIDCConfig{
+	return &Config{
 		IssuerURL:  "http://cloud-tasks-emulator",
 		KeyID:      "cloudtasks-emulator-test",
 		PrivateKey: privateKey,
@@ -72,12 +72,12 @@ func DefaultOIDCConfig() *OIDCConfig {
 
 // CreateToken issues an RS256-signed OIDC token for the given service account.
 // audience defaults to handlerUrl if not provided.
-func (c *OIDCConfig) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) string {
+func (c *Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) string {
 	if audience == "" {
 		audience = handlerUrl
 	}
 	now := time.Now()
-	claims := OpenIDConnectClaims{
+	claims := Claims{
 		Email:         serviceAccountEmail,
 		EmailVerified: true,
 		RegisteredClaims: jwt.RegisteredClaims{

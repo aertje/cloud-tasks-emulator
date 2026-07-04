@@ -73,7 +73,7 @@ unstable, so the comparison collapses whitespace before diffing.
 To eyeball the emulator's current behaviour without a golden:
 
 ```sh
-go run . -port 8123 &                                  # from repo root
+go run ./cmd/emulator -port 8123 &                                  # from repo root
 cd conformance
 go run ./cmd/record -target=emulator -addr=localhost:8123 -out=/tmp/emu.json
 ```

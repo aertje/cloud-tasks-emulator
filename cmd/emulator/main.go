@@ -14,6 +14,9 @@ import (
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 
+	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/internal/server"
+
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
@@ -31,7 +34,7 @@ func (i *arrayFlags) Set(value string) error {
 }
 
 // Creates an initial queue on the emulator
-func createInitialQueue(emulatorServer *Server, name string) {
+func createInitialQueue(emulatorServer *server.Server, name string) {
 	fmt.Printf("Creating initial queue %s\n", name)
 
 	r := regexp.MustCompile("/queues/[A-Za-z0-9-]+$")
@@ -61,12 +64,12 @@ func main() {
 
 	flag.Parse()
 
-	emulatorServer := NewServer()
+	emulatorServer := server.NewServer()
 	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
 
 	var openIDServer *http.Server
 	if *openidIssuer != "" {
-		srv, err := configureOpenIdIssuer(*openidIssuer, emulatorServer.Options.OIDC)
+		srv, err := oidc.ConfigureIssuer(*openidIssuer, emulatorServer.Options.OIDC)
 		if err != nil {
 			panic(err)
 		}

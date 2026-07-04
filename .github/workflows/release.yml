@@ -9,6 +9,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 jobs:
   goreleaser:
@@ -35,6 +36,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest@v4
+        env:
+          NODE_OPTIONS: "--max-http-header-size=32768"
         with:
           subject-path: "dist/*.tar.gz,dist/*.zip,dist/checksums.txt"

@@ -208,6 +208,13 @@ func (queue *Queue) runDispatcher(stop <-chan struct{}) {
 						task.Attempt()
 					}()
 				case <-stop:
+					// We already committed this task by receiving it from fire,
+					// so we must not drop it: re-arm it so the next dispatcher
+					// generation (after Resume) picks it up, or so Delete's Purge
+					// can cancel it. Dropping it here loses the task entirely -
+					// its Schedule goroutine has already returned and nothing
+					// else re-schedules it.
+					task.Schedule()
 					return
 				}
 			case <-stop:

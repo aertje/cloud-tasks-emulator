@@ -13,8 +13,7 @@ import (
 )
 
 // ServerOptions tunes runtime behaviour of the emulator server.
-// It is an alias for engine.Options so callers can mutate it on a Server and
-// have the engine observe the changes without an explicit sync step.
+// It is an alias for engine.Options.
 type ServerOptions = engine.Options
 
 // Server is the gRPC CloudTasksServer implementation. It is a thin handler that
@@ -22,14 +21,17 @@ type ServerOptions = engine.Options
 type Server struct {
 	engine *engine.Engine
 
-	// Options is shared with the engine via pointer; assignments to this field
-	// are observed by the engine on subsequent calls.
+	// Options records the options the server was built with. They are consumed by
+	// the engine at construction, so mutating this field afterwards has no effect
+	// (the sole exception is an in-place mutation of the OIDC config, whose
+	// pointer the engine retains).
 	Options ServerOptions
 }
 
-// NewServer creates a new emulator server with its own engine and default options.
-func NewServer() *Server {
-	s := &Server{}
+// NewServer creates a new emulator server, backed by its own engine, configured
+// with the given options. Pass the zero ServerOptions for defaults.
+func NewServer(opts ServerOptions) *Server {
+	s := &Server{Options: opts}
 	s.engine = engine.New(&s.Options)
 	return s
 }

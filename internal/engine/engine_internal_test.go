@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +38,7 @@ func newFakeDispatcher(status int) *fakeDispatcher {
 	}
 }
 
-func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *oidc.Config, _ *slog.Logger) int {
+func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *oidc.Config) int {
 	f.mu.Lock()
 	attempt := len(f.calls)
 	f.calls = append(f.calls, state)
@@ -82,7 +81,14 @@ func (f *fakeDispatcher) awaitDispatches(t *testing.T, n int, timeout time.Durat
 // queues cancelled on test cleanup.
 func newTestEngine(t *testing.T, d Dispatcher) *Engine {
 	t.Helper()
-	e := New(&Options{Dispatcher: d})
+	return newTestEngineOpts(t, Options{Dispatcher: d})
+}
+
+// newTestEngineOpts returns an engine built from the supplied options, with its
+// queues cancelled on test cleanup.
+func newTestEngineOpts(t *testing.T, opts Options) *Engine {
+	t.Helper()
+	e := New(&opts)
 	t.Cleanup(e.Stop)
 	return e
 }
@@ -365,8 +371,7 @@ func TestSoftPurgeKeepsNamesReserved(t *testing.T) {
 }
 
 func TestHardResetReleasesNames(t *testing.T) {
-	e := newTestEngine(t, newFakeDispatcher(200))
-	e.opts.HardResetOnPurgeQueue = true
+	e := newTestEngineOpts(t, Options{Dispatcher: newFakeDispatcher(200), HardResetOnPurgeQueue: true})
 	createRunningQueue(t, e)
 	ctx := t.Context()
 
@@ -402,8 +407,7 @@ func TestHardResetPurgeRespectsContext(t *testing.T) {
 		<-blockDispatch // Never returns until the test unblocks it.
 		return 200
 	}
-	e := newTestEngine(t, d)
-	e.opts.HardResetOnPurgeQueue = true
+	e := newTestEngineOpts(t, Options{Dispatcher: d, HardResetOnPurgeQueue: true})
 	createRunningQueue(t, e)
 	t.Cleanup(func() { close(blockDispatch) })
 

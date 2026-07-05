@@ -39,10 +39,10 @@ type Options struct {
 	// unlike the lazily-read fields above it is not observed if mutated later.
 	TombstoneTTL time.Duration
 
-	// Logger receives the engine's queue-lifecycle and dispatch diagnostics. It
-	// is read lazily when a queue is created (defaulting to slog.Default() when
-	// nil), so callers may set it on the shared Options after New. Each queue
-	// captures the resolved logger for the lifetime of that queue.
+	// Logger receives the engine's queue-lifecycle and dispatch diagnostics. New
+	// resolves it once (defaulting to slog.Default() when nil) and tags it with a
+	// component attribute, so unlike the fields read live it must be set before
+	// New; mutating it afterwards has no effect.
 	Logger *slog.Logger
 
 	// clock supplies the current time. It defaults to time.Now; tests inject a
@@ -71,22 +71,37 @@ type Engine struct {
 	qsMux sync.Mutex
 	tsMux sync.Mutex
 
-	// opts is held via pointer so callers retain ownership of the value and
-	// mutations made after construction (e.g. test setup) are observed.
-	opts *Options
+	// The fields below are resolved once in New from the supplied Options and
+	// never reassigned, so they are safe to read without a lock. The engine keeps
+	// no reference to the Options value itself; callers configure it at
+	// construction (see NewServer) and later mutation has no effect.
 
-	// now supplies the current time, injectable for tests. Set once in New and
-	// never reassigned, so it is safe to read without a lock.
+	// dispatcher delivers tasks on every queue. Defaulted to HTTPDispatcher when
+	// Options.Dispatcher is nil; tests inject a fake.
+	dispatcher Dispatcher
+
+	// oidc is the token-signing configuration threaded to each queue. It is a
+	// pointer, so an in-place mutation of the pointed-to Config after New (e.g.
+	// oidc.ConfigureIssuer in the binary) is still observed at dispatch time.
+	oidc *oidc.Config
+
+	// hardResetOnPurge mirrors Options.HardResetOnPurgeQueue.
+	hardResetOnPurge bool
+
+	// now supplies the current time, injectable for tests.
 	now func() time.Time
 
-	// ttl is the resolved tombstone cooldown. Set once in New (so the sweep
-	// goroutine can read it without racing later opts mutations) and never
-	// reassigned.
+	// ttl is the resolved tombstone cooldown, also driving the sweep ticker.
 	ttl time.Duration
 
 	// stop is closed by Stop to terminate the tombstone sweep goroutine.
 	stop     chan struct{}
 	stopOnce sync.Once
+
+	// logger is the engine's diagnostic logger, resolved once in New from
+	// Options.Logger (or slog.Default()) and tagged with a component attribute so
+	// consumers can filter emulator output from their own. Never nil.
+	logger *slog.Logger
 }
 
 // New creates a new engine with empty queue/task bookkeeping and starts the
@@ -107,15 +122,29 @@ func New(opts *Options) *Engine {
 	if ttl <= 0 {
 		ttl = defaultTombstoneTTL
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("component", "cloud-tasks-emulator")
+	// The default dispatcher owns the engine's logger; an injected one owns its
+	// own logging.
+	dispatcher := opts.Dispatcher
+	if dispatcher == nil {
+		dispatcher = HTTPDispatcher{logger: logger}
+	}
 	e := &Engine{
-		qs:          make(map[string]*Queue),
-		ts:          make(map[string]*Task),
-		qTombstones: make(map[string]time.Time),
-		tTombstones: make(map[string]time.Time),
-		opts:        opts,
-		now:         now,
-		ttl:         ttl,
-		stop:        make(chan struct{}),
+		qs:               make(map[string]*Queue),
+		ts:               make(map[string]*Task),
+		qTombstones:      make(map[string]time.Time),
+		tTombstones:      make(map[string]time.Time),
+		dispatcher:       dispatcher,
+		oidc:             opts.OIDC,
+		hardResetOnPurge: opts.HardResetOnPurgeQueue,
+		now:              now,
+		ttl:              ttl,
+		logger:           logger,
+		stop:             make(chan struct{}),
 	}
 	go e.sweepLoop()
 	return e
@@ -353,19 +382,7 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	// Options are read lazily (they may be mutated after New, e.g. by the server
-	// wiring), so default the dispatcher here rather than in New.
-	dispatcher := e.opts.Dispatcher
-	if dispatcher == nil {
-		dispatcher = HTTPDispatcher{}
-	}
-
-	logger := e.opts.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	queue := newQueue(qs, e.opts.OIDC, dispatcher, logger, func(task *Task) {
+	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, func(task *Task) {
 		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)
@@ -403,7 +420,7 @@ func (e *Engine) PurgeQueue(ctx context.Context, name string) (*Queue, error) {
 	if !ok {
 		return nil, ErrQueueNotFound
 	}
-	if e.opts.HardResetOnPurgeQueue {
+	if e.hardResetOnPurge {
 		if err := e.hardResetQueue(ctx, queue); err != nil {
 			return nil, err
 		}
@@ -573,6 +590,7 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 
 	task, frozen := queue.NewTask(ts)
 	e.setTask(frozen.Name, task)
+	queue.logger.Debug("task received", "task", frozen.Name, "queue", parent)
 	return task, frozen, nil
 }
 

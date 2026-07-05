@@ -42,7 +42,9 @@ func WithHardResetOnPurgeQueue(v bool) Option {
 }
 
 // WithLogger routes the emulator's queue-lifecycle and dispatch diagnostics to
-// the given logger. When unset, the emulator logs through slog.Default(); pass
+// the given logger. Emulator log records carry a component="cloud-tasks-emulator"
+// attribute so they can be filtered from the host application's own output. When
+// unset, the emulator logs through slog.Default(); pass
 // slog.New(slog.DiscardHandler) to silence it entirely in tests.
 func WithLogger(l *slog.Logger) Option {
 	return func(o *server.ServerOptions) { o.Logger = l }
@@ -51,15 +53,20 @@ func WithLogger(l *slog.Logger) Option {
 // Start launches an in-process emulator serving on an in-memory listener. The
 // caller must call Close to stop the server and release its resources.
 func Start(opts ...Option) *Emulator {
-	s := server.NewServer()
+	var so server.ServerOptions
 	for _, opt := range opts {
-		opt(&s.Options)
+		opt(&so)
 	}
+	s := server.NewServer(so)
 
-	logger := s.Options.Logger
+	// The serve goroutine below is this package's own concern, so resolve its
+	// logger from the same option the engine reads, tagged to match the engine's
+	// records. When unset, fall back to slog.Default().
+	logger := so.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+	logger = logger.With("component", "cloud-tasks-emulator")
 
 	lis := bufconn.Listen(bufSize)
 	gs := grpc.NewServer()
@@ -70,7 +77,7 @@ func Start(opts ...Option) *Emulator {
 	// here, so log it and let the goroutine exit.
 	go func() {
 		if err := gs.Serve(lis); err != nil {
-			logger.Error("cloud-tasks-emulator: in-process gRPC server stopped", "err", err)
+			logger.Error("in-process gRPC server stopped", "err", err)
 		}
 	}()
 

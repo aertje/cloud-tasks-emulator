@@ -86,8 +86,9 @@ func main() {
 		panic(err)
 	}
 
-	emulatorServer := server.NewServer()
-	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue
+	emulatorServer := server.NewServer(server.ServerOptions{
+		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
+	})
 
 	var openIDServer *http.Server
 	if *openidIssuer != "" {

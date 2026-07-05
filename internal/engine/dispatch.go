@@ -103,14 +103,23 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 // HTTP; tests inject a fake to exercise queue/task lifecycle and retry
 // behaviour without real network I/O.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int
+	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
-type HTTPDispatcher struct{}
+type HTTPDispatcher struct {
+	// logger receives dispatch diagnostics. The engine injects its resolved
+	// logger when it constructs the default dispatcher, so it is never nil in
+	// production; the zero value falls back to slog.Default() defensively.
+	logger *slog.Logger
+}
 
 // Dispatch delivers the task over HTTP.
-func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int {
+func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
+	logger := h.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return dispatch(ctx, state, oidcCfg, logger)
 }
 
@@ -218,7 +227,13 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger
 }
 
 func (task *Task) doDispatch(retry bool, state TaskState) {
-	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg, task.queue.logger)
+	task.queue.logger.Debug("dispatching task attempt",
+		"task", state.Name, "attempt", state.DispatchCount)
+
+	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg)
+
+	task.queue.logger.Debug("task attempt completed",
+		"task", state.Name, "attempt", state.DispatchCount, "code", respCode)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

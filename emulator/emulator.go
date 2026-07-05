@@ -8,6 +8,7 @@ package emulator
 
 import (
 	"context"
+	"log"
 	"net"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
@@ -52,8 +53,14 @@ func Start(opts ...Option) *Emulator {
 	gs := grpc.NewServer()
 	taskspb.RegisterCloudTasksServer(gs, s)
 
-	// Serve returns when the listener is closed by Close via GracefulStop.
-	go gs.Serve(lis)
+	// Serve returns nil when Close stops the server via GracefulStop; any
+	// other error means the in-memory listener failed, which is unrecoverable
+	// here, so log it and let the goroutine exit.
+	go func() {
+		if err := gs.Serve(lis); err != nil {
+			log.Printf("cloud-tasks-emulator: in-process gRPC server stopped: %v", err)
+		}
+	}()
 
 	return &Emulator{srv: s, grpc: gs, lis: lis}
 }

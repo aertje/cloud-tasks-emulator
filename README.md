@@ -31,21 +31,26 @@ You can also optionally specify one or more queues to create automatically on st
 ```sh
 go run ./cmd/emulator -host localhost \
   -port 8000 \
-  -queue projects/dev/locations/here/queues/firstq \
-  -queue projects/dev/locations/here/queues/anotherq
+  -initial-queue projects/dev/locations/here/queues/firstq \
+  -initial-queue projects/dev/locations/here/queues/anotherq
 ```
 
-Alternatively, you can define environment variables and then run the shell script `./emulator_from_env.sh` to start the emulator. The following environment variables are supported:
+Alternatively, every flag can be set via an environment variable derived from the
+flag name (uppercased, dashes replaced by underscores). Explicit flags take
+precedence over environment variables. The following environment variables are
+supported:
 
  ```sh
  export PORT=8124
  export HOST=localhost
  export HARD_RESET_ON_PURGE_QUEUE=true
- export INITIAL_QUEUES=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
+ export INITIAL_QUEUE=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
  export OPENID_ISSUER=http://localhost:8080
 
-./emulator_from_env.sh
+./emulator
  ```
+
+Note that `INITIAL_QUEUE` accepts a comma-separated list to create multiple queues.
 
 Once running, you connect to it using the standard google cloud tasks GRPC libraries.
 
@@ -53,7 +58,7 @@ Once running, you connect to it using the standard google cloud tasks GRPC libra
 You can use the dockerfile if you don't want to install a Go build environment:
 ```sh
 docker build ./ -t tasks_emulator
-docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -queue projects/dev/locations/here/queues/anotherq
+docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -initial-queue projects/dev/locations/here/queues/anotherq
 ```
 
 ### Docker image
@@ -67,7 +72,7 @@ If you are planning on using docker-compose the above configuration translates t
 ```yml
 gcloud-tasks-emulator:
   image: ghcr.io/aertje/cloud-tasks-emulator:latest
-  command: -host 0.0.0.0 -port 8123 -queue "projects/dev/locations/here/queues/anotherq"
+  command: -host 0.0.0.0 -port 8123 -initial-queue "projects/dev/locations/here/queues/anotherq"
   ports:
     - "${TASKS_PORT:-8123}:8123"
   environment:

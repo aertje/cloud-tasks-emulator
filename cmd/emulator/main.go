@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"regexp"
 	"strings"
@@ -17,11 +18,12 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
 	"github.com/aertje/cloud-tasks-emulator/internal/server"
 
+	"github.com/peterbourgon/ff/v3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
-// arrayFlags used for parsing list of potentially repeated flags e.g. -queue $Q1 -queue $Q2
+// arrayFlags used for parsing list of potentially repeated flags e.g. -initial-queue $Q1 -initial-queue $Q2
 type arrayFlags []string
 
 func (i *arrayFlags) String() string {
@@ -55,14 +57,25 @@ func createInitialQueue(emulatorServer *server.Server, name string) {
 func main() {
 	var initialQueues arrayFlags
 
-	host := flag.String("host", "localhost", "The host name")
-	port := flag.String("port", "8123", "The port")
-	openidIssuer := flag.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
-	hardResetOnPurgeQueue := flag.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
+	fs := flag.NewFlagSet("emulator", flag.ExitOnError)
 
-	flag.Var(&initialQueues, "queue", "A queue to create on startup (repeat as required)")
+	host := fs.String("host", "localhost", "The host name")
+	port := fs.String("port", "8123", "The port")
+	openidIssuer := fs.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
+	hardResetOnPurgeQueue := fs.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
 
-	flag.Parse()
+	fs.Var(&initialQueues, "initial-queue", "A queue to create on startup (repeat as required)")
+
+	// Flags may also be set via env vars derived from the flag name, e.g.
+	// -openid-issuer <- OPENID_ISSUER, -initial-queue <- INITIAL_QUEUE
+	// (comma-separated for multiple). Explicit flags take precedence over env
+	// vars.
+	if err := ff.Parse(fs, os.Args[1:],
+		ff.WithEnvVarNoPrefix(),
+		ff.WithEnvVarSplit(","),
+	); err != nil {
+		panic(err)
+	}
 
 	emulatorServer := server.NewServer()
 	emulatorServer.Options.HardResetOnPurgeQueue = *hardResetOnPurgeQueue

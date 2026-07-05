@@ -21,8 +21,6 @@ RUN adduser -D -u 10001 appuser
 WORKDIR /
 
 COPY --from=builder --chown=appuser /app/emulator .
-COPY --from=builder --chown=appuser /app/emulator_from_env.sh .
-RUN chmod +x emulator_from_env.sh
 
 USER appuser
 

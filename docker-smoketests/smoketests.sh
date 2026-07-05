@@ -34,7 +34,7 @@ docker run \
   --network "$network_name" \
   "$EMULATOR_DOCKER_IMAGE" \
   -host 0.0.0.0 \
-  -queue projects/test-project/locations/us-central1/queues/test \
+  -initial-queue projects/test-project/locations/us-central1/queues/test \
   -port 8930 \
   -openid-issuer http://cloud-tasks-emulator:8050
 
@@ -82,25 +82,24 @@ fi
 if [ "$test_result" -ne 0 ]; then
   echo ""
   echo "-------------------"
-  echo "Skipping phase 2 (env-var entrypoint) because phase 1 smoketests failed"
+  echo "Skipping phase 2 (env-var config) because phase 1 smoketests failed"
 else
   echo ""
   echo "-------------------"
-  echo "Starting emulator (env-var entrypoint emulator_from_env.sh, comma-separated INITIAL_QUEUES)"
+  echo "Starting emulator (env-var config, comma-separated INITIAL_QUEUE)"
   docker run \
     -d \
     --name cloud-tasks-emulator-env \
     --network "$network_name" \
-    --entrypoint ./emulator_from_env.sh \
     -e HOST=0.0.0.0 \
     -e PORT=8931 \
     -e OPENID_ISSUER=http://cloud-tasks-emulator-env:8050 \
-    -e INITIAL_QUEUES=projects/test-project/locations/us-central1/queues/queue-a,projects/test-project/locations/us-central1/queues/queue-b \
+    -e INITIAL_QUEUE=projects/test-project/locations/us-central1/queues/queue-a,projects/test-project/locations/us-central1/queues/queue-b \
     "$EMULATOR_DOCKER_IMAGE"
 
   echo ""
   echo "-------------------"
-  echo "Running smoketests (phase 2, env-var entrypoint)"
+  echo "Running smoketests (phase 2, env-var config)"
   set +o errexit
   docker run \
     --rm \

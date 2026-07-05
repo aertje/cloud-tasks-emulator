@@ -15,8 +15,8 @@ import (
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
-	"github.com/aertje/cloud-tasks-emulator/internal/server"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 
 	"github.com/peterbourgon/ff/v3"
 	"golang.org/x/sync/errgroup"

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

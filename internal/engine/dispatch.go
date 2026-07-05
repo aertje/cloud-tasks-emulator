@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
 func updateStateForReschedule(task *Task) {

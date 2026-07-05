@@ -54,6 +54,11 @@ Note that `INITIAL_QUEUE` accepts a comma-separated list to create multiple queu
 
 Once running, you connect to it using the standard google cloud tasks GRPC libraries.
 
+You can also install the binary directly:
+```sh
+go install github.com/aertje/cloud-tasks-emulator/v2/cmd/emulator@latest
+```
+
 ### Docker
 You can use the dockerfile if you don't want to install a Go build environment:
 ```sh
@@ -146,6 +151,54 @@ returned.
 ```sh
 go run ./cmd/emulator --hard-reset-on-purge-queue
 ```
+
+## Embedding in Go tests
+If your code is written in Go, you can run the emulator in-process instead of
+starting a separate binary or container. The `emulator` package serves over an
+in-memory (bufconn) connection, so no TCP port is opened and your tests stay
+hermetic.
+
+```go
+import (
+	"context"
+	"testing"
+
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"github.com/aertje/cloud-tasks-emulator/v2/emulator"
+)
+
+func TestMyWorker(t *testing.T) {
+	em := emulator.Start()
+	defer em.Close()
+
+	ctx := context.Background()
+	client, err := cloudtasks.NewClient(ctx, em.ClientOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	// Use `client` exactly as you would against real Cloud Tasks.
+	parent := "projects/my-sandbox/locations/us-central1"
+	queue, _ := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+		Parent: parent,
+		Queue:  &taskspb.Queue{Name: parent + "/queues/test"},
+	})
+	client.CreateTask(ctx, &taskspb.CreateTaskRequest{
+		Parent: queue.GetName(),
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: "https://www.google.com"},
+			},
+		},
+	})
+}
+```
+
+`em.ClientOptions()` returns the `option.ClientOption` values that wire the
+standard client to the in-process emulator; pass them to any client construction
+that accepts client options.
 
 ## Examples
 

@@ -1,6 +1,6 @@
 .vscode
 __debug_bin
-/emulator
+/cloud-tasks-emulator
 *.test
 *.out
 coverage.out

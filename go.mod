@@ -1,4 +1,4 @@
-module github.com/aertje/cloud-tasks-emulator
+module github.com/aertje/cloud-tasks-emulator/v2
 
 go 1.26.4
 

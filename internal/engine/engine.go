@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
 // defaultTombstoneTTL is how long a deleted queue/task name stays reserved

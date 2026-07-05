@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
 // Queue holds all internals for a task queue

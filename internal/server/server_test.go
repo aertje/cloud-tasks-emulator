@@ -15,8 +15,8 @@ import (
 
 	. "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/aertje/cloud-tasks-emulator/internal/oidc"
-	. "github.com/aertje/cloud-tasks-emulator/internal/server"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
+	. "github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"

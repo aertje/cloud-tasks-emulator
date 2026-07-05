@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/engine"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/engine"
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"

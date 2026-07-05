@@ -10,7 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o emulator ./cmd/emulator
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o cloud-tasks-emulator ./cmd/emulator
 
 FROM alpine:3.21
 
@@ -20,8 +20,8 @@ RUN adduser -D -u 10001 appuser
 
 WORKDIR /
 
-COPY --from=builder --chown=appuser /app/emulator .
+COPY --from=builder --chown=appuser /app/cloud-tasks-emulator .
 
 USER appuser
 
-ENTRYPOINT ["./emulator"]
+ENTRYPOINT ["./cloud-tasks-emulator"]

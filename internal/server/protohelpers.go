@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/internal/engine"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/engine"
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"

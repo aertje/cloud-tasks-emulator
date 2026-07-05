@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -31,7 +32,7 @@ func newBlockingDispatcher(status int) *blockingDispatcher {
 	return &blockingDispatcher{status: status, release: make(chan struct{})}
 }
 
-func (b *blockingDispatcher) Dispatch(_ context.Context, _ TaskState, _ *oidc.Config) int {
+func (b *blockingDispatcher) Dispatch(_ context.Context, _ TaskState, _ *oidc.Config, _ *slog.Logger) int {
 	n := b.active.Add(1)
 	for {
 		m := b.maxSeen.Load()

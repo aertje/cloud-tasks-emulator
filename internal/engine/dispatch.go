@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
@@ -69,13 +67,15 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 }
 
 func (task *Task) reschedule(retry bool, statusCode int) {
+	logger := task.queue.logger
+
 	if statusCode >= 200 && statusCode <= 299 {
-		log.Println("Task done")
+		logger.Info("task done", "task", task.state.Name, "status", statusCode)
 		task.markDone()
 		return
 	}
 
-	log.Println("Task exec error with status " + strconv.Itoa(statusCode))
+	logger.Warn("task execution error", "task", task.state.Name, "status", statusCode)
 	if !retry {
 		return
 	}
@@ -86,7 +86,7 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	task.stateMutex.Unlock()
 
 	if dispatchCount >= maxAttempts {
-		log.Println("Ran out of attempts")
+		logger.Warn("task exhausted retries", "task", task.state.Name, "attempts", dispatchCount)
 		task.markDone()
 		return
 	}
@@ -103,15 +103,15 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 // HTTP; tests inject a fake to exercise queue/task lifecycle and retry
 // behaviour without real network I/O.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int
+	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
 type HTTPDispatcher struct{}
 
 // Dispatch delivers the task over HTTP.
-func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
-	return dispatch(ctx, state, oidcCfg)
+func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int {
+	return dispatch(ctx, state, oidcCfg, logger)
 }
 
 // dispatch performs a single HTTP delivery for the supplied task-state snapshot
@@ -120,12 +120,12 @@ func (HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oi
 // are merged into a fresh request header map, because the task's live header map
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
-func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
+func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int {
 	client := &http.Client{Timeout: state.DispatchDeadline}
 
 	nameParts, ok := parseTaskName(state.Name)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "dispatch: invalid task name %q\n", state.Name)
+		logger.Error("dispatch: invalid task name", "task", state.Name)
 		return -1
 	}
 
@@ -161,7 +161,11 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
 		}
 
 		if auth := state.HTTPRequest.OIDCToken; auth != nil {
-			tokenStr := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
+			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
+			if err != nil {
+				logger.Error("dispatch: create OIDC token", "task", state.Name, "err", err)
+				return -1
+			}
 			injected["Authorization"] = "Bearer " + tokenStr
 		}
 	case state.AppEngineHTTPRequest != nil:
@@ -182,13 +186,13 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
 			"X-AppEngine-TaskETA":            headerTaskETA,
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "dispatch: task %q has neither HTTPRequest nor AppEngineHTTPRequest\n", state.Name)
+		logger.Error("dispatch: task has neither HTTPRequest nor AppEngineHTTPRequest", "task", state.Name)
 		return -1
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dispatch: build request for %q: %v\n", state.Name, err)
+		logger.Error("dispatch: build request", "task", state.Name, "err", err)
 		return -1
 	}
 
@@ -205,7 +209,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		logger.Error("dispatch: deliver request", "task", state.Name, "err", err)
 		return -1
 	}
 	defer resp.Body.Close()
@@ -214,7 +218,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
 }
 
 func (task *Task) doDispatch(retry bool, state TaskState) {
-	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg)
+	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg, task.queue.logger)
 
 	updateStateAfterDispatch(task, respCode)
 	task.reschedule(retry, respCode)

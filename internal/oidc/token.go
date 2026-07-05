@@ -2,7 +2,7 @@ package oidc
 
 import (
 	"crypto/rsa"
-	"log"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -71,8 +71,10 @@ func DefaultConfig() *Config {
 }
 
 // CreateToken issues an RS256-signed OIDC token for the given service account.
-// audience defaults to handlerUrl if not provided.
-func (c *Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) string {
+// audience defaults to handlerUrl if not provided. It returns an error rather
+// than terminating the process so callers (e.g. dispatch) can fail a single
+// delivery attempt instead of taking the whole emulator down.
+func (c *Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
 	if audience == "" {
 		audience = handlerUrl
 	}
@@ -94,10 +96,9 @@ func (c *Config) CreateToken(serviceAccountEmail string, handlerUrl string, audi
 	token.Header["kid"] = c.KeyID
 
 	tokenString, err := token.SignedString(c.PrivateKey)
-
 	if err != nil {
-		log.Fatalf("Failed to create OIDC token: %v", err)
+		return "", fmt.Errorf("signing OIDC token: %w", err)
 	}
 
-	return tokenString
+	return tokenString, nil
 }

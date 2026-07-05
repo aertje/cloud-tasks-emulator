@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/cloudtasks v1.18.0
 	cloud.google.com/go/iam v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/lmittmann/tint v1.1.3
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.21.0

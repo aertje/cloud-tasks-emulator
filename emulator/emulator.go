@@ -8,7 +8,7 @@ package emulator
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
@@ -41,12 +41,24 @@ func WithHardResetOnPurgeQueue(v bool) Option {
 	return func(o *server.ServerOptions) { o.HardResetOnPurgeQueue = v }
 }
 
+// WithLogger routes the emulator's queue-lifecycle and dispatch diagnostics to
+// the given logger. When unset, the emulator logs through slog.Default(); pass
+// slog.New(slog.DiscardHandler) to silence it entirely in tests.
+func WithLogger(l *slog.Logger) Option {
+	return func(o *server.ServerOptions) { o.Logger = l }
+}
+
 // Start launches an in-process emulator serving on an in-memory listener. The
 // caller must call Close to stop the server and release its resources.
 func Start(opts ...Option) *Emulator {
 	s := server.NewServer()
 	for _, opt := range opts {
 		opt(&s.Options)
+	}
+
+	logger := s.Options.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	lis := bufconn.Listen(bufSize)
@@ -58,7 +70,7 @@ func Start(opts ...Option) *Emulator {
 	// here, so log it and let the goroutine exit.
 	go func() {
 		if err := gs.Serve(lis); err != nil {
-			log.Printf("cloud-tasks-emulator: in-process gRPC server stopped: %v", err)
+			logger.Error("cloud-tasks-emulator: in-process gRPC server stopped", "err", err)
 		}
 	}()
 

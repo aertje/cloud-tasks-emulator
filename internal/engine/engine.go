@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -37,6 +38,12 @@ type Options struct {
 	// defaultTombstoneTTL when zero) and drives the background sweep with it, so
 	// unlike the lazily-read fields above it is not observed if mutated later.
 	TombstoneTTL time.Duration
+
+	// Logger receives the engine's queue-lifecycle and dispatch diagnostics. It
+	// is read lazily when a queue is created (defaulting to slog.Default() when
+	// nil), so callers may set it on the shared Options after New. Each queue
+	// captures the resolved logger for the lifetime of that queue.
+	Logger *slog.Logger
 
 	// clock supplies the current time. It defaults to time.Now; tests inject a
 	// fake to exercise tombstone expiry without real sleeps.
@@ -353,7 +360,12 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 		dispatcher = HTTPDispatcher{}
 	}
 
-	queue := newQueue(qs, e.opts.OIDC, dispatcher, func(task *Task) {
+	logger := e.opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	queue := newQueue(qs, e.opts.OIDC, dispatcher, logger, func(task *Task) {
 		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)

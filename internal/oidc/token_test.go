@@ -11,7 +11,8 @@ import (
 
 func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 	config := DefaultConfig()
-	tokenStr := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "")
+	tokenStr, err := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "")
+	require.NoError(t, err)
 	parser := new(jwt.Parser)
 	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
 	require.NoError(t, err)
@@ -32,7 +33,8 @@ func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 
 func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
 	config := DefaultConfig()
-	tokenStr := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
+	tokenStr, err := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
+	require.NoError(t, err)
 	parser := new(jwt.Parser)
 	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
 	require.NoError(t, err)
@@ -53,8 +55,9 @@ func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
 func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	// Sanity check that the token is valid if we have the private key in go format
 	config := DefaultConfig()
-	tokenStr := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
-	_, err := new(jwt.Parser).ParseWithClaims(
+	tokenStr, err := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
+	require.NoError(t, err)
+	_, err = new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&Claims{},
 		func(token *jwt.Token) (interface{}, error) {

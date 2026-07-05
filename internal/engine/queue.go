@@ -2,7 +2,7 @@ package engine
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -61,6 +61,11 @@ type Queue struct {
 	// tests can substitute a fake. Never nil for a live queue.
 	dispatcher Dispatcher
 
+	// logger receives this queue's lifecycle and dispatch diagnostics. Threaded
+	// down from the engine (resolved to slog.Default() when the caller left it
+	// unset). Never nil for a live queue.
+	logger *slog.Logger
+
 	// ctx bounds the lifetime of in-flight dispatches on this queue; cancel is
 	// called exactly once, by Delete, to abort any HTTP requests still in
 	// flight. It is deliberately not derived from a gRPC request context: the
@@ -70,7 +75,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidcCfg *oidc.Config, dispatcher Dispatcher, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg *oidc.Config, dispatcher Dispatcher, logger *slog.Logger, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +89,7 @@ func newQueue(state QueueState, oidcCfg *oidc.Config, dispatcher Dispatcher, onT
 		onTaskDone:             onTaskDone,
 		oidcCfg:                oidcCfg,
 		dispatcher:             dispatcher,
+		logger:                 logger,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
 		stopAll:                make(chan struct{}),
@@ -275,7 +281,7 @@ func (queue *Queue) Delete() {
 		return
 	}
 	queue.cancelled = true
-	log.Println("Stopping queue")
+	queue.logger.Info("stopping queue", "queue", queue.name)
 	// Close-to-broadcast: stops the token generator (stopAll) and the dispatcher
 	// (stopDispatch, idempotent if the queue is paused). In-flight attempts run
 	// to completion.

@@ -105,6 +105,5 @@ func ConfigureIssuer(issuerUrl string, config *Config) (*http.Server, error) {
 	}
 
 	listenAddr := "0.0.0.0"
-	fmt.Printf("Issuing OpenID tokens as %v - serving endpoint on %v:%v\n", issuerUrl, listenAddr, port)
 	return newOpenIDConfigurationServer(listenAddr, port, config), nil
 }

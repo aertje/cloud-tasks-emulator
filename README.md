@@ -169,7 +169,7 @@ import (
 )
 
 func TestMyWorker(t *testing.T) {
-	em := emulator.Start()
+	em := emulator.New()
 	defer em.Close()
 
 	ctx := context.Background()

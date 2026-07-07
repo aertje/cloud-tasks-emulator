@@ -25,11 +25,18 @@ import (
 const bufSize = 1024 * 1024
 
 // Emulator is an in-process Cloud Tasks emulator backed by an in-memory gRPC
-// listener. The zero value is not usable; construct one with Start.
+// listener. The zero value is not usable; construct one with New, or with
+// NewUnstarted followed by Start.
 type Emulator struct {
 	srv  *server.Server
 	grpc *grpc.Server
 	lis  *bufconn.Listener
+	// logger is this package's diagnostic logger, resolved once in New from
+	// the WithLogger option (or slog.Default()) and tagged with a component
+	// attribute so it matches the engine's records.
+	logger *slog.Logger
+	// started guards against calling Start more than once.
+	started bool
 }
 
 // Option configures an Emulator at construction time.
@@ -50,18 +57,28 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *server.ServerOptions) { o.Logger = l }
 }
 
-// Start launches an in-process emulator serving on an in-memory listener. The
-// caller must call Close to stop the server and release its resources.
-func Start(opts ...Option) *Emulator {
+// New constructs an in-process emulator and starts it serving, ready for
+// clients. The caller must call Close to stop the server and release its
+// resources.
+func New(opts ...Option) *Emulator {
+	e := NewUnstarted(opts...)
+	e.Start()
+	return e
+}
+
+// NewUnstarted constructs an in-process emulator and its in-memory listener
+// without yet serving on it. Call Start to begin serving and Close to release
+// resources. ClientOptions may be called on the returned Emulator before Start;
+// a client dial blocks until Start accepts connections.
+func NewUnstarted(opts ...Option) *Emulator {
 	var so server.ServerOptions
 	for _, opt := range opts {
 		opt(&so)
 	}
 	s := server.NewServer(so)
 
-	// The serve goroutine below is this package's own concern, so resolve its
-	// logger from the same option the engine reads, tagged to match the engine's
-	// records. When unset, fall back to slog.Default().
+	// Resolve the logger once here from the same option the engine reads, tagged
+	// to match the engine's records. When unset, fall back to slog.Default().
 	logger := so.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -72,16 +89,26 @@ func Start(opts ...Option) *Emulator {
 	gs := grpc.NewServer()
 	taskspb.RegisterCloudTasksServer(gs, s)
 
+	return &Emulator{srv: s, grpc: gs, lis: lis, logger: logger}
+}
+
+// Start begins serving on the in-memory listener in a background goroutine. The
+// caller must call Close to stop the server and release its resources. Start
+// panics if called more than once.
+func (e *Emulator) Start() {
+	if e.started {
+		panic("emulator: Start called more than once")
+	}
+	e.started = true
+
 	// Serve returns nil when Close stops the server via GracefulStop; any
 	// other error means the in-memory listener failed, which is unrecoverable
 	// here, so log it and let the goroutine exit.
 	go func() {
-		if err := gs.Serve(lis); err != nil {
-			logger.Error("in-process gRPC server stopped", "err", err)
+		if err := e.grpc.Serve(e.lis); err != nil {
+			e.logger.Error("in-process gRPC server stopped", "err", err)
 		}
 	}()
-
-	return &Emulator{srv: s, grpc: gs, lis: lis}
 }
 
 // ClientOptions returns the options that point a standard Cloud Tasks client at

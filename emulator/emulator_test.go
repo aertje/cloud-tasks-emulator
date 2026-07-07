@@ -27,7 +27,7 @@ func TestInProcessDispatch(t *testing.T) {
 	}))
 	defer target.Close()
 
-	em := emulator.Start()
+	em := emulator.New()
 	defer em.Close()
 
 	ctx := context.Background()
@@ -69,7 +69,7 @@ func TestInProcessDispatch(t *testing.T) {
 // TestWithHardResetOnPurgeQueue verifies functional options reach the underlying
 // server. With a hard reset, PurgeQueue synchronously clears tasks.
 func TestWithHardResetOnPurgeQueue(t *testing.T) {
-	em := emulator.Start(emulator.WithHardResetOnPurgeQueue(true))
+	em := emulator.New(emulator.WithHardResetOnPurgeQueue(true))
 	defer em.Close()
 
 	ctx := context.Background()
@@ -87,4 +87,13 @@ func TestWithHardResetOnPurgeQueue(t *testing.T) {
 
 	_, err = client.PurgeQueue(ctx, &taskspb.PurgeQueueRequest{Name: queue.GetName()})
 	require.NoError(t, err)
+}
+
+// TestStartPanicsOnSecondCall verifies Start guards against being started twice.
+func TestStartPanicsOnSecondCall(t *testing.T) {
+	em := emulator.NewUnstarted()
+	em.Start()
+	defer em.Close()
+
+	assert.Panics(t, func() { em.Start() })
 }

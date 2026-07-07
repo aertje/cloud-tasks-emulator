@@ -11,8 +11,8 @@ This project uses the v2 version of cloud tasks, to support both http and appeng
 
 It supports the following:
 - Targeting normal http and appengine endpoints.
-- Rate limiting and honors rate limiting configuration (max burst, max concurrent, and dispatch rate)
-- Retries and honors retry configuration (max attempts, max doublings, backoff)
+- Rate limiting and honors rate limiting configuration (max burst, max concurrent, and dispatch rate) - see [Configuring rate limits and retries](#configuring-rate-limits-and-retries)
+- Retries and honors retry configuration (max attempts, max doublings, backoff) - see [Configuring rate limits and retries](#configuring-rate-limits-and-retries)
 - Self-signed, verifiable, OIDC authentication tokens for HTTP requests
 
 It also has a few outstanding things to address;
@@ -151,6 +151,57 @@ returned.
 ```sh
 go run ./cmd/emulator --hard-reset-on-purge-queue
 ```
+
+## Configuring rate limits and retries
+
+Rate limits and retry behaviour are **per-queue properties**, exactly as in
+production Cloud Tasks. There is no emulator-specific flag or environment
+variable for them (this is what issues [#58], [#101] and [#91] were asking
+about): you set them on the queue itself through the API, using the standard
+Cloud Tasks client. The emulator then honors them when dispatching.
+
+The catch is *when* you can set them:
+
+- Set them when you **create the queue**. `UpdateQueue` is not yet implemented,
+  so you cannot change a queue's limits after creation.
+- The `-initial-queue` startup flag only takes a queue *name*, so queues created
+  that way (or via `-queue` in Docker) get the default limits. To use custom
+  limits, create the queue programmatically with the config set.
+
+The honored fields and their defaults (matching production Cloud Tasks) are:
+
+| Field | Default |
+| --- | --- |
+| `RateLimits.MaxDispatchesPerSecond` | 500 |
+| `RateLimits.MaxBurstSize` | 100 |
+| `RateLimits.MaxConcurrentDispatches` | 1000 |
+| `RetryConfig.MaxAttempts` | 100 |
+| `RetryConfig.MaxDoublings` | 16 |
+| `RetryConfig.MinBackoff` | 100ms |
+| `RetryConfig.MaxBackoff` | 1h |
+
+For example, to create a queue that dispatches at most one task per second, one
+at a time, and gives up after three attempts (Go):
+
+```go
+_, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+	Parent: "projects/my-project/locations/us-central1",
+	Queue: &taskspb.Queue{
+		Name: "projects/my-project/locations/us-central1/queues/my-queue",
+		RateLimits: &taskspb.RateLimits{
+			MaxDispatchesPerSecond:  1,
+			MaxConcurrentDispatches: 1,
+		},
+		RetryConfig: &taskspb.RetryConfig{
+			MaxAttempts: 3,
+		},
+	},
+})
+```
+
+[#58]: https://github.com/aertje/cloud-tasks-emulator/issues/58
+[#101]: https://github.com/aertje/cloud-tasks-emulator/issues/101
+[#91]: https://github.com/aertje/cloud-tasks-emulator/issues/91
 
 ## Skipping TLS verification for HTTPS targets
 

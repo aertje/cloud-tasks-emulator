@@ -48,6 +48,14 @@ func WithHardResetOnPurgeQueue(v bool) Option {
 	return func(o *server.ServerOptions) { o.HardResetOnPurgeQueue = v }
 }
 
+// WithInsecureSkipTLSVerify mirrors the binary's -insecure-skip-tls-verify
+// flag: task dispatch to HTTPS targets skips TLS certificate verification. It
+// is intended for local development against self-signed certificates and has no
+// production equivalent; leave it off unless you need it.
+func WithInsecureSkipTLSVerify(v bool) Option {
+	return func(o *server.ServerOptions) { o.InsecureSkipTLSVerify = v }
+}
+
 // WithLogger routes the emulator's queue-lifecycle and dispatch diagnostics to
 // the given logger. Emulator log records carry a component="cloud-tasks-emulator"
 // attribute so they can be filtered from the host application's own output. When

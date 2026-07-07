@@ -152,6 +152,19 @@ returned.
 go run ./cmd/emulator --hard-reset-on-purge-queue
 ```
 
+## Skipping TLS verification for HTTPS targets
+
+When developing against a target served over HTTPS with a self-signed or
+otherwise untrusted certificate, task dispatch fails TLS verification. The
+optional `insecure-skip-tls-verify` flag disables certificate verification for
+task dispatch so those deliveries succeed. It is a development convenience with
+no production equivalent, so leave it off unless you need it; the emulator logs
+a warning on startup when it is enabled.
+
+```sh
+go run ./cmd/emulator --insecure-skip-tls-verify
+```
+
 ## Embedding in Go tests
 If your code is written in Go, you can run the emulator in-process instead of
 starting a separate binary or container. The `emulator` package serves over an

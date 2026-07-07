@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -113,6 +114,11 @@ type HTTPDispatcher struct {
 	// logger when it constructs the default dispatcher, so it is never nil in
 	// production; the zero value falls back to slog.Default() defensively.
 	logger *slog.Logger
+
+	// transport, when non-nil, overrides the transport used for deliveries. The
+	// engine sets it to an InsecureSkipVerify transport when insecure mode is
+	// enabled; nil uses http.DefaultTransport.
+	transport http.RoundTripper
 }
 
 // Dispatch delivers the task over HTTP.
@@ -121,7 +127,19 @@ func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return dispatch(ctx, state, oidcCfg, logger)
+	return dispatch(ctx, state, oidcCfg, logger, h.transport)
+}
+
+// insecureTransport clones the default transport and disables TLS certificate
+// verification. Used only when the operator explicitly opts into insecure mode
+// (development against self-signed targets); see Options.InsecureSkipTLSVerify.
+func insecureTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	tr.TLSClientConfig.InsecureSkipVerify = true
+	return tr
 }
 
 // dispatch performs a single HTTP delivery for the supplied task-state snapshot
@@ -130,8 +148,8 @@ func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *
 // are merged into a fresh request header map, because the task's live header map
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
-func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger) int {
-	client := &http.Client{Timeout: state.DispatchDeadline}
+func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger, transport http.RoundTripper) int {
+	client := &http.Client{Timeout: state.DispatchDeadline, Transport: transport}
 
 	nameParts, ok := parseTaskName(state.Name)
 	if !ok {

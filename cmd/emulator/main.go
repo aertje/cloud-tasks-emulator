@@ -72,6 +72,7 @@ func main() {
 	port := fs.String("port", "8123", "The port")
 	openidIssuer := fs.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
 	hardResetOnPurgeQueue := fs.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
+	insecureSkipTLSVerify := fs.Bool("insecure-skip-tls-verify", false, "Skip TLS certificate verification when dispatching to HTTPS targets (development only, e.g. self-signed certs)")
 
 	fs.Var(&initialQueues, "initial-queue", "A queue to create on startup (repeat as required)")
 
@@ -88,6 +89,7 @@ func main() {
 
 	emulatorServer := server.NewServer(server.ServerOptions{
 		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
+		InsecureSkipTLSVerify: *insecureSkipTLSVerify,
 	})
 
 	var openIDServer *http.Server

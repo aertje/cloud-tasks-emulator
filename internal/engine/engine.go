@@ -33,6 +33,14 @@ type Options struct {
 	// tests supply a fake to drive lifecycle/retry logic without network I/O.
 	Dispatcher Dispatcher
 
+	// InsecureSkipTLSVerify disables TLS certificate verification when
+	// dispatching tasks to HTTPS targets. It exists for local development
+	// against targets using self-signed certificates and has no equivalent in
+	// production Cloud Tasks; leave it false unless you need it. Read by New
+	// only when it defaults the Dispatcher (an injected Dispatcher is
+	// responsible for its own transport).
+	InsecureSkipTLSVerify bool
+
 	// TombstoneTTL is how long a deleted queue/task name stays reserved before
 	// it becomes reusable. New reads it once at construction (defaulting to
 	// defaultTombstoneTTL when zero) and drives the background sweep with it, so
@@ -131,7 +139,12 @@ func New(opts *Options) *Engine {
 	// own logging.
 	dispatcher := opts.Dispatcher
 	if dispatcher == nil {
-		dispatcher = HTTPDispatcher{logger: logger}
+		d := HTTPDispatcher{logger: logger}
+		if opts.InsecureSkipTLSVerify {
+			d.transport = insecureTransport()
+			logger.Warn("insecure mode: TLS certificate verification is disabled for task dispatch")
+		}
+		dispatcher = d
 	}
 	e := &Engine{
 		qs:               make(map[string]*Queue),

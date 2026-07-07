@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -731,6 +732,49 @@ func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
 	)
 }
 
+func tlsTaskRequest(queueName, targetURL string) *taskspb.CreateTaskRequest {
+	return &taskspb.CreateTaskRequest{
+		Parent: queueName,
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: targetURL + "/success"},
+			},
+		},
+	}
+}
+
+// TestTLSVerificationRejectsUntrustedCert is the default half of issue #106:
+// with verification on (the default), dispatch to a self-signed HTTPS target
+// fails the TLS handshake, so no request reaches the handler.
+func TestTLSVerificationRejectsUntrustedCert(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+	target := startTestTLSServer(t)
+	createdQueue := createTestQueue(t, client)
+
+	_, err := client.CreateTask(context.Background(), tlsTaskRequest(createdQueue.GetName(), target.URL))
+	require.NoError(t, err)
+
+	_, err = awaitHttpRequestWithTimeout(target.receivedRequests, 500*time.Millisecond)
+	assert.Error(t, err, "no request should reach a target with an untrusted cert")
+}
+
+// TestInsecureSkipTLSVerifyAcceptsUntrustedCert is the opt-in half of issue
+// #106: with InsecureSkipTLSVerify set, the same dispatch succeeds.
+func TestInsecureSkipTLSVerifyAcceptsUntrustedCert(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{InsecureSkipTLSVerify: true})
+	target := startTestTLSServer(t)
+	createdQueue := createTestQueue(t, client)
+
+	_, err := client.CreateTask(context.Background(), tlsTaskRequest(createdQueue.GetName(), target.URL))
+	require.NoError(t, err)
+
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
+	require.NoError(t, err)
+	assert.NotNil(t, receivedRequest, "request delivered over HTTPS despite untrusted cert")
+}
+
 func TestErrorTaskExecution(t *testing.T) {
 	// Not parallel: it asserts on wall-clock retry timing, which is sensitive to
 	// scheduler contention from other concurrently-running tests.
@@ -1030,6 +1074,30 @@ func startTestServer(t *testing.T) *testTarget {
 
 	return &testTarget{
 		URL:              "http://" + lis.Addr().String(),
+		receivedRequests: requestChannel,
+	}
+}
+
+// startTestTLSServer starts an HTTPS target with a self-signed certificate that
+// no standard trust store recognizes, so the emulator's dispatch fails TLS
+// verification unless insecure mode is enabled. It publishes each received
+// request on the channel after writing the response.
+func startTestTLSServer(t *testing.T) *testTarget {
+	t.Helper()
+
+	requestChannel := make(chan *http.Request, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/success", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		requestChannel <- r
+	})
+
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &testTarget{
+		URL:              srv.URL,
 		receivedRequests: requestChannel,
 	}
 }

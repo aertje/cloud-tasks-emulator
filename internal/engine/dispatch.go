@@ -218,7 +218,11 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Error("dispatch: deliver request", "task", state.Name, "err", err)
+		// A target being unreachable (connection refused, timeout, DNS) is a
+		// normal, expected condition that retries exist to handle; it is not an
+		// emulator error. reschedule logs the failed attempt at Warn, so this
+		// line only carries the underlying transport cause for debugging.
+		logger.Debug("dispatch: deliver request", "task", state.Name, "err", err)
 		return -1
 	}
 	defer resp.Body.Close()

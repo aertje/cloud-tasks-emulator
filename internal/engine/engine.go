@@ -588,6 +588,19 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		}
 	}
 
+	// Cloud Tasks validates an HTTP-target task's URL at create time, but only
+	// shallowly: it must be non-empty and start with http:// or https://. It is
+	// deliberately not fully parsed here (an invalid percent-escape, say, is
+	// accepted and only fails when the task is dispatched).
+	if ts.HTTPRequest != nil {
+		if ts.HTTPRequest.URL == "" {
+			return nil, TaskState{}, ErrHTTPRequestURLRequired
+		}
+		if !strings.HasPrefix(ts.HTTPRequest.URL, "http://") && !strings.HasPrefix(ts.HTTPRequest.URL, "https://") {
+			return nil, TaskState{}, ErrHTTPRequestURLScheme
+		}
+	}
+
 	task, frozen := queue.NewTask(ts)
 	e.setTask(frozen.Name, task)
 	queue.logger.Debug("task received", "task", frozen.Name, "queue", parent)

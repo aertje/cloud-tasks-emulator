@@ -341,6 +341,10 @@ func mapErr(err error) error {
 		return status.Errorf(codes.AlreadyExists, "Requested entity already exists")
 	case engine.ErrInvalidTaskName:
 		return status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+	case engine.ErrHTTPRequestURLRequired:
+		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
+	case engine.ErrHTTPRequestURLScheme:
+		return status.Errorf(codes.InvalidArgument, "HttpTarget.url must start with 'http://' or 'https://'.")
 	case engine.ErrUnimplemented:
 		return status.Errorf(codes.Unimplemented, "Not yet implemented")
 	default:

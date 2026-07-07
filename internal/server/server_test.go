@@ -234,6 +234,87 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 	assertIsGrpcError(t, "^The queue name from request", grpcCodes.InvalidArgument, err)
 }
 
+func TestCreateTaskRejectsMissingURL(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	createdQueue := createTestQueue(t, client)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: ""},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	assert.Nil(t, createdTask)
+	assertIsGrpcError(t, "^HttpRequest.url is required.", grpcCodes.InvalidArgument, err)
+}
+
+func TestCreateTaskRejectsNonHTTPURL(t *testing.T) {
+	t.Parallel()
+
+	// Cloud Tasks rejects any URL that does not start with http:// or https://,
+	// whether the scheme is missing entirely or simply not http(s).
+	for name, url := range map[string]string{
+		"no scheme":       "www.google.com",
+		"non-http scheme": "ftp://www.google.com",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, client := setUp(t, ServerOptions{})
+
+			createdQueue := createTestQueue(t, client)
+
+			createTaskRequest := taskspb.CreateTaskRequest{
+				Parent: createdQueue.GetName(),
+				Task: &taskspb.Task{
+					MessageType: &taskspb.Task_HttpRequest{
+						HttpRequest: &taskspb.HttpRequest{Url: url},
+					},
+				},
+			}
+
+			createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+			assert.Nil(t, createdTask)
+			assertIsGrpcError(t, "^HttpTarget.url must start with", grpcCodes.InvalidArgument, err)
+		})
+	}
+}
+
+// TestCreateTaskAcceptsUnparseableURL locks in that create-time validation is
+// shallow: a URL with the right scheme is accepted even if it is not fully
+// parseable (real Cloud Tasks behaves the same - the task only fails at
+// dispatch). See conformance case task/create/invalid-url-bad-escape.
+func TestCreateTaskAcceptsUnparseableURL(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	createdQueue := createTestQueue(t, client)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			// Schedule far out so it never actually dispatches; the point is that
+			// create accepts the malformed URL.
+			ScheduleTime: timestamppb.New(time.Now().Add(time.Hour)),
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: "http://example.com/%zz"},
+			},
+		},
+	}
+
+	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
+
+	require.NoError(t, err)
+	assert.NotNil(t, createdTask)
+}
+
 func TestDeleteTaskTombstonesName(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})

@@ -58,6 +58,25 @@ func createTask(ctx context.Context, c *Client, p Params) error {
 	return err
 }
 
+// createTaskURL returns an Invoke that creates an HTTP task whose target URL is
+// the supplied (typically malformed) string, for probing how Cloud Tasks
+// validates HttpRequest.Url at create time. The URL is a static input, so it is
+// stable across variants and needs no normalization.
+func createTaskURL(url string) func(ctx context.Context, c *Client, p Params) error {
+	return func(ctx context.Context, c *Client, p Params) error {
+		_, err := c.CreateTask(ctx, &taskspb.CreateTaskRequest{
+			Parent: p.QueuePath(),
+			Task: &taskspb.Task{
+				Name: p.TaskPath(),
+				MessageType: &taskspb.Task_HttpRequest{
+					HttpRequest: &taskspb.HttpRequest{Url: url},
+				},
+			},
+		})
+		return err
+	}
+}
+
 // Cases is the full error-state battery. Names are stable identifiers used as
 // golden keys, so do not rename casually.
 func Cases() []Case {
@@ -199,6 +218,39 @@ func Cases() []Case {
 				})
 				return err
 			},
+			Teardown: deleteQueue,
+		},
+		// --- CreateTask URL validation ---
+		// Probes whether Cloud Tasks rejects a malformed HttpRequest.Url at
+		// create time (and with what code/message/details), or accepts it and
+		// only fails at dispatch. Behaviour is unconfirmed until the golden is
+		// recorded against the real API; some variants may record OK. Together
+		// these pin down the validation rule the emulator should enforce so a
+		// doomed task never enters a queue.
+		{
+			Name: "task/create/invalid-url-empty", RPC: "CreateTask", Category: "task-invalid-url",
+			Setup:    createQueue,
+			Invoke:   createTaskURL(""),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/invalid-url-no-scheme", RPC: "CreateTask", Category: "task-invalid-url",
+			Setup:    createQueue,
+			Invoke:   createTaskURL("example.com/path"),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/invalid-url-non-http-scheme", RPC: "CreateTask", Category: "task-invalid-url",
+			Setup:    createQueue,
+			Invoke:   createTaskURL("ftp://example.com/"),
+			Teardown: deleteQueue,
+		},
+		{
+			// Invalid percent-escape: unparseable by Go's url.Parse, so this is
+			// the input that trips dispatch.go's build-request path today.
+			Name: "task/create/invalid-url-bad-escape", RPC: "CreateTask", Category: "task-invalid-url",
+			Setup:    createQueue,
+			Invoke:   createTaskURL("http://example.com/%zz"),
 			Teardown: deleteQueue,
 		},
 		{

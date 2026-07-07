@@ -52,7 +52,7 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
           "n": "vhHj4zZSEg7q1-BdSbzSivtmn4EWF_PZIF7gAH-4iqm7v22MN-2wvnmpNLQG_-LeJ5M39kDHWt2ei3HEsxPxbEeeHRzCm23AgXDGTkjuUUXi7GP1nQmWcZnyckD0jr8kZO789pauck61GvnQhtdl4mP3JCCXPI0dJvbkr76ni-hMnjpB7GyChEglIArshTNPwhHm-6M0c4R3uVvzQUpuE7CEcisNH1u8HM0aOnQKXYc42a3P4yllpD70jNt008StXyyIIwN4LFT9-5vM9FrBEpY4k9EAggU2R7FEodnky6e8grPV2b0z2eRLu4jgITPMzyyqYc6LccEPsn99XqkF1w",
           "kid": "any-key-id",
           "use": "sig",
-          "alg": "RSA256",
+          "alg": "RS256",
           "kty": "RSA"
         }
       ]

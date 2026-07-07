@@ -59,7 +59,7 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 				"n":   b64Url.EncodeToString(publicKey.N.Bytes()),
 				"kid": s.config.KeyID,
 				"use": "sig",
-				"alg": "RSA256",
+				"alg": "RS256",
 				"kty": "RSA",
 			},
 		},

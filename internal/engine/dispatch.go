@@ -202,7 +202,11 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
-		logger.Error("dispatch: build request", "task", state.Name, "err", err)
+		// A client-supplied URL that passes create-time validation (starts with
+		// http(s)://) but is not fully parseable by net/url reaches here: Cloud
+		// Tasks accepts such URLs at create, so this is a failed delivery of a
+		// valid task, not an emulator error.
+		logger.Warn("dispatch: build request", "task", state.Name, "err", err)
 		return -1
 	}
 

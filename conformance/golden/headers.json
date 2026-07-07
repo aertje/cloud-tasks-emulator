@@ -1,0 +1,119 @@
+[
+  {
+    "name": "headers/appengine",
+    "requestType": "appengine",
+    "sent": {
+      "X-Mixed-Case": "preserve-me",
+      "content-type": "application/json"
+    },
+    "createFull": {
+      "headers": {
+        "Content-Length": "17",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    },
+    "getBasic": {
+      "headers": {
+        "Content-Length": "17",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    },
+    "getFull": {
+      "headers": {
+        "Content-Length": "17",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    }
+  },
+  {
+    "name": "headers/appengine-no-content-type",
+    "requestType": "appengine",
+    "sent": {
+      "X-Mixed-Case": "preserve-me"
+    },
+    "createFull": {
+      "headers": {
+        "Content-Length": "17",
+        "Content-Type": "application/octet-stream",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me"
+      }
+    },
+    "getBasic": {
+      "headers": {
+        "Content-Length": "17",
+        "Content-Type": "application/octet-stream",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me"
+      }
+    },
+    "getFull": {
+      "headers": {
+        "Content-Length": "17",
+        "Content-Type": "application/octet-stream",
+        "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+        "X-Mixed-Case": "preserve-me"
+      }
+    }
+  },
+  {
+    "name": "headers/http",
+    "requestType": "http",
+    "sent": {
+      "X-Mixed-Case": "preserve-me",
+      "content-type": "application/json"
+    },
+    "createFull": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    },
+    "getBasic": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    },
+    "getFull": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me",
+        "content-type": "application/json"
+      }
+    }
+  },
+  {
+    "name": "headers/http-no-content-type",
+    "requestType": "http",
+    "sent": {
+      "X-Mixed-Case": "preserve-me"
+    },
+    "createFull": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me"
+      }
+    },
+    "getBasic": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me"
+      }
+    },
+    "getFull": {
+      "headers": {
+        "User-Agent": "Google-Cloud-Tasks",
+        "X-Mixed-Case": "preserve-me"
+      }
+    }
+  }
+]

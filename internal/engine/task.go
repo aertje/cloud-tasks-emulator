@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -126,6 +127,18 @@ func (t *Task) State() TaskState {
 	return t.state
 }
 
+// hasHeaderFold reports whether headers contains a key case-insensitively equal
+// to name. HTTP field names are case-insensitive (RFC 7230), so header presence
+// checks must be too.
+func hasHeaderFold(headers map[string]string, name string) bool {
+	for k := range headers {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func setInitialTaskState(s *TaskState, queueName string) {
 	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
@@ -164,9 +177,18 @@ func setInitialTaskState(s *TaskState, queueName string) {
 		ae.Headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"
 
 		if len(ae.Body) > 0 {
-			if _, ok := ae.Headers["Content-Type"]; !ok {
+			// HTTP field names are case-insensitive, so a caller-supplied
+			// "content-type" must suppress the default just as "Content-Type"
+			// would - otherwise the task carries two Content-Type headers, which
+			// Cloud Tasks does not allow (see conformance/golden/headers.json,
+			// issues #111/#53). The default itself is added under the canonical
+			// casing.
+			if !hasHeaderFold(ae.Headers, "Content-Type") {
 				ae.Headers["Content-Type"] = "application/octet-stream"
 			}
+			// Content-Length is output-only and computed by Cloud Tasks, which
+			// materializes it on the stored AppEngine task.
+			ae.Headers["Content-Length"] = strconv.Itoa(len(ae.Body))
 		}
 
 		if ae.AppEngineRouting == nil {

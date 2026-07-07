@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
@@ -205,11 +206,20 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger
 		return -1
 	}
 
-	// Merge the task's own headers and the injected Cloud Tasks headers into the
-	// request's fresh header map. Injected headers win on collision.
-	// Uses a direct set to maintain capitalization.
-	// TODO: figure out a way to test these, as the Go net/http client lib overrides the incoming header capitalization
+	// Merge the task's own headers with the injected Cloud Tasks headers.
+	// Injected headers win on any case-insensitive collision: HTTP field names
+	// are case-insensitive and Cloud Tasks does not emit repeated headers, so a
+	// task header differing only in casing from an injected one is dropped
+	// rather than sent alongside it. Task headers otherwise keep their original
+	// casing (a direct set, not Header.Set), matching what Cloud Tasks stores.
+	injectedFold := make(map[string]struct{}, len(injected))
+	for k := range injected {
+		injectedFold[strings.ToLower(k)] = struct{}{}
+	}
 	for k, v := range srcHeaders {
+		if _, clash := injectedFold[strings.ToLower(k)]; clash {
+			continue
+		}
 		req.Header[k] = []string{v}
 	}
 	for k, v := range injected {

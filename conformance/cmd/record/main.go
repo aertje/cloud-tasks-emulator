@@ -14,6 +14,12 @@
 //
 //	go run ./cmd/emulator -port 8123 &   # from repo root
 //	go run ./cmd/record -target=emulator -addr=localhost:8123 -out=/tmp/emu.json
+//
+// Record the header-behaviour golden (happy path; needs cloudtasks.tasks.fullView):
+//
+//	go run ./cmd/record \
+//	  -target=real -kind=headers -project=$PROJECT -location=us-central1 \
+//	  -out=golden/headers.json
 package main
 
 import (
@@ -29,11 +35,12 @@ import (
 
 func main() {
 	target := flag.String("target", "emulator", "real | emulator")
+	kind := flag.String("kind", "errors", "errors | headers (which battery to record)")
 	project := flag.String("project", "", "GCP project id (real) or placeholder (emulator)")
 	location := flag.String("location", "us-central1", "location id")
 	addr := flag.String("addr", "localhost:8123", "emulator address (target=emulator)")
 	out := flag.String("out", "", "output JSON path (default: stdout)")
-	variants := flag.Int("variants", 3, "differing-input variants per case")
+	variants := flag.Int("variants", 3, "differing-input variants per case (errors battery only)")
 	flag.Parse()
 
 	if *project == "" {
@@ -62,8 +69,21 @@ func main() {
 		Variants: *variants,
 	}
 
-	fmt.Fprintf(os.Stderr, "recording %s (project=%s location=%s prefix=%s)...\n",
-		*target, *project, *location, opts.Prefix)
+	fmt.Fprintf(os.Stderr, "recording %s battery=%s (project=%s location=%s prefix=%s)...\n",
+		*target, *kind, *project, *location, opts.Prefix)
+
+	switch *kind {
+	case "errors":
+		recordErrors(ctx, client, opts, *out)
+	case "headers":
+		recordHeaders(ctx, client, opts, *out)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|headers)\n", *kind)
+		os.Exit(1)
+	}
+}
+
+func recordErrors(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
 	results := conformance.Run(ctx, client, opts)
 
 	unstable := 0
@@ -74,17 +94,35 @@ func main() {
 		}
 	}
 
-	if *out == "" {
-		if err := conformance.Save("/dev/stdout", results); err != nil {
-			fmt.Fprintf(os.Stderr, "write: %v\n", err)
-			os.Exit(1)
+	writeJSON(out, func(path string) error { return conformance.Save(path, results) })
+	fmt.Fprintf(os.Stderr, "done: %d cases, %d unstable\n", len(results), unstable)
+}
+
+func recordHeaders(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
+	snaps := conformance.RunHeaderObservations(ctx, client, opts)
+
+	failed := 0
+	for _, s := range snaps {
+		if s.CreateFull.Err != "" || s.GetBasic.Err != "" || s.GetFull.Err != "" {
+			failed++
+			fmt.Fprintf(os.Stderr, "  ERRORS %s: create=%q basic=%q full=%q\n",
+				s.Name, s.CreateFull.Err, s.GetBasic.Err, s.GetFull.Err)
 		}
-	} else if err := conformance.Save(*out, results); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", *out, err)
-		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "done: %d cases, %d unstable\n", len(results), unstable)
+	writeJSON(out, func(path string) error { return conformance.SaveHeaderSnapshots(path, snaps) })
+	fmt.Fprintf(os.Stderr, "done: %d observations, %d with errors\n", len(snaps), failed)
+}
+
+// writeJSON sends the battery output to stdout or the given path.
+func writeJSON(out string, save func(path string) error) {
+	if out == "" {
+		out = "/dev/stdout"
+	}
+	if err := save(out); err != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", out, err)
+		os.Exit(1)
+	}
 }
 
 func dial(ctx context.Context, target, addr string) (*conformance.Client, error) {

@@ -96,7 +96,42 @@ fails if one starts matching (so the entry gets removed). Current entries:
   and returns `PermissionDenied` via IAM; the emulator has no project/IAM concept
   and returns `InvalidArgument`. Not reproducible by design.
 
+## Header behaviour battery (happy path)
+
+A second, separate battery captures a *success-response shape* rather than an
+error: the header map Cloud Tasks echoes back after a task is created. It exists
+to settle behaviour the proto docs leave ambiguous and that issues #111/#53 turn
+on:
+
+- **Key casing at rest** - is a submitted `content-type` stored verbatim or
+  canonicalized to `Content-Type`?
+- **Default `Content-Type`** - for an AppEngine task with a body, does the
+  `application/octet-stream` default appear in the stored task, or only on the
+  dispatched wire request? This decides whether the emulator should inject it at
+  rest or at dispatch.
+- **View sensitivity** - are headers withheld under the `BASIC` response view
+  (forcing `FULL`), or returned under both?
+
+Each observation creates a task carrying a lowercase `content-type` and a
+mixed-case custom header plus a body, then reads it back via `CreateTask` (FULL),
+`GetTask` (BASIC) and `GetTask` (FULL). See `snapshot.go`.
+
+Record it against real Cloud Tasks. `FULL` view requires the
+`cloudtasks.tasks.fullView` IAM permission on the queue (owner/editor have it):
+
+```sh
+cd conformance
+go run ./cmd/record \
+  -target=real -kind=headers -project=$PROJECT -location=us-central1 \
+  -out=golden/headers.json
+```
+
+`TestEmulatorMatchesRealCloud`'s sibling `TestEmulatorHeaderSnapshots` diffs the
+emulator against `golden/headers.json` (and skips if it's absent). Dispatch-time
+wire headers are out of scope here - this battery is control-plane only; cover
+those with a hermetic emulator dispatch unit test.
+
 ## Scope
 
-Error states only, for now (the gap `mapErr` needs filled). Success-response
-shapes are out of scope.
+Error states plus the header-behaviour battery above. Other success-response
+shapes remain out of scope.

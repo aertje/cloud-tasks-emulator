@@ -15,7 +15,10 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/conformance"
 )
 
-const goldenPath = "golden/realcloud.json"
+const (
+	goldenPath        = "golden/realcloud.json"
+	headersGoldenPath = "golden/headers.json"
+)
 
 // TestEmulatorMatchesRealCloud builds and starts the emulator, replays the
 // conformance battery against it, and asserts every captured code+template
@@ -66,6 +69,45 @@ func TestEmulatorMatchesRealCloud(t *testing.T) {
 		if !diverged[name] {
 			t.Errorf("case %q is listed in KnownDivergences but now matches real Cloud Tasks; remove it from the ledger", name)
 		}
+	}
+}
+
+// TestEmulatorHeaderSnapshots replays the happy-path header battery against the
+// emulator and asserts the headers it echoes back match the golden recorded
+// from the real API (see RunHeaderObservations for what each stage probes).
+//
+//	go test -tags conformance ./conformance/
+//
+// Skips if the header golden is absent (record it with
+// `cmd/record -kind=headers -target=real`).
+func TestEmulatorHeaderSnapshots(t *testing.T) {
+	if _, err := os.Stat(headersGoldenPath); os.IsNotExist(err) {
+		t.Skipf("no header golden at %s; record it with cmd/record -kind=headers -target=real", headersGoldenPath)
+	}
+	golden, err := conformance.LoadHeaderSnapshots(headersGoldenPath)
+	if err != nil {
+		t.Fatalf("load header golden: %v", err)
+	}
+
+	addr := startEmulator(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	client, err := conformance.NewEmulatorClient(ctx, addr)
+	if err != nil {
+		t.Fatalf("dial emulator: %v", err)
+	}
+	defer client.Close()
+
+	snaps := conformance.RunHeaderObservations(ctx, client, conformance.RunOptions{
+		Project:  "conformance-test",
+		Location: "us-central1",
+		Prefix:   "emu",
+	})
+
+	for _, d := range conformance.CompareHeaderSnapshots(golden, snaps) {
+		t.Errorf("%s", d.String())
 	}
 }
 

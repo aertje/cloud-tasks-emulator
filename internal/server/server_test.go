@@ -687,6 +687,50 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
 
+// TestAppEngineContentTypeHeaderIsCaseInsensitive guards issues #111/#53: a
+// caller-supplied lowercase "content-type" must suppress the
+// application/octet-stream default rather than be dispatched alongside it. Real
+// Cloud Tasks emits a single Content-Type honouring the caller's value (see
+// conformance/golden/headers.json).
+func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
+	// Not parallel: it sets the process-wide APP_ENGINE_EMULATOR_HOST env var.
+	_, client := setUp(t, ServerOptions{})
+
+	target := startTestServer(t)
+	t.Setenv("APP_ENGINE_EMULATOR_HOST", target.URL)
+
+	createdQueue := createTestQueue(t, client)
+
+	createTaskRequest := taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			Name: createdQueue.GetName() + "/tasks/my-test-task",
+			MessageType: &taskspb.Task_AppEngineHttpRequest{
+				AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+					RelativeUri: "/success",
+					Headers:     map[string]string{"content-type": "application/json"},
+					Body:        []byte(`{"hello":"world"}`),
+				},
+			},
+		},
+	}
+
+	_, err := client.CreateTask(context.Background(), &createTaskRequest)
+	require.NoError(t, err)
+
+	receivedRequest, err := awaitHttpRequest(target.receivedRequests)
+	require.NoError(t, err)
+	require.NotNil(t, receivedRequest, "Request was received")
+
+	// The receiving server canonicalizes both "content-type" and "Content-Type"
+	// onto the same key, so a duplicate would surface as two values here.
+	assert.Equal(t,
+		[]string{"application/json"},
+		receivedRequest.Header.Values("Content-Type"),
+		"exactly one Content-Type, honouring the caller's lowercase header",
+	)
+}
+
 func TestErrorTaskExecution(t *testing.T) {
 	// Not parallel: it asserts on wall-clock retry timing, which is sensitive to
 	// scheduler contention from other concurrently-running tests.

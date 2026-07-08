@@ -70,7 +70,7 @@ echo ""
 echo "-------------------"
 echo "Stopping emulator and checking for graceful shutdown"
 set +o errexit
-docker stop --time 10 cloud-tasks-emulator
+docker stop --timeout 10 cloud-tasks-emulator
 set -o errexit
 emulator_exit_code=$(docker inspect -f '{{.State.ExitCode}}' cloud-tasks-emulator)
 echo "Emulator exit code: $emulator_exit_code"
@@ -133,7 +133,7 @@ else
   echo "-------------------"
   echo "Stopping emulator-env and checking for graceful shutdown"
   set +o errexit
-  docker stop --time 10 cloud-tasks-emulator-env
+  docker stop --timeout 10 cloud-tasks-emulator-env
   set -o errexit
   emulator_env_exit_code=$(docker inspect -f '{{.State.ExitCode}}' cloud-tasks-emulator-env)
   echo "Emulator-env exit code: $emulator_env_exit_code"

@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine3.24 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,7 +12,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o cloud-tasks-emulator ./cmd/emulator
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 LABEL org.opencontainers.image.source=https://github.com/aertje/cloud-tasks-emulator
 

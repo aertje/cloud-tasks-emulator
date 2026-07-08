@@ -87,20 +87,24 @@ func main() {
 		panic(err)
 	}
 
-	emulatorServer := server.NewServer(server.ServerOptions{
-		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
-		InsecureSkipTLSVerify: *insecureSkipTLSVerify,
-	})
+	oidcCfg := oidc.DefaultConfig()
 
 	var openIDServer *http.Server
 	if *openidIssuer != "" {
-		srv, err := oidc.ConfigureIssuer(*openidIssuer, emulatorServer.Options.OIDC)
+		srv, cfg, err := oidc.ConfigureIssuer(*openidIssuer, *oidcCfg)
 		if err != nil {
 			panic(err)
 		}
 		openIDServer = srv
+		oidcCfg = &cfg
 		slog.Info("serving OpenID configuration", "issuer", *openidIssuer, "addr", srv.Addr)
 	}
+
+	emulatorServer := server.NewServer(server.ServerOptions{
+		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
+		InsecureSkipTLSVerify: *insecureSkipTLSVerify,
+		OIDC:                  oidcCfg,
+	})
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("%v:%v", *host, *port))
 	if err != nil {

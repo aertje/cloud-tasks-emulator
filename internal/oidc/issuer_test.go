@@ -15,7 +15,7 @@ import (
 func TestOpenIdConfigHttpHandler(t *testing.T) {
 	config := DefaultConfig()
 	config.IssuerURL = "http://foo.bar:8080"
-	s := openIDServer{config: config}
+	s := openIDServer{config: *config}
 
 	resp := performRequest("GET", "/.well-known/openid-configuration", s.configHandler)
 
@@ -30,7 +30,7 @@ func TestOpenIdConfigHttpHandler(t *testing.T) {
 func TestOpenIdJWKSHttpHandler(t *testing.T) {
 	config := DefaultConfig()
 	config.KeyID = "any-key-id"
-	s := openIDServer{config: config}
+	s := openIDServer{config: *config}
 
 	resp := performRequest("GET", "/jwks", s.jwksHandler)
 
@@ -64,30 +64,28 @@ func TestOpenIdJWKSHttpHandler(t *testing.T) {
 
 func TestConfigureOpenIdIssuerRejectsInvalidUrl(t *testing.T) {
 	var err error
-	_, err = ConfigureIssuer("junk", DefaultConfig())
+	_, _, err = ConfigureIssuer("junk", *DefaultConfig())
 	assert.Error(t, err, "-openid-issuer must be a base URL e.g. http://any-host:8237")
 
-	_, err = ConfigureIssuer("https://foo:8900", DefaultConfig())
+	_, _, err = ConfigureIssuer("https://foo:8900", *DefaultConfig())
 	assert.Error(t, err, "-openid-issuer only supports http protocol")
 
-	_, err = ConfigureIssuer("http://foo:8900/deep", DefaultConfig())
+	_, _, err = ConfigureIssuer("http://foo:8900/deep", *DefaultConfig())
 	assert.Error(t, err, "-openid-issuer must not contain a path")
 }
 
 func TestConfigureOpenIdIssuerSetsConfigAndRunsServer(t *testing.T) {
-	config := DefaultConfig()
-	srv, err := ConfigureIssuer("http://my-external.route.to.me:8200", config)
+	srv, cfg, err := ConfigureIssuer("http://my-external.route.to.me:8200", *DefaultConfig())
 	require.NoError(t, err)
-	assert.Equal(t, "http://my-external.route.to.me:8200", config.IssuerURL)
+	assert.Equal(t, "http://my-external.route.to.me:8200", cfg.IssuerURL)
 	assert.Equal(t, "0.0.0.0:8200", srv.Addr)
 	srv.Shutdown(context.Background())
 }
 
 func TestConfigureOpenIdIssuerSupportsPort80(t *testing.T) {
-	config := DefaultConfig()
-	srv, err := ConfigureIssuer("http://my-external.route.to.me", config)
+	srv, cfg, err := ConfigureIssuer("http://my-external.route.to.me", *DefaultConfig())
 	require.NoError(t, err)
-	assert.Equal(t, "http://my-external.route.to.me", config.IssuerURL)
+	assert.Equal(t, "http://my-external.route.to.me", cfg.IssuerURL)
 	assert.Equal(t, "0.0.0.0:80", srv.Addr)
 	srv.Shutdown(context.Background())
 }

@@ -14,10 +14,10 @@ import (
 const jwksUriPath = "/jwks"
 
 // openIDServer serves the OpenID discovery and JWKS endpoints for a given signing
-// configuration. It holds the config explicitly rather than reaching for package
-// state, so the HTTP endpoints publish exactly the key the engine signs with.
+// configuration. It holds the config by value: a snapshot taken once the issuer
+// URL is known, so the HTTP endpoints publish exactly the key the engine signs with.
 type openIDServer struct {
-	config *Config
+	config Config
 }
 
 func (s openIDServer) configHandler(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +70,7 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 
 // newOpenIDConfigurationServer builds the OpenID discovery/JWKS HTTP server. The
 // caller owns its lifecycle (starting it and shutting it down); see main.
-func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *Config) *http.Server {
+func newOpenIDConfigurationServer(listenAddr string, listenPort string, config Config) *http.Server {
 	s := openIDServer{config: config}
 
 	mux := http.NewServeMux()
@@ -80,21 +80,26 @@ func newOpenIDConfigurationServer(listenAddr string, listenPort string, config *
 	return &http.Server{Addr: listenAddr + ":" + listenPort, Handler: mux}
 }
 
-func ConfigureIssuer(issuerUrl string, config *Config) (*http.Server, error) {
+// ConfigureIssuer validates issuerUrl and returns an HTTP server publishing the
+// discovery/JWKS endpoints, together with the finalized Config to hand to the
+// engine. It mutates its own copy of cfg rather than the caller's, so the
+// returned Config and server observe the same issuer URL and key with no shared
+// mutable state.
+func ConfigureIssuer(issuerUrl string, cfg Config) (*http.Server, Config, error) {
 	url, err := url.ParseRequestURI(issuerUrl)
 	if err != nil {
-		return nil, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")
+		return nil, Config{}, fmt.Errorf("-openid-issuer must be a base URL e.g. http://any-host:8237")
 	}
 
 	if url.Scheme != "http" {
-		return nil, fmt.Errorf("-openid-issuer only supports http protocol")
+		return nil, Config{}, fmt.Errorf("-openid-issuer only supports http protocol")
 	}
 
 	if url.Path != "" {
-		return nil, fmt.Errorf("-openid-issuer must not contain a path")
+		return nil, Config{}, fmt.Errorf("-openid-issuer must not contain a path")
 	}
 
-	config.IssuerURL = issuerUrl
+	cfg.IssuerURL = issuerUrl
 
 	hostParts := strings.Split(url.Host, ":")
 	var port string
@@ -105,5 +110,5 @@ func ConfigureIssuer(issuerUrl string, config *Config) (*http.Server, error) {
 	}
 
 	listenAddr := "0.0.0.0"
-	return newOpenIDConfigurationServer(listenAddr, port, config), nil
+	return newOpenIDConfigurationServer(listenAddr, port, cfg), cfg, nil
 }

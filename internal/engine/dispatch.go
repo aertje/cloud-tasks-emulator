@@ -105,7 +105,7 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 // HTTP; tests inject a fake to exercise queue/task lifecycle and retry
 // behaviour without real network I/O.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int
+	Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
@@ -122,7 +122,7 @@ type HTTPDispatcher struct {
 }
 
 // Dispatch delivers the task over HTTP.
-func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config) int {
+func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config) int {
 	logger := h.logger
 	if logger == nil {
 		logger = slog.Default()
@@ -148,7 +148,7 @@ func insecureTransport() *http.Transport {
 // are merged into a fresh request header map, because the task's live header map
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
-func dispatch(ctx context.Context, state TaskState, oidcCfg *oidc.Config, logger *slog.Logger, transport http.RoundTripper) int {
+func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger *slog.Logger, transport http.RoundTripper) int {
 	client := &http.Client{Timeout: state.DispatchDeadline, Transport: transport}
 
 	nameParts, ok := parseTaskName(state.Name)

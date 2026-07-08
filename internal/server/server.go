@@ -22,9 +22,7 @@ type Server struct {
 	engine *engine.Engine
 
 	// Options records the options the server was built with. They are consumed by
-	// the engine at construction, so mutating this field afterwards has no effect
-	// (the sole exception is an in-place mutation of the OIDC config, whose
-	// pointer the engine retains).
+	// the engine at construction, so mutating this field afterwards has no effect.
 	Options ServerOptions
 }
 

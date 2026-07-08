@@ -74,7 +74,7 @@ func DefaultConfig() *Config {
 // audience defaults to handlerUrl if not provided. It returns an error rather
 // than terminating the process so callers (e.g. dispatch) can fail a single
 // delivery attempt instead of taking the whole emulator down.
-func (c *Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
+func (c Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
 	if audience == "" {
 		audience = handlerUrl
 	}

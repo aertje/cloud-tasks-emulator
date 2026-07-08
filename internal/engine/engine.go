@@ -25,8 +25,9 @@ type Options struct {
 	HardResetOnPurgeQueue bool
 
 	// OIDC holds the token-signing configuration used when dispatching tasks
-	// with an OIDC token, and published via the issuer's HTTP endpoints. New
-	// defaults it to oidc.DefaultConfig when nil.
+	// with an OIDC token, and published via the issuer's HTTP endpoints. It is a
+	// pointer only to express optionality: New defaults it to oidc.DefaultConfig
+	// when nil and snapshots it by value, so mutating it after New has no effect.
 	OIDC *oidc.Config
 
 	// Dispatcher delivers tasks. New defaults it to HTTPDispatcher when nil;
@@ -88,10 +89,10 @@ type Engine struct {
 	// Options.Dispatcher is nil; tests inject a fake.
 	dispatcher Dispatcher
 
-	// oidc is the token-signing configuration threaded to each queue. It is a
-	// pointer, so an in-place mutation of the pointed-to Config after New (e.g.
-	// oidc.ConfigureIssuer in the binary) is still observed at dispatch time.
-	oidc *oidc.Config
+	// oidc is the token-signing configuration, snapshotted by value at New and
+	// threaded to each queue. Construction captures it, so later mutation of the
+	// Options.OIDC the caller passed is deliberately not observed at dispatch time.
+	oidc oidc.Config
 
 	// hardResetOnPurge mirrors Options.HardResetOnPurgeQueue.
 	hardResetOnPurge bool
@@ -119,8 +120,9 @@ func New(opts *Options) *Engine {
 	if opts == nil {
 		opts = &Options{}
 	}
-	if opts.OIDC == nil {
-		opts.OIDC = oidc.DefaultConfig()
+	oidcCfg := oidc.DefaultConfig()
+	if opts.OIDC != nil {
+		oidcCfg = opts.OIDC
 	}
 	now := time.Now
 	if opts.clock != nil {
@@ -152,7 +154,7 @@ func New(opts *Options) *Engine {
 		qTombstones:      make(map[string]time.Time),
 		tTombstones:      make(map[string]time.Time),
 		dispatcher:       dispatcher,
-		oidc:             opts.OIDC,
+		oidc:             *oidcCfg,
 		hardResetOnPurge: opts.HardResetOnPurgeQueue,
 		now:              now,
 		ttl:              ttl,

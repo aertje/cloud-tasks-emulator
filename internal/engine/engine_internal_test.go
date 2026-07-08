@@ -38,7 +38,7 @@ func newFakeDispatcher(status int) *fakeDispatcher {
 	}
 }
 
-func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ *oidc.Config) int {
+func (f *fakeDispatcher) Dispatch(_ context.Context, state TaskState, _ oidc.Config) int {
 	f.mu.Lock()
 	attempt := len(f.calls)
 	f.calls = append(f.calls, state)

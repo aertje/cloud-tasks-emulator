@@ -54,8 +54,8 @@ type Queue struct {
 	onTaskDone func(task *Task)
 
 	// oidcCfg is the token-signing configuration used by tasks on this queue when
-	// dispatching with an OIDC token. Threaded down from the engine.
-	oidcCfg *oidc.Config
+	// dispatching with an OIDC token. A value snapshot threaded down from the engine.
+	oidcCfg oidc.Config
 
 	// dispatcher delivers tasks on this queue. Threaded down from the engine so
 	// tests can substitute a fake. Never nil for a live queue.
@@ -75,7 +75,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidcCfg *oidc.Config, dispatcher Dispatcher, logger *slog.Logger, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())

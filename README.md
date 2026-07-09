@@ -156,9 +156,8 @@ go run ./cmd/emulator --hard-reset-on-purge-queue
 
 Rate limits and retry behaviour are **per-queue properties**, exactly as in
 production Cloud Tasks. There is no emulator-specific flag or environment
-variable for them (this is what issues [#58], [#101] and [#91] were asking
-about): you set them on the queue itself through the API, using the standard
-Cloud Tasks client. The emulator then honors them when dispatching.
+variable for them: you set them on the queue itself through the API, using the
+standard Cloud Tasks client. The emulator then honors them when dispatching.
 
 The catch is *when* you can set them:
 
@@ -198,10 +197,6 @@ _, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
 	},
 })
 ```
-
-[#58]: https://github.com/aertje/cloud-tasks-emulator/issues/58
-[#101]: https://github.com/aertje/cloud-tasks-emulator/issues/101
-[#91]: https://github.com/aertje/cloud-tasks-emulator/issues/91
 
 ## Skipping TLS verification for HTTPS targets
 

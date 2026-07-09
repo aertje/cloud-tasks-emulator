@@ -131,6 +131,24 @@ use in docker / k8s environments.
 You can, of course, export the content of the `/jwks` url if you prefer to
 hardcode the public keys in your application.
 
+### Signing with your own key
+
+By default the emulator signs tokens with a baked-in (insecure, publicly known)
+development key. To sign with your own RSA private key instead, pass a path to a
+PEM-encoded key:
+
+```sh
+go run ./cmd/emulator -openid-issuer http://localhost:8980 -openid-signing-key ./oidc.key
+```
+
+The matching public key is derived from it automatically and published at the
+`/jwks` endpoint, so verification via the discovery flow keeps working. You can
+generate a suitable key with:
+
+```sh
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out oidc.key
+```
+
 ## Flushing task state
 
 By default, the emulator tracks the names of every task created since the emulator launched. The list

@@ -55,18 +55,32 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// DefaultConfig builds a Config from the baked-in development key.
-func DefaultConfig() *Config {
-	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(openIdPrivateKeyStr))
+// NewConfig builds a Config that signs OIDC tokens with the RSA private key in
+// privateKeyPEM. The public key published at the JWKS endpoint is derived from
+// it, so callers supply key material in one place. It returns an error rather
+// than panicking so the binary can report a bad -openid-signing-key cleanly.
+func NewConfig(privateKeyPEM []byte) (*Config, error) {
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(privateKeyPEM)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("parsing RSA private key: %w", err)
 	}
 
 	return &Config{
 		IssuerURL:  "http://cloud-tasks-emulator",
 		KeyID:      "cloudtasks-emulator-test",
 		PrivateKey: privateKey,
+	}, nil
+}
+
+// DefaultConfig builds a Config from the baked-in development key. The key is a
+// compile-time constant known to parse, so a failure here is a programmer error.
+func DefaultConfig() *Config {
+	cfg, err := NewConfig([]byte(openIdPrivateKeyStr))
+	if err != nil {
+		panic(err)
 	}
+
+	return cfg
 }
 
 // CreateToken issues an RS256-signed OIDC token for the given service account.

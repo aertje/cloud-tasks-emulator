@@ -71,6 +71,7 @@ func main() {
 	host := fs.String("host", "localhost", "The host name")
 	port := fs.String("port", "8123", "The port")
 	openidIssuer := fs.String("openid-issuer", "", "URL to serve the OpenID configuration on, if required")
+	openidSigningKey := fs.String("openid-signing-key", "", "Path to a PEM-encoded RSA private key used to sign OIDC tokens (defaults to a baked-in development key)")
 	hardResetOnPurgeQueue := fs.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
 	insecureSkipTLSVerify := fs.Bool("insecure-skip-tls-verify", false, "Skip TLS certificate verification when dispatching to HTTPS targets (development only, e.g. self-signed certs)")
 
@@ -88,6 +89,18 @@ func main() {
 	}
 
 	oidcCfg := oidc.DefaultConfig()
+	if *openidSigningKey != "" {
+		pemBytes, err := os.ReadFile(*openidSigningKey)
+		if err != nil {
+			panic(fmt.Errorf("reading -openid-signing-key: %w", err))
+		}
+		cfg, err := oidc.NewConfig(pemBytes)
+		if err != nil {
+			panic(fmt.Errorf("loading -openid-signing-key: %w", err))
+		}
+		oidcCfg = cfg
+		slog.Info("signing OIDC tokens with custom key", "path", *openidSigningKey)
+	}
 
 	var openIDServer *http.Server
 	if *openidIssuer != "" {

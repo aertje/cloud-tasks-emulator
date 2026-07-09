@@ -1,6 +1,10 @@
 package oidc
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"testing"
 	"time"
 
@@ -67,6 +71,38 @@ func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
+}
+
+func TestNewConfigSignsWithSuppliedKey(t *testing.T) {
+	// A user-supplied key must be the one that actually signs tokens, and the
+	// signature must verify against that key's public half (the same half the
+	// JWKS endpoint derives and publishes).
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	config, err := NewConfig(keyPEM)
+	require.NoError(t, err)
+	assert.True(t, key.Equal(config.PrivateKey), "uses the supplied key, not the baked-in one")
+
+	tokenStr, err := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
+	require.NoError(t, err)
+	_, err = new(jwt.Parser).ParseWithClaims(
+		tokenStr,
+		&Claims{},
+		func(token *jwt.Token) (any, error) {
+			assert.IsType(t, jwt.SigningMethodRS256, token.Method)
+			return config.PrivateKey.Public(), nil
+		},
+	)
+	require.NoError(t, err, "token verifies against the supplied key")
+}
+
+func TestNewConfigRejectsInvalidPEM(t *testing.T) {
+	_, err := NewConfig([]byte("not a pem key"))
+	require.Error(t, err)
 }
 
 func assertRoughNumericDate(t *testing.T, expectOffset time.Duration, timestamp *jwt.NumericDate, msg string) {

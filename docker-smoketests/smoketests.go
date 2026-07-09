@@ -182,7 +182,7 @@ func parseOpenIDConnectToken(tokenStr string, keySet jwk.Set) (*jwt.Token, *Open
 	token, err := new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&OpenIDConnectClaims{},
-		func(token *jwt.Token) (interface{}, error) {
+		func(token *jwt.Token) (any, error) {
 			keyId := token.Header["kid"].(string)
 			jwkKey, ok := keySet.LookupKeyID(keyId)
 			if !ok {
@@ -200,7 +200,7 @@ func parseOpenIDConnectToken(tokenStr string, keySet jwk.Set) (*jwt.Token, *Open
 	return token, token.Claims.(*OpenIDConnectClaims)
 }
 
-func fetchJsonFromUrl(url string) map[string]interface{} {
+func fetchJsonFromUrl(url string) map[string]any {
 	client := http.Client{
 		Timeout: time.Second * 10,
 	}
@@ -213,7 +213,7 @@ func fetchJsonFromUrl(url string) map[string]interface{} {
 	body, err := io.ReadAll(res.Body)
 	fatalIfError(err)
 
-	var parsedBody map[string]interface{}
+	var parsedBody map[string]any
 	err = json.Unmarshal(body, &parsedBody)
 	fatalIfError(err)
 

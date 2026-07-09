@@ -60,7 +60,7 @@ func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	_, err = new(jwt.Parser).ParseWithClaims(
 		tokenStr,
 		&Claims{},
-		func(token *jwt.Token) (interface{}, error) {
+		func(token *jwt.Token) (any, error) {
 			// Can safely skip kid checking as we check it in the data test above
 			assert.IsType(t, jwt.SigningMethodRS256, token.Method)
 			return config.PrivateKey.Public(), nil

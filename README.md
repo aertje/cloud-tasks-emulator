@@ -366,7 +366,7 @@ $task = new Task();
 $task->setHttpRequest($http);
 $queuePath = $client->queueName('dev', 'here', 'tasks');
 
-$response = $this->client->createTask($queuePath, $task);
+$response = $client->createTask($queuePath, $task);
 ```
 
 ### JavaScript example
@@ -395,4 +395,55 @@ await client.createTask({
   parent: queueName,
   task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
 });
+
+// create task with OIDC token
+const payload = { foo: "bar" };
+const serviceAccountEmail = "account@project_id.iam.gserviceaccount.com"
+await client.createTask({
+    parent: queueName,
+    task: {
+    httpRequest: {
+        url: "https://myapp.example.com/worker",
+        httpMethod: "POST",
+        body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+        headers: {"Content-Type": "application/json"},
+        oidcToken: {
+            serviceAccountEmail,
+        },
+    },
+    },
+});
 ```
+
+Receiving HTTP calls from the emulator and verifying OIDC tokens.
+```js
+// at this point you started the emulator with the -openid-issuer flag
+// and created a http task with oidc token
+// in this example we are assuming that the issuer is http://localhost:8980
+import { OAuth2Client } from "google-auth-library";
+
+const client = new OAuth2Client({
+  endpoints: {
+    // JWK certs served by the emulator
+    oauth2FederatedSignonJwkCertsUrl: "http://localhost:8980/jwks",
+  },
+  issuers: ["http://localhost:8980"],
+});
+
+// function using node.js
+// to handling the http request 
+// to https://myapp.example.com/worker
+// the is webhook used in task creation
+// that is protected by oidc token
+function httpRequestHandler() {
+  
+  // data from Authorization header
+  const idToken = "..."; 
+
+  const ticket = await client.verifyIdToken({
+    idToken,
+    audience: "https://myapp.example.com/worker",
+  });
+  const payload = ticket.getPayload();
+  console.info("Payload", payload);
+}

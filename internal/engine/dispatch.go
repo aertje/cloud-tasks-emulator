@@ -257,7 +257,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		logger.Debug("dispatch: deliver request", "task", state.Name, "err", err)
 		return -1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode
 }

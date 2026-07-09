@@ -42,7 +42,7 @@ func respondJSON(w http.ResponseWriter, body any, expiresAfter time.Duration) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public")
 	w.Header().Set("Expires", expires)
-	w.Write(jsonBody)
+	_, _ = w.Write(jsonBody)
 }
 
 func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {

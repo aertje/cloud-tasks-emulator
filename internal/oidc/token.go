@@ -42,8 +42,7 @@ FSkhEKj2YXWlriv3hyPIC8Aq
 
 // Config holds the key material and issuer identity used to mint OIDC tokens
 // during dispatch and to publish the matching discovery/JWKS endpoints. It is
-// created per-engine (see DefaultConfig) and threaded through to dispatch
-// rather than held as mutable package state.
+// created per-engine (see DefaultConfig) and threaded through to dispatch.
 type Config struct {
 	IssuerURL  string
 	KeyID      string

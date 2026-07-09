@@ -253,8 +253,7 @@ func main() {
 		getQueue(client, expectQueue)
 	}
 
-	// In normal use during build the queue will be empty because it will be a clean emulator
-	// but purge it now to ensure clean state if running multiple times when working on this test suite
+	// Purge first so repeated local runs against a reused emulator start clean.
 	purgeQueue(client, *queuePath)
 
 	createTask(client, *queuePath, handlerUrl)

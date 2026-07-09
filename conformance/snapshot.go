@@ -18,7 +18,7 @@ import (
 // capturing gRPC statuses from malformed RPCs, it captures the header map that
 // Cloud Tasks echoes back after a task is created. It exists to pin down three
 // behaviours the emulator must match, none of which are stated unambiguously in
-// the proto docs (see issues #111 and #53):
+// the proto docs:
 //
 //   - Key casing at rest: does Cloud Tasks store header keys verbatim (so a
 //     submitted "content-type" comes back lowercase) or canonicalize them to
@@ -100,7 +100,7 @@ func buildAppEngineTask(p Params, headers map[string]string) *taskspb.Task {
 	}
 }
 
-// mixedCase submits a lowercase "content-type" (the exact #111/#53 repro) and a
+// mixedCase submits a lowercase "content-type" and a
 // mixed-case custom header, probing key-casing and default suppression.
 var mixedCase = map[string]string{
 	"content-type": "application/json",

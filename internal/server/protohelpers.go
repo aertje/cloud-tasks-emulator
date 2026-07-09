@@ -153,7 +153,7 @@ func taskToProto(s engine.TaskState) *tasks.Task {
 		Name:          s.Name,
 		DispatchCount: s.DispatchCount,
 		ResponseCount: s.ResponseCount,
-		// The original emulator set this on every task.
+		// Cloud Tasks always returns the BASIC view here.
 		View: tasks.Task_BASIC,
 	}
 	if !s.CreateTime.IsZero() {
@@ -301,11 +301,9 @@ func httpMethodToProto(m string) tasks.HttpMethod {
 	}
 }
 
-// mapErr converts an engine sentinel to a gRPC status, preserving the codes and
-// messages that emulator.go produced before the refactor. Per-handler variants
+// mapErr converts an engine sentinel to a gRPC status. Per-handler variants
 // below override specific cases where the same sentinel maps to a different
-// status in different RPCs - the real-cloud error-mapping work will collapse
-// those once the actual upstream behaviour is known.
+// status in different RPCs.
 //
 // It also maps the context errors that an Engine method returns when the
 // caller's ctx is cancelled or its deadline expires (e.g. PurgeQueue in

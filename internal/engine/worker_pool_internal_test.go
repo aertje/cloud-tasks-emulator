@@ -101,9 +101,9 @@ func TestDispatchConcurrencyIsBounded(t *testing.T) {
 }
 
 // TestIdleQueuesDoNotLeakGoroutines verifies that creating idle queues does not
-// spawn a worker goroutine per concurrency slot. Each queue defaults to
-// MaxConcurrentDispatches = 1000; the old eager pool started that many worker
-// goroutines per queue, the lazy pool starts none until there is work.
+// spawn a worker goroutine per concurrency slot: an idle queue must start no
+// worker goroutines until there is work, even though each queue defaults to
+// MaxConcurrentDispatches = 1000.
 func TestIdleQueuesDoNotLeakGoroutines(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 
@@ -118,16 +118,15 @@ func TestIdleQueuesDoNotLeakGoroutines(t *testing.T) {
 
 	// Let any transient startup goroutines settle, then assert the increase is a
 	// small constant per queue (token generator + dispatcher), nowhere near the
-	// queues * 1000 the eager pool would have spawned.
+	// queues * 1000 a worker-per-slot pool would spawn.
 	require.Eventually(t, func() bool {
 		return runtime.NumGoroutine()-before < 50
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-// TestPausedTaskDispatchesAfterResume is a regression test for the cancellation
-// rewrite: a task queued while a queue is paused must still dispatch once the
-// queue is resumed (the pre-rewrite scheme left a resumed queue unable to
-// dispatch). Note that pause is not instantaneous - a dispatcher mid-loop may
+// TestPausedTaskDispatchesAfterResume verifies that a task queued while a queue
+// is paused still dispatches once the queue is resumed. Note that pause is not
+// instantaneous - a dispatcher mid-loop may
 // deliver one task right at the pause boundary - so this asserts eventual
 // dispatch rather than the absence of dispatch during the pause.
 func TestPausedTaskDispatchesAfterResume(t *testing.T) {
@@ -148,9 +147,8 @@ func TestPausedTaskDispatchesAfterResume(t *testing.T) {
 	assert.GreaterOrEqual(t, d.count(), 1)
 }
 
-// TestDeleteAfterPauseDoesNotHang is a regression test: deleting a queue that is
-// already paused must not deadlock (the pre-rewrite cancellation scheme blocked
-// the caller here forever).
+// TestDeleteAfterPauseDoesNotHang verifies that deleting an already-paused queue
+// does not deadlock the caller.
 func TestDeleteAfterPauseDoesNotHang(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)

@@ -52,9 +52,7 @@ func (s openIDServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 	config := map[string]any{
 		"keys": []map[string]string{
 			{
-				// Ideally we would export the exponent from the key too but frankly
-				// it's always AQAB in practice and I lost the will to live trying to
-				// base64url encode a 2-bytes int in go!
+				// Exponent is hardcoded: it is always AQAB (65537) for these keys.
 				"e":   "AQAB",
 				"n":   b64Url.EncodeToString(publicKey.N.Bytes()),
 				"kid": s.config.KeyID,
@@ -82,9 +80,8 @@ func newOpenIDConfigurationServer(listenAddr string, listenPort string, config C
 
 // ConfigureIssuer validates issuerUrl and returns an HTTP server publishing the
 // discovery/JWKS endpoints, together with the finalized Config to hand to the
-// engine. It mutates its own copy of cfg rather than the caller's, so the
-// returned Config and server observe the same issuer URL and key with no shared
-// mutable state.
+// engine. cfg is taken by value, so the caller shares no mutable state with the
+// returned Config and server.
 func ConfigureIssuer(issuerUrl string, cfg Config) (*http.Server, Config, error) {
 	url, err := url.ParseRequestURI(issuerUrl)
 	if err != nil {

@@ -223,10 +223,8 @@ func Cases() []Case {
 		// --- CreateTask URL validation ---
 		// Probes whether Cloud Tasks rejects a malformed HttpRequest.Url at
 		// create time (and with what code/message/details), or accepts it and
-		// only fails at dispatch. Behaviour is unconfirmed until the golden is
-		// recorded against the real API; some variants may record OK. Together
-		// these pin down the validation rule the emulator should enforce so a
-		// doomed task never enters a queue.
+		// only fails at dispatch. Together these pin down the validation rule
+		// the emulator should enforce so a doomed task never enters a queue.
 		{
 			Name: "task/create/invalid-url-empty", RPC: "CreateTask", Category: "task-invalid-url",
 			Setup:    createQueue,
@@ -246,8 +244,8 @@ func Cases() []Case {
 			Teardown: deleteQueue,
 		},
 		{
-			// Invalid percent-escape: unparseable by Go's url.Parse, so this is
-			// the input that trips dispatch.go's build-request path today.
+			// Invalid percent-escape: unparseable by Go's url.Parse, the input
+			// that trips dispatch.go's build-request path.
 			Name: "task/create/invalid-url-bad-escape", RPC: "CreateTask", Category: "task-invalid-url",
 			Setup:    createQueue,
 			Invoke:   createTaskURL("http://example.com/%zz"),

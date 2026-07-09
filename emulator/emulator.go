@@ -31,9 +31,8 @@ type Emulator struct {
 	srv  *server.Server
 	grpc *grpc.Server
 	lis  *bufconn.Listener
-	// logger is this package's diagnostic logger, resolved once in New from
-	// the WithLogger option (or slog.Default()) and tagged with a component
-	// attribute so it matches the engine's records.
+	// logger is this package's diagnostic logger, tagged with a component
+	// attribute so its records match the engine's.
 	logger *slog.Logger
 	// started guards against calling Start more than once.
 	started bool
@@ -85,8 +84,7 @@ func NewUnstarted(opts ...Option) *Emulator {
 	}
 	s := server.NewServer(so)
 
-	// Resolve the logger once here from the same option the engine reads, tagged
-	// to match the engine's records. When unset, fall back to slog.Default().
+	// Resolve the logger from the same option the engine reads, so both share it.
 	logger := so.Logger
 	if logger == nil {
 		logger = slog.Default()

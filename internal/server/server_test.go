@@ -129,8 +129,6 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 	createdTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 	require.NoError(t, err)
 
-	// First creation worked OK
-
 	dupeTask, err := client.CreateTask(context.Background(), &createTaskRequest)
 
 	assert.Nil(t, dupeTask)
@@ -353,10 +351,9 @@ func TestDeleteTaskTombstonesName(t *testing.T) {
 }
 
 func TestPausedThenResumedQueueStillDispatches(t *testing.T) {
-	// Regression test for the worker-cancellation rewrite: a queue that is
-	// paused and then resumed must still dispatch tasks. The previous design
-	// left a stale cancellation token buffered, so the first resumed worker
-	// re-killed the whole pool and the queue never dispatched again.
+	// A queue that is paused and then resumed must still dispatch tasks. A stale
+	// buffered cancellation token could otherwise make the first resumed worker
+	// kill the whole pool, leaving the queue permanently idle.
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 
@@ -688,11 +685,10 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	assertIsRecentTimestamp(t, receivedRequest.Header.Get("X-AppEngine-TaskETA"))
 }
 
-// TestAppEngineContentTypeHeaderIsCaseInsensitive guards issues #111/#53: a
-// caller-supplied lowercase "content-type" must suppress the
-// application/octet-stream default rather than be dispatched alongside it. Real
-// Cloud Tasks emits a single Content-Type honouring the caller's value (see
-// conformance/golden/headers.json).
+// TestAppEngineContentTypeHeaderIsCaseInsensitive checks that a caller-supplied
+// lowercase "content-type" suppresses the application/octet-stream default
+// rather than being dispatched alongside it. Real Cloud Tasks emits a single
+// Content-Type honouring the caller's value (see conformance/golden/headers.json).
 func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
 	// Not parallel: it sets the process-wide APP_ENGINE_EMULATOR_HOST env var.
 	_, client := setUp(t, ServerOptions{})
@@ -743,9 +739,9 @@ func tlsTaskRequest(queueName, targetURL string) *taskspb.CreateTaskRequest {
 	}
 }
 
-// TestTLSVerificationRejectsUntrustedCert is the default half of issue #106:
-// with verification on (the default), dispatch to a self-signed HTTPS target
-// fails the TLS handshake, so no request reaches the handler.
+// TestTLSVerificationRejectsUntrustedCert checks that with verification on (the
+// default), dispatch to a self-signed HTTPS target fails the TLS handshake, so
+// no request reaches the handler.
 func TestTLSVerificationRejectsUntrustedCert(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
@@ -759,8 +755,8 @@ func TestTLSVerificationRejectsUntrustedCert(t *testing.T) {
 	assert.Error(t, err, "no request should reach a target with an untrusted cert")
 }
 
-// TestInsecureSkipTLSVerifyAcceptsUntrustedCert is the opt-in half of issue
-// #106: with InsecureSkipTLSVerify set, the same dispatch succeeds.
+// TestInsecureSkipTLSVerifyAcceptsUntrustedCert checks that with
+// InsecureSkipTLSVerify set, dispatch to a self-signed HTTPS target succeeds.
 func TestInsecureSkipTLSVerifyAcceptsUntrustedCert(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{InsecureSkipTLSVerify: true})
@@ -966,7 +962,7 @@ func assertGetTaskFails(t *testing.T, expectCode grpcCodes.Code, client *Client,
 
 // requireTaskEventuallyGone polls until GetTask reports the task as NotFound,
 // which happens once the emulator has processed the target's response and
-// removed the task. This replaces sleeping for a fixed grace period.
+// removed the task.
 func requireTaskEventuallyGone(t *testing.T, client *Client, name string) {
 	t.Helper()
 	require.Eventually(t, func() bool {

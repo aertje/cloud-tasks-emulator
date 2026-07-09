@@ -28,7 +28,7 @@ type Queue struct {
 	// stopDispatch) the dispatcher. stopDispatch is closed to stop the dispatcher
 	// on Pause or Delete, and replaced with a fresh channel by Resume so a new
 	// generation of the dispatcher can be started. In-flight attempts launched by
-	// a stopped generation are allowed to run to completion, as they always were.
+	// a stopped generation are allowed to run to completion.
 	stopAll      chan struct{}
 	stopDispatch chan struct{}
 

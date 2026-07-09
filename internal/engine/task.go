@@ -162,7 +162,7 @@ func setInitialTaskState(s *TaskState, queueName string) {
 		if s.HTTPRequest.Headers == nil {
 			s.HTTPRequest.Headers = make(map[string]string)
 		}
-		// Override
+		// Cloud Tasks overrides any caller-supplied User-Agent.
 		s.HTTPRequest.Headers["User-Agent"] = "Google-Cloud-Tasks"
 	}
 
@@ -180,9 +180,8 @@ func setInitialTaskState(s *TaskState, queueName string) {
 			// HTTP field names are case-insensitive, so a caller-supplied
 			// "content-type" must suppress the default just as "Content-Type"
 			// would - otherwise the task carries two Content-Type headers, which
-			// Cloud Tasks does not allow (see conformance/golden/headers.json,
-			// issues #111/#53). The default itself is added under the canonical
-			// casing.
+			// Cloud Tasks does not allow (see conformance/golden/headers.json).
+			// The default itself is added under the canonical casing.
 			if !hasHeaderFold(ae.Headers, "Content-Type") {
 				ae.Headers["Content-Type"] = "application/octet-stream"
 			}

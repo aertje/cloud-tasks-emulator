@@ -36,7 +36,7 @@ func runTaskHttpServer(listenAddr string) <-chan *http.Request {
 
 	http.HandleFunc("/handler-test", func(w http.ResponseWriter, req *http.Request) {
 		// Whatever happens, return 200 to clear the task from the emulator
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 
 		requestDump, err := httputil.DumpRequest(req, true)
 		fatalIfError(err)

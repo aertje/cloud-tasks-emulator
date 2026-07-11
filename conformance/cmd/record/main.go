@@ -3,23 +3,23 @@
 //
 // Run from inside the conformance/ module directory.
 //
-// Record the golden snapshot from the real API:
+// Record the error-battery golden from the real API:
 //
 //	gcloud auth application-default login
 //	go run ./cmd/record \
 //	  -target=real -project=$PROJECT -location=us-central1 \
-//	  -out=golden/realcloud.json
+//	  -out=golden/errors.json
 //
 // Dump the emulator's current behaviour for ad-hoc comparison:
 //
 //	go run ./cmd/emulator -port 8123 &   # from repo root
 //	go run ./cmd/record -target=emulator -addr=localhost:8123 -out=/tmp/emu.json
 //
-// Record the header-behaviour golden (happy path; needs cloudtasks.tasks.fullView):
+// Record the happy-path golden (needs cloudtasks.tasks.fullView for the FULL view):
 //
 //	go run ./cmd/record \
-//	  -target=real -kind=headers -project=$PROJECT -location=us-central1 \
-//	  -out=golden/headers.json
+//	  -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
+//	  -out=golden/happypath.json
 package main
 
 import (
@@ -35,7 +35,7 @@ import (
 
 func main() {
 	target := flag.String("target", "emulator", "real | emulator")
-	kind := flag.String("kind", "errors", "errors | headers (which battery to record)")
+	kind := flag.String("kind", "errors", "errors | happypath (which battery to record)")
 	project := flag.String("project", "", "GCP project id (real) or placeholder (emulator)")
 	location := flag.String("location", "us-central1", "location id")
 	addr := flag.String("addr", "localhost:8123", "emulator address (target=emulator)")
@@ -75,16 +75,16 @@ func main() {
 	switch *kind {
 	case "errors":
 		recordErrors(ctx, client, opts, *out)
-	case "headers":
-		recordHeaders(ctx, client, opts, *out)
+	case "happypath":
+		recordHappyPath(ctx, client, opts, *out)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|headers)\n", *kind)
+		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|happypath)\n", *kind)
 		os.Exit(1)
 	}
 }
 
 func recordErrors(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
-	results := conformance.Run(ctx, client, opts)
+	results := conformance.RunErrors(ctx, client, opts)
 
 	unstable := 0
 	for _, r := range results {
@@ -94,12 +94,12 @@ func recordErrors(ctx context.Context, client *conformance.Client, opts conforma
 		}
 	}
 
-	writeJSON(out, func(path string) error { return conformance.Save(path, results) })
+	writeJSON(out, func(path string) error { return conformance.SaveErrors(path, results) })
 	fmt.Fprintf(os.Stderr, "done: %d cases, %d unstable\n", len(results), unstable)
 }
 
-func recordHeaders(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
-	snaps := conformance.RunHeaderObservations(ctx, client, opts)
+func recordHappyPath(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
+	snaps := conformance.RunHappyPath(ctx, client, opts)
 
 	failed := 0
 	for _, s := range snaps {
@@ -110,7 +110,7 @@ func recordHeaders(ctx context.Context, client *conformance.Client, opts conform
 		}
 	}
 
-	writeJSON(out, func(path string) error { return conformance.SaveHeaderSnapshots(path, snaps) })
+	writeJSON(out, func(path string) error { return conformance.SaveHappyPath(path, snaps) })
 	fmt.Fprintf(os.Stderr, "done: %d observations, %d with errors\n", len(snaps), failed)
 }
 

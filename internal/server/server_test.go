@@ -728,6 +728,86 @@ func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
 	)
 }
 
+// TestResponseView checks the BASIC/FULL response view: BASIC (the default)
+// withholds the request body while still returning headers, and FULL returns
+// the body too. The task is scheduled far into the future so it never dispatches
+// during the test.
+func TestResponseView(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	createdQueue := createTestQueue(t, client)
+
+	body := []byte(`{"hello":"world"}`)
+	headers := map[string]string{"X-Custom": "keep-me"}
+	newTask := func() *taskspb.Task {
+		return &taskspb.Task{
+			ScheduleTime: timestamppb.New(time.Now().Add(time.Hour)),
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url:     "http://www.google.com",
+					Headers: headers,
+					Body:    body,
+				},
+			},
+		}
+	}
+
+	// CreateTask with an unspecified view defaults to BASIC: no body, headers kept.
+	basicCreated, err := client.CreateTask(context.Background(), &taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task:   newTask(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, taskspb.Task_BASIC, basicCreated.GetView())
+	assert.Nil(t, basicCreated.GetHttpRequest().GetBody(), "BASIC view withholds the body")
+	assert.Equal(t, "keep-me", basicCreated.GetHttpRequest().GetHeaders()["X-Custom"], "headers returned under BASIC")
+
+	// GetTask BASIC: still no body.
+	gotBasic, err := client.GetTask(context.Background(), &taskspb.GetTaskRequest{
+		Name:         basicCreated.GetName(),
+		ResponseView: taskspb.Task_BASIC,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, taskspb.Task_BASIC, gotBasic.GetView())
+	assert.Nil(t, gotBasic.GetHttpRequest().GetBody())
+
+	// GetTask FULL: body present.
+	gotFull, err := client.GetTask(context.Background(), &taskspb.GetTaskRequest{
+		Name:         basicCreated.GetName(),
+		ResponseView: taskspb.Task_FULL,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, taskspb.Task_FULL, gotFull.GetView())
+	assert.Equal(t, body, gotFull.GetHttpRequest().GetBody(), "FULL view returns the body")
+	assert.Equal(t, "keep-me", gotFull.GetHttpRequest().GetHeaders()["X-Custom"])
+
+	// CreateTask FULL returns the body immediately.
+	fullCreated, err := client.CreateTask(context.Background(), &taskspb.CreateTaskRequest{
+		Parent:       createdQueue.GetName(),
+		Task:         newTask(),
+		ResponseView: taskspb.Task_FULL,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, taskspb.Task_FULL, fullCreated.GetView())
+	assert.Equal(t, body, fullCreated.GetHttpRequest().GetBody())
+
+	// ListTasks honours the requested view.
+	iter := client.ListTasks(context.Background(), &taskspb.ListTasksRequest{
+		Parent:       createdQueue.GetName(),
+		ResponseView: taskspb.Task_FULL,
+	})
+	for {
+		listed, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		require.NoError(t, err)
+		assert.Equal(t, taskspb.Task_FULL, listed.GetView())
+		assert.Equal(t, body, listed.GetHttpRequest().GetBody(), "ListTasks FULL returns bodies")
+	}
+}
+
 func tlsTaskRequest(queueName, targetURL string) *taskspb.CreateTaskRequest {
 	return &taskspb.CreateTaskRequest{
 		Parent: queueName,

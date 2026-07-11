@@ -31,8 +31,6 @@ Known limitations:
   two *optional* headers production also sends:
   `X-CloudTasks-TaskPreviousResponse` and `X-CloudTasks-TaskRetryReason` (and
   their `X-AppEngine-*` equivalents for App Engine targets).
-- `GetTask` and `ListTasks` always return the `BASIC` view; the `FULL` view is
-  not implemented, so responses never include the task body or headers.
 
 ## Running the emulator
 

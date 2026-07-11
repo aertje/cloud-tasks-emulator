@@ -16,24 +16,24 @@ import (
 )
 
 const (
-	goldenPath        = "golden/realcloud.json"
-	headersGoldenPath = "golden/headers.json"
+	errorsGoldenPath    = "golden/errors.json"
+	happyPathGoldenPath = "golden/happypath.json"
 )
 
-// TestEmulatorMatchesRealCloud builds and starts the emulator, replays the
-// conformance battery against it, and asserts every captured code+template
-// matches the golden snapshot recorded from the real API.
+// TestEmulatorErrors builds and starts the emulator, replays the error battery
+// against it, and asserts every captured code+template matches the golden
+// snapshot recorded from the real API.
 //
 //	go test -tags conformance ./conformance/
 //
 // Skips if the golden file is absent (record it first - see cmd/record).
-func TestEmulatorMatchesRealCloud(t *testing.T) {
-	if _, err := os.Stat(goldenPath); os.IsNotExist(err) {
-		t.Skipf("no golden snapshot at %s; record it with cmd/record -target=real", goldenPath)
+func TestEmulatorErrors(t *testing.T) {
+	if _, err := os.Stat(errorsGoldenPath); os.IsNotExist(err) {
+		t.Skipf("no error golden at %s; record it with cmd/record -target=real", errorsGoldenPath)
 	}
-	golden, err := conformance.Load(goldenPath)
+	golden, err := conformance.LoadErrors(errorsGoldenPath)
 	if err != nil {
-		t.Fatalf("load golden: %v", err)
+		t.Fatalf("load error golden: %v", err)
 	}
 
 	addr := startEmulator(t)
@@ -47,7 +47,7 @@ func TestEmulatorMatchesRealCloud(t *testing.T) {
 	}
 	defer client.Close()
 
-	results := conformance.Run(ctx, client, conformance.RunOptions{
+	results := conformance.RunErrors(ctx, client, conformance.RunOptions{
 		Project:  "conformance-test",
 		Location: "us-central1",
 		Prefix:   "emu",
@@ -55,7 +55,7 @@ func TestEmulatorMatchesRealCloud(t *testing.T) {
 	})
 
 	diverged := make(map[string]bool)
-	for _, d := range conformance.Compare(golden, results) {
+	for _, d := range conformance.CompareErrors(golden, results) {
 		diverged[d.Case] = true
 		if reason, known := conformance.KnownDivergences[d.Case]; known {
 			t.Logf("KNOWN divergence %s (%s):\n%s", d.Case, reason, d.String())
@@ -72,21 +72,22 @@ func TestEmulatorMatchesRealCloud(t *testing.T) {
 	}
 }
 
-// TestEmulatorHeaderSnapshots replays the happy-path header battery against the
-// emulator and asserts the headers it echoes back match the golden recorded
-// from the real API (see RunHeaderObservations for what each stage probes).
+// TestEmulatorHappyPath replays the happy-path battery against the emulator and
+// asserts the headers and body it echoes back at each read stage match the
+// golden recorded from the real API (see RunHappyPath for what each stage
+// probes, including the BASIC/FULL view division of the body).
 //
 //	go test -tags conformance ./conformance/
 //
-// Skips if the header golden is absent (record it with
-// `cmd/record -kind=headers -target=real`).
-func TestEmulatorHeaderSnapshots(t *testing.T) {
-	if _, err := os.Stat(headersGoldenPath); os.IsNotExist(err) {
-		t.Skipf("no header golden at %s; record it with cmd/record -kind=headers -target=real", headersGoldenPath)
+// Skips if the happy-path golden is absent (record it with
+// `cmd/record -kind=happypath -target=real`).
+func TestEmulatorHappyPath(t *testing.T) {
+	if _, err := os.Stat(happyPathGoldenPath); os.IsNotExist(err) {
+		t.Skipf("no happy-path golden at %s; record it with cmd/record -kind=happypath -target=real", happyPathGoldenPath)
 	}
-	golden, err := conformance.LoadHeaderSnapshots(headersGoldenPath)
+	golden, err := conformance.LoadHappyPath(happyPathGoldenPath)
 	if err != nil {
-		t.Fatalf("load header golden: %v", err)
+		t.Fatalf("load happy-path golden: %v", err)
 	}
 
 	addr := startEmulator(t)
@@ -100,13 +101,13 @@ func TestEmulatorHeaderSnapshots(t *testing.T) {
 	}
 	defer client.Close()
 
-	snaps := conformance.RunHeaderObservations(ctx, client, conformance.RunOptions{
+	snaps := conformance.RunHappyPath(ctx, client, conformance.RunOptions{
 		Project:  "conformance-test",
 		Location: "us-central1",
 		Prefix:   "emu",
 	})
 
-	for _, d := range conformance.CompareHeaderSnapshots(golden, snaps) {
+	for _, d := range conformance.CompareHappyPath(golden, snaps) {
 		t.Errorf("%s", d.String())
 	}
 }

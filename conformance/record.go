@@ -3,6 +3,8 @@ package conformance
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	_ "google.golang.org/genproto/googleapis/rpc/errdetails" // register error-detail protos for status.Details
@@ -76,10 +78,10 @@ func (o RunOptions) paramsFor(caseIdx, variant int) Params {
 	}
 }
 
-// Run executes the full battery against the client and returns one CaseResult
-// per case. It never aborts on an individual RPC failure - failures are the
-// data being collected.
-func Run(ctx context.Context, c *Client, opts RunOptions) []CaseResult {
+// RunErrors executes the error battery against the client and returns one
+// CaseResult per case. It never aborts on an individual RPC failure - failures
+// are the data being collected.
+func RunErrors(ctx context.Context, c *Client, opts RunOptions) []CaseResult {
 	cases := Cases()
 	out := make([]CaseResult, 0, len(cases))
 
@@ -157,4 +159,68 @@ func aggregate(cs Case, variants []Result) CaseResult {
 		}
 	}
 	return res
+}
+
+// SaveErrors writes error-battery results to path (see saveGolden). Per-variant
+// detail is dropped from the committed golden - the aggregate is the contract;
+// variants are kept only in ad-hoc dumps if a caller wants them.
+func SaveErrors(path string, results []CaseResult) error {
+	trimmed := make([]CaseResult, len(results))
+	copy(trimmed, results)
+	for i := range trimmed {
+		trimmed[i].Variants = nil
+	}
+	return saveGolden(path, trimmed, func(r CaseResult) string { return r.Name })
+}
+
+// LoadErrors reads an error-battery golden keyed by case name.
+func LoadErrors(path string) (map[string]CaseResult, error) {
+	return loadGolden(path, func(r CaseResult) string { return r.Name })
+}
+
+// CompareErrors checks recorded error-battery results against a golden,
+// returning a Diff per mismatched code, template or details.
+func CompareErrors(golden map[string]CaseResult, got []CaseResult) []Diff {
+	return compareByName(golden, got,
+		func(r CaseResult) string { return r.Name },
+		func(want, g CaseResult) []Diff {
+			var diffs []Diff
+			if want.Code != g.Code {
+				diffs = append(diffs, Diff{Case: g.Name, Field: "code", Want: want.Code, Got: g.Code})
+			}
+			if want.Template != g.Template {
+				diffs = append(diffs, Diff{Case: g.Name, Field: "template", Want: want.Template, Got: g.Template})
+			}
+			if dw, dg := formatDetails(want.Details), formatDetails(g.Details); dw != dg {
+				diffs = append(diffs, Diff{Case: g.Name, Field: "details", Want: dw, Got: dg})
+			}
+			return diffs
+		})
+}
+
+// formatDetails renders a case's error details into a single canonical string
+// for comparison: one "type / template" block per detail, sorted so ordering
+// differences between real Cloud Tasks and the emulator don't register as a
+// mismatch. Returns "" when there are no details.
+//
+// Detail templates are prototext, whose field separator is deliberately
+// unstable - it emits one or two spaces at random to discourage parsing - so
+// the same message can serialise differently between the golden recording and
+// an emulator capture. canonicalSpace collapses that noise before comparing.
+func formatDetails(ds []DetailRecord) string {
+	if len(ds) == 0 {
+		return ""
+	}
+	blocks := make([]string, len(ds))
+	for i, d := range ds {
+		blocks[i] = d.Type + "\n" + canonicalSpace(d.Template)
+	}
+	sort.Strings(blocks)
+	return strings.Join(blocks, "\n---\n")
+}
+
+// canonicalSpace collapses every run of whitespace to a single space so
+// prototext's unstable separator doesn't register as a difference.
+func canonicalSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

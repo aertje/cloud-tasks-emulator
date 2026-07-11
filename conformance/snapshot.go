@@ -2,10 +2,7 @@ package conformance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,10 +12,10 @@ import (
 )
 
 // This file is the happy-path counterpart to the error battery: instead of
-// capturing gRPC statuses from malformed RPCs, it captures the header map that
-// Cloud Tasks echoes back after a task is created. It exists to pin down three
-// behaviours the emulator must match, none of which are stated unambiguously in
-// the proto docs:
+// capturing gRPC statuses from malformed RPCs, it creates a well-formed task and
+// captures what Cloud Tasks echoes back when it is read. It pins down behaviours
+// the emulator must match, none of which are stated unambiguously in the proto
+// docs:
 //
 //   - Key casing at rest: does Cloud Tasks store header keys verbatim (so a
 //     submitted "content-type" comes back lowercase) or canonicalize them to
@@ -27,27 +24,31 @@ import (
 //     "application/octet-stream" materialized in the stored task, or injected
 //     only onto the dispatched wire request? This decides whether the emulator
 //     should inject it at rest (setInitialTaskState) or at dispatch.
-//   - View sensitivity: are headers withheld under the BASIC response view
-//     (forcing callers to request FULL), or returned under both?
+//   - View sensitivity: which fields does the BASIC response view withhold? The
+//     body is documented as omitted under BASIC (callers must request FULL),
+//     while headers are returned under both - each stage captures both so the
+//     golden records the real division.
 //
 // Because the headers we submit are static (never derived from the run-scoped
 // queue/task IDs), these observations need no template normalization and no
 // multi-variant stability check - one capture per case is authoritative.
 
-// observationBody is a non-empty body so the AppEngine Content-Type default is
-// in play (that default only applies when the task has a body).
+// observationBody is a non-empty body so both the AppEngine Content-Type default
+// (which only applies when the task has a body) and the BASIC/FULL view division
+// of the body are in play.
 var observationBody = []byte(`{"hello":"world"}`)
 
-// Captured is the header map observed at one read, or the error that read
-// returned. Headers is nil when Err is set.
+// Captured is what one read observed - the task's headers and body - or the
+// error that read returned. Headers and Body are nil when Err is set.
 type Captured struct {
 	Headers map[string]string `json:"headers,omitempty"`
+	Body    []byte            `json:"body,omitempty"`
 	Err     string            `json:"err,omitempty"`
 }
 
-// HeaderSnapshot is one observation's golden entry: the headers we submitted
-// alongside the headers Cloud Tasks echoed back at each read stage.
-type HeaderSnapshot struct {
+// HappyPathSnapshot is one observation's golden entry: the headers we submitted
+// alongside what Cloud Tasks echoed back at each read stage.
+type HappyPathSnapshot struct {
 	Name        string            `json:"name"`
 	RequestType string            `json:"requestType"` // http | appengine
 	Sent        map[string]string `json:"sent"`
@@ -56,9 +57,9 @@ type HeaderSnapshot struct {
 	GetFull     Captured          `json:"getFull"`    // GetTask, FULL view
 }
 
-// headerCase names an observation, the headers it submits, and how to build its
-// task.
-type headerCase struct {
+// happyPathCase names an observation, the headers it submits, and how to build
+// its task.
+type happyPathCase struct {
 	name    string
 	reqType string
 	send    map[string]string
@@ -115,33 +116,33 @@ var noContentType = map[string]string{
 	"X-Mixed-Case": "preserve-me",
 }
 
-// headerObservations is the full happy-path battery. Names are stable golden
+// happyPathObservations is the full happy-path battery. Names are stable golden
 // keys - do not rename casually.
-func headerObservations() []headerCase {
-	return []headerCase{
-		{name: "headers/http", reqType: "http", send: mixedCase, build: buildHTTPTask},
-		{name: "headers/http-no-content-type", reqType: "http", send: noContentType, build: buildHTTPTask},
-		{name: "headers/appengine", reqType: "appengine", send: mixedCase, build: buildAppEngineTask},
-		{name: "headers/appengine-no-content-type", reqType: "appengine", send: noContentType, build: buildAppEngineTask},
+func happyPathObservations() []happyPathCase {
+	return []happyPathCase{
+		{name: "happypath/http", reqType: "http", send: mixedCase, build: buildHTTPTask},
+		{name: "happypath/http-no-content-type", reqType: "http", send: noContentType, build: buildHTTPTask},
+		{name: "happypath/appengine", reqType: "appengine", send: mixedCase, build: buildAppEngineTask},
+		{name: "happypath/appengine-no-content-type", reqType: "appengine", send: noContentType, build: buildAppEngineTask},
 	}
 }
 
-// RunHeaderObservations executes the happy-path battery against the client and
-// returns one snapshot per observation. Like Run, it never aborts on an
-// individual RPC failure - a failure is recorded in the relevant Captured.Err
-// (e.g. a FULL-view read without cloudtasks.tasks.fullView) and is itself data.
-func RunHeaderObservations(ctx context.Context, c *Client, opts RunOptions) []HeaderSnapshot {
-	obs := headerObservations()
-	out := make([]HeaderSnapshot, 0, len(obs))
+// RunHappyPath executes the happy-path battery against the client and returns
+// one snapshot per observation. Like Run, it never aborts on an individual RPC
+// failure - a failure is recorded in the relevant Captured.Err (e.g. a FULL-view
+// read without cloudtasks.tasks.fullView) and is itself data.
+func RunHappyPath(ctx context.Context, c *Client, opts RunOptions) []HappyPathSnapshot {
+	obs := happyPathObservations()
+	out := make([]HappyPathSnapshot, 0, len(obs))
 	for i, o := range obs {
 		p := opts.paramsFor(i, 0)
-		out = append(out, observeHeaders(ctx, c, p, o))
+		out = append(out, observe(ctx, c, p, o))
 	}
 	return out
 }
 
-func observeHeaders(ctx context.Context, c *Client, p Params, obs headerCase) HeaderSnapshot {
-	snap := HeaderSnapshot{Name: obs.name, RequestType: obs.reqType, Sent: obs.send}
+func observe(ctx context.Context, c *Client, p Params, obs happyPathCase) HappyPathSnapshot {
+	snap := HappyPathSnapshot{Name: obs.name, RequestType: obs.reqType, Sent: obs.send}
 
 	if err := withStep(ctx, c, p, createQueue); err != nil {
 		// Without a queue there is nothing to observe; report the failure on
@@ -170,14 +171,14 @@ func observeHeaders(ctx context.Context, c *Client, p Params, obs headerCase) He
 		snap.GetFull.Err = err.Error()
 		return snap
 	}
-	snap.CreateFull.Headers = taskHeaders(created, obs.reqType)
+	snap.CreateFull = captureTask(created, obs.reqType)
 
-	snap.GetBasic = readHeaders(ctx, c, p, obs.reqType, taskspb.Task_BASIC)
-	snap.GetFull = readHeaders(ctx, c, p, obs.reqType, taskspb.Task_FULL)
+	snap.GetBasic = read(ctx, c, p, obs.reqType, taskspb.Task_BASIC)
+	snap.GetFull = read(ctx, c, p, obs.reqType, taskspb.Task_FULL)
 	return snap
 }
 
-func readHeaders(ctx context.Context, c *Client, p Params, reqType string, view taskspb.Task_View) Captured {
+func read(ctx context.Context, c *Client, p Params, reqType string, view taskspb.Task_View) Captured {
 	var got *taskspb.Task
 	err := within(ctx, func(ctx context.Context) error {
 		t, err := c.GetTask(ctx, &taskspb.GetTaskRequest{Name: p.TaskPath(), ResponseView: view})
@@ -187,20 +188,22 @@ func readHeaders(ctx context.Context, c *Client, p Params, reqType string, view 
 	if err != nil {
 		return Captured{Err: err.Error()}
 	}
-	return Captured{Headers: taskHeaders(got, reqType)}
+	return captureTask(got, reqType)
 }
 
-// taskHeaders pulls the header map out of whichever request type the task
-// carries. Returns nil for a nil task or a mismatched type.
-func taskHeaders(t *taskspb.Task, reqType string) map[string]string {
+// captureTask pulls the headers and body out of whichever request type the task
+// carries. Returns the zero Captured for a nil task or a mismatched type.
+func captureTask(t *taskspb.Task, reqType string) Captured {
 	if t == nil {
-		return nil
+		return Captured{}
 	}
 	switch reqType {
 	case "appengine":
-		return t.GetAppEngineHttpRequest().GetHeaders()
+		r := t.GetAppEngineHttpRequest()
+		return Captured{Headers: r.GetHeaders(), Body: r.GetBody()}
 	default:
-		return t.GetHttpRequest().GetHeaders()
+		r := t.GetHttpRequest()
+		return Captured{Headers: r.GetHeaders(), Body: r.GetBody()}
 	}
 }
 
@@ -212,91 +215,64 @@ func within(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
-// SaveHeaderSnapshots writes snapshots as indented JSON, sorted by name so
-// diffs are stable across runs.
-func SaveHeaderSnapshots(path string, snaps []HeaderSnapshot) error {
-	sorted := make([]HeaderSnapshot, len(snaps))
-	copy(sorted, snaps)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	b, err := json.MarshalIndent(sorted, "", "  ")
-	if err != nil {
-		return err
-	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(path, append(b, '\n'), 0644)
+// SaveHappyPath writes happy-path snapshots to path (see saveGolden).
+func SaveHappyPath(path string, snaps []HappyPathSnapshot) error {
+	return saveGolden(path, snaps, func(s HappyPathSnapshot) string { return s.Name })
 }
 
-// LoadHeaderSnapshots reads a snapshot golden keyed by name.
-func LoadHeaderSnapshots(path string) (map[string]HeaderSnapshot, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var snaps []HeaderSnapshot
-	if err := json.Unmarshal(b, &snaps); err != nil {
-		return nil, err
-	}
-	m := make(map[string]HeaderSnapshot, len(snaps))
-	for _, s := range snaps {
-		m[s.Name] = s
-	}
-	return m, nil
+// LoadHappyPath reads a happy-path golden keyed by observation name.
+func LoadHappyPath(path string) (map[string]HappyPathSnapshot, error) {
+	return loadGolden(path, func(s HappyPathSnapshot) string { return s.Name })
 }
 
-// CompareHeaderSnapshots checks recorded snapshots against a golden, returning
-// a Diff per mismatched read stage. Cases present in one set but not the other
-// are reported too.
-func CompareHeaderSnapshots(golden map[string]HeaderSnapshot, got []HeaderSnapshot) []Diff {
-	var diffs []Diff
-	seen := make(map[string]bool, len(got))
-
-	for _, g := range got {
-		seen[g.Name] = true
-		want, ok := golden[g.Name]
-		if !ok {
-			diffs = append(diffs, Diff{Case: g.Name, Field: "presence", Want: "absent in golden", Got: "recorded"})
-			continue
-		}
-		stages := []struct {
-			field string
-			w, g  Captured
-		}{
-			{"createFull", want.CreateFull, g.CreateFull},
-			{"getBasic", want.GetBasic, g.GetBasic},
-			{"getFull", want.GetFull, g.GetFull},
-		}
-		for _, s := range stages {
-			if w, gg := formatCaptured(s.w), formatCaptured(s.g); w != gg {
-				diffs = append(diffs, Diff{Case: g.Name, Field: s.field, Want: w, Got: gg})
+// CompareHappyPath checks recorded snapshots against a golden, returning a Diff
+// per mismatched read stage (headers or body).
+func CompareHappyPath(golden map[string]HappyPathSnapshot, got []HappyPathSnapshot) []Diff {
+	return compareByName(golden, got,
+		func(s HappyPathSnapshot) string { return s.Name },
+		func(want, g HappyPathSnapshot) []Diff {
+			var diffs []Diff
+			stages := []struct {
+				field string
+				w, g  Captured
+			}{
+				{"createFull", want.CreateFull, g.CreateFull},
+				{"getBasic", want.GetBasic, g.GetBasic},
+				{"getFull", want.GetFull, g.GetFull},
 			}
-		}
-	}
-	for name := range golden {
-		if !seen[name] {
-			diffs = append(diffs, Diff{Case: name, Field: "presence", Want: "recorded", Got: "missing"})
-		}
-	}
-	return diffs
+			for _, s := range stages {
+				if w, gg := formatCaptured(s.w), formatCaptured(s.g); w != gg {
+					diffs = append(diffs, Diff{Case: g.Name, Field: s.field, Want: w, Got: gg})
+				}
+			}
+			return diffs
+		})
 }
 
 // formatCaptured renders a Captured into a single canonical string for
-// comparison: sorted "key: value" lines, or "err: ..." when the read failed.
+// comparison: an "err: ..." line when the read failed, otherwise the sorted
+// headers followed by the body (rendered verbatim, "(none)" when withheld).
 func formatCaptured(c Captured) string {
 	if c.Err != "" {
 		return "err: " + c.Err
 	}
+	var b strings.Builder
 	if len(c.Headers) == 0 {
-		return "(no headers)"
+		b.WriteString("headers: (none)")
+	} else {
+		lines := make([]string, 0, len(c.Headers))
+		for k, v := range c.Headers {
+			lines = append(lines, fmt.Sprintf("  %s: %s", k, v))
+		}
+		sort.Strings(lines)
+		b.WriteString("headers:\n")
+		b.WriteString(strings.Join(lines, "\n"))
 	}
-	lines := make([]string, 0, len(c.Headers))
-	for k, v := range c.Headers {
-		lines = append(lines, fmt.Sprintf("%s: %s", k, v))
+	b.WriteString("\nbody: ")
+	if len(c.Body) == 0 {
+		b.WriteString("(none)")
+	} else {
+		b.WriteString(string(c.Body))
 	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
+	return b.String()
 }

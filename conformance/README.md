@@ -14,7 +14,7 @@ graph. Run all commands below from inside the `conformance/` directory (or with
 
 One battery of deliberately-malformed RPCs runs against either target:
 
-- against **real Cloud Tasks** → committed golden snapshot (`golden/realcloud.json`)
+- against **real Cloud Tasks** → committed golden snapshot (`golden/errors.json`)
 - against the **emulator** → diffed against the golden by the conformance test
 
 This is what `mapErr` (and its per-handler variants in `protohelpers.go`) should
@@ -47,7 +47,7 @@ gcloud services enable cloudtasks.googleapis.com --project $PROJECT
 cd conformance
 go run ./cmd/record \
   -target=real -project=$PROJECT -location=us-central1 \
-  -out=golden/realcloud.json
+  -out=golden/errors.json
 ```
 
 Resource names are run-scoped (random prefix) and cases clean up after
@@ -96,10 +96,10 @@ fails if one starts matching (so the entry gets removed). Current entries:
   and returns `PermissionDenied` via IAM; the emulator has no project/IAM concept
   and returns `InvalidArgument`. Not reproducible by design.
 
-## Header behaviour battery (happy path)
+## Happy-path battery
 
 A second, separate battery captures a *success-response shape* rather than an
-error: the header map Cloud Tasks echoes back after a task is created. It exists
+error: what Cloud Tasks echoes back after a task is created and read. It exists
 to settle behaviour the proto docs leave ambiguous and that issues #111/#53 turn
 on:
 
@@ -109,12 +109,15 @@ on:
   `application/octet-stream` default appear in the stored task, or only on the
   dispatched wire request? This decides whether the emulator should inject it at
   rest or at dispatch.
-- **View sensitivity** - are headers withheld under the `BASIC` response view
-  (forcing `FULL`), or returned under both?
+- **View sensitivity** - which fields does the `BASIC` response view withhold?
+  The body is documented as omitted under `BASIC` (forcing `FULL`), while headers
+  are returned under both. Each stage captures both, so the golden records the
+  real division.
 
 Each observation creates a task carrying a lowercase `content-type` and a
 mixed-case custom header plus a body, then reads it back via `CreateTask` (FULL),
-`GetTask` (BASIC) and `GetTask` (FULL). See `snapshot.go`.
+`GetTask` (BASIC) and `GetTask` (FULL), capturing the headers and body at each
+stage. See `snapshot.go`.
 
 Record it against real Cloud Tasks. `FULL` view requires the
 `cloudtasks.tasks.fullView` IAM permission on the queue (owner/editor have it):
@@ -122,16 +125,16 @@ Record it against real Cloud Tasks. `FULL` view requires the
 ```sh
 cd conformance
 go run ./cmd/record \
-  -target=real -kind=headers -project=$PROJECT -location=us-central1 \
-  -out=golden/headers.json
+  -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
+  -out=golden/happypath.json
 ```
 
-`TestEmulatorMatchesRealCloud`'s sibling `TestEmulatorHeaderSnapshots` diffs the
-emulator against `golden/headers.json` (and skips if it's absent). Dispatch-time
+`TestEmulatorErrors`'s sibling `TestEmulatorHappyPath` diffs the
+emulator against `golden/happypath.json` (and skips if it's absent). Dispatch-time
 wire headers are out of scope here - this battery is control-plane only; cover
 those with a hermetic emulator dispatch unit test.
 
 ## Scope
 
-Error states plus the header-behaviour battery above. Other success-response
-shapes remain out of scope.
+Error states plus the happy-path battery above. Other success-response shapes
+remain out of scope.

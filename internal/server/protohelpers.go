@@ -94,7 +94,8 @@ func queueRunStateToProto(s engine.QueueRunState) tasks.Queue_State {
 }
 
 // taskFromProto maps a *tasks.Task into an engine.TaskState. The View field is
-// not represented in the domain - the engine always treats tasks as BASIC view.
+// not represented in the domain - the engine stores the full task and
+// taskToProto applies the requested response view on the way out.
 func taskFromProto(t *tasks.Task) engine.TaskState {
 	s := engine.TaskState{
 		Name:          t.GetName(),
@@ -149,13 +150,26 @@ func taskFromProto(t *tasks.Task) engine.TaskState {
 	return s
 }
 
-func taskToProto(s engine.TaskState) *tasks.Task {
+// resolveView maps a request's ResponseView onto the effective view. An
+// unspecified view defaults to BASIC, matching Cloud Tasks.
+func resolveView(v tasks.Task_View) tasks.Task_View {
+	if v == tasks.Task_FULL {
+		return tasks.Task_FULL
+	}
+	return tasks.Task_BASIC
+}
+
+// taskToProto maps an engine.TaskState into a *tasks.Task rendered for the given
+// response view. The BASIC view (the default) omits the request body, which
+// Cloud Tasks withholds because it can be large or sensitive; FULL returns it.
+// Headers are returned under both views (see conformance/golden/headers.json).
+func taskToProto(s engine.TaskState, view tasks.Task_View) *tasks.Task {
+	view = resolveView(view)
 	t := &tasks.Task{
 		Name:          s.Name,
 		DispatchCount: s.DispatchCount,
 		ResponseCount: s.ResponseCount,
-		// Cloud Tasks always returns the BASIC view here.
-		View: tasks.Task_BASIC,
+		View:          view,
 	}
 	if !s.CreateTime.IsZero() {
 		t.CreateTime = timestampToProto(s.CreateTime)
@@ -187,6 +201,9 @@ func taskToProto(s engine.TaskState) *tasks.Task {
 				},
 			}
 		}
+		if view != tasks.Task_FULL {
+			hr.Body = nil
+		}
 		t.MessageType = &tasks.Task_HttpRequest{HttpRequest: hr}
 	} else if s.AppEngineHTTPRequest != nil {
 		ae := &tasks.AppEngineHttpRequest{
@@ -194,6 +211,9 @@ func taskToProto(s engine.TaskState) *tasks.Task {
 			RelativeUri: s.AppEngineHTTPRequest.RelativeURI,
 			Headers:     copyHeaders(s.AppEngineHTTPRequest.Headers),
 			Body:        s.AppEngineHTTPRequest.Body,
+		}
+		if view != tasks.Task_FULL {
+			ae.Body = nil
 		}
 		if r := s.AppEngineHTTPRequest.AppEngineRouting; r != nil {
 			ae.AppEngineRouting = &tasks.AppEngineRouting{

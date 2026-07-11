@@ -136,7 +136,7 @@ func (s *Server) ListTasks(ctx context.Context, in *tasks.ListTasksRequest) (*ta
 
 	var taskStates []*tasks.Task
 	for _, t := range taskList {
-		taskStates = append(taskStates, taskToProto(t.State()))
+		taskStates = append(taskStates, taskToProto(t.State(), in.GetResponseView()))
 	}
 	return &tasks.ListTasksResponse{Tasks: taskStates}, nil
 }
@@ -147,7 +147,7 @@ func (s *Server) GetTask(ctx context.Context, in *tasks.GetTaskRequest) (*tasks.
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return taskToProto(t.State()), nil
+	return taskToProto(t.State(), in.GetResponseView()), nil
 }
 
 // CreateTask creates a new task
@@ -156,7 +156,7 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 	if err != nil {
 		return nil, mapErrForCreateTask(err, in)
 	}
-	return taskToProto(frozen), nil
+	return taskToProto(frozen, in.GetResponseView()), nil
 }
 
 // DeleteTask removes an existing task
@@ -173,5 +173,5 @@ func (s *Server) RunTask(ctx context.Context, in *tasks.RunTaskRequest) (*tasks.
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return taskToProto(frozen), nil
+	return taskToProto(frozen, in.GetResponseView()), nil
 }

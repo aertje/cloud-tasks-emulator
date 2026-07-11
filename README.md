@@ -1,79 +1,53 @@
-# Cloud tasks emulator
+# Cloud Tasks emulator
 
-## Introduction
-This emulator tries to emulate the behaviour of Google Cloud Tasks.
-As of this writing, Google does not provide a Cloud Tasks emulator, which makes local development and testing a bit tricky. This project aims to help you out until they do release an official emulator.
+An emulator for [Google Cloud Tasks](https://cloud.google.com/tasks), for local
+development and testing. Google does not (yet) ship an official Cloud Tasks
+emulator, so this project fills the gap until they do.
 
-This project is not associated with Google.
+It implements the Cloud Tasks **v2** API and speaks the standard gRPC protocol,
+so you point any official Cloud Tasks client library at it and use it as you
+normally would.
 
-## Status and features
-This project uses the v2 version of cloud tasks, to support both http and appengine requests.
+This project is not affiliated with Google.
 
-It supports the following:
-- Targeting normal http and appengine endpoints.
-- Rate limiting and honors rate limiting configuration (max burst, max concurrent, and dispatch rate) - see [Configuring rate limits and retries](#configuring-rate-limits-and-retries)
-- Retries and honors retry configuration (max attempts, max doublings, backoff) - see [Configuring rate limits and retries](#configuring-rate-limits-and-retries)
-- Self-signed, verifiable, OIDC authentication tokens for HTTP requests
+## Features
 
-It also has a few outstanding things to address;
-- Updating of queues
-- Use of context / cleaning up of the signaling
-- Certain headers and response formats.
+Supported:
+
+- HTTP target tasks and App Engine target tasks.
+- Rate limiting, honoring the queue's `RateLimits` (max dispatches per second,
+  max burst, max concurrent) - see [Rate limits and retries](#rate-limits-and-retries).
+- Retries, honoring the queue's `RetryConfig` (max attempts, max doublings,
+  backoff) - see [Rate limits and retries](#rate-limits-and-retries).
+- Self-signed, verifiable OIDC authentication tokens for HTTP target tasks -
+  see [OIDC authentication](#oidc-authentication).
+
+Known limitations:
+
+- `UpdateQueue` is not implemented, so a queue's rate-limit and retry settings
+  can only be set at creation time.
+- Some response headers and formats differ from production Cloud Tasks.
 
 ## Running the emulator
-Fire it up; you can specify host and port (defaults to localhost:8123):
+
+### Prebuilt Docker image (recommended)
+
+Pull and run the published image from the GitHub Container Registry:
+
 ```sh
-go run ./cmd/emulator -host localhost -port 8000
+docker run -p 8123:8123 ghcr.io/aertje/cloud-tasks-emulator:latest
 ```
 
-You can also optionally specify one or more queues to create automatically on startup:
+Pass flags (see [Configuration](#configuration)) after the image name:
 
 ```sh
-go run ./cmd/emulator -host localhost \
-  -port 8000 \
-  -initial-queue projects/dev/locations/here/queues/firstq \
+docker run -p 8123:8123 ghcr.io/aertje/cloud-tasks-emulator:latest \
+  -host 0.0.0.0 -port 8123 \
   -initial-queue projects/dev/locations/here/queues/anotherq
 ```
 
-Alternatively, every flag can be set via an environment variable derived from the
-flag name (uppercased, dashes replaced by underscores). Explicit flags take
-precedence over environment variables. The following environment variables are
-supported:
-
- ```sh
- export PORT=8124
- export HOST=localhost
- export HARD_RESET_ON_PURGE_QUEUE=true
- export INITIAL_QUEUE=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
- export OPENID_ISSUER=http://localhost:8080
-
-./emulator
- ```
-
-Note that `INITIAL_QUEUE` accepts a comma-separated list to create multiple queues.
-
-Once running, you connect to it using the standard google cloud tasks GRPC libraries.
-
-You can also install the binary directly:
-```sh
-go install github.com/aertje/cloud-tasks-emulator/v2/cmd/emulator@latest
-```
-
-### Docker
-You can use the dockerfile if you don't want to install a Go build environment:
-```sh
-docker build ./ -t tasks_emulator
-docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123 -initial-queue projects/dev/locations/here/queues/anotherq
-```
-
-### Docker image
-Or even easier - pull and run it directly from GitHub Container Registry:
-```sh
-docker run ghcr.io/aertje/cloud-tasks-emulator:latest
-```
-
 ### Docker Compose
-If you are planning on using docker-compose the above configuration translates to :
+
 ```yml
 gcloud-tasks-emulator:
   image: ghcr.io/aertje/cloud-tasks-emulator:latest
@@ -84,152 +58,197 @@ gcloud-tasks-emulator:
     APP_ENGINE_EMULATOR_HOST: http://localhost:8080
 ```
 
-
-## App Engine
-If you want to use it to make calls to a local [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server) instance, you'll need to set the appropriate environment variable, e.g.:
-```sh
-export APP_ENGINE_EMULATOR_HOST=http://localhost:8080
-```
-
-### Targeting services
-Since the App Engine emulator runs services on individual localhost ports (e.g. `default` on `http://localhost:8080`, `worker` on `http://localhost:8081`), and the task emulator targets subdomains when specified (e.g. `http://worker.localhost:8080`), you can use one of these workarounds:
-- Use a proxy that will map the subdomain to the right destination, and set the `APP_ENGINE_EMULATOR_HOST` to match the proxy. A straightforward way is to leverage the docker-compose networking to route the task emulator traffic through an nginx instance and pass the traffic on to the container(s) running the AppEngine service(s). I.e. target `http://worker.my-proxy`.
-- Update your code to use `relative_uri` instead of the `service`, and include a `dispatch.yaml` in your AppEngine configuration. I.e. target `http://localhost:8080/worker`.
-
-The following methods will also work, but are not recommended as they will likely result in different code for your local testing and cloud deployment:
-- If you are only targeting one App Engine service with the cloud tasks emulator, update the `APP_ENGINE_EMULATOR_HOST` to match that service. I.e. target `http://localhost:8081`.
-- Use `http_request` instead of `app_engine_http_request` and simply specify the target URL. I.e. target `http://localhost:8081`.
-
-## OIDC authentication
-The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
-authentication for HTTP target tasks. Tokens will be issued and signed by the
-emulator's (insecure) private key. The emulator will accept, and issue tokens
-for, **any** ServiceAccountEmail provided by the client.
-
-By default, the JWT `iss` (issuer) field is `http://cloud-tasks-emulator`.
-
-Optionally, the emulator can host an HTTP OIDC discovery endpoint. This allows
-your application to verify tokens at runtime with the full online flow.
-To enable this, specify an issuer value at startup:
+### Building the image yourself
 
 ```sh
-go run ./cmd/emulator -openid-issuer http://localhost:8980
+docker build ./ -t tasks_emulator
+docker run -p 8123:8123 tasks_emulator -host 0.0.0.0 -port 8123
 ```
 
-With this flag:
+### From source
 
-* JWTs will have an `iss` field of `http://localhost:8980`
-* The [discovery document](https://developers.google.com/identity/protocols/oauth2/openid-connect#discovery)
-  will be available at `http://localhost:8980/.well-known/openid-configuration`
-* The emulator's public key(s) (in JWK format) will be available at
-  `http://localhost:8980/jwks`
-
-The `-openid-issuer` URL can be any `http://hostname:port` value that your
-application code can route to. The endpoint listens on `0.0.0.0` for easy
-use in docker / k8s environments.
-
-You can, of course, export the content of the `/jwks` url if you prefer to
-hardcode the public keys in your application.
-
-### Signing with your own key
-
-By default the emulator signs tokens with a baked-in (insecure, publicly known)
-development key. To sign with your own RSA private key instead, pass a path to a
-PEM-encoded key:
+Run directly with Go:
 
 ```sh
-go run ./cmd/emulator -openid-issuer http://localhost:8980 -openid-signing-key ./oidc.key
+go run ./cmd/emulator -host localhost -port 8000
 ```
 
-The matching public key is derived from it automatically and published at the
-`/jwks` endpoint, so verification via the discovery flow keeps working. You can
-generate a suitable key with:
+Or install the binary:
 
 ```sh
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out oidc.key
+go install github.com/aertje/cloud-tasks-emulator/v2/cmd/emulator@latest
 ```
 
-## Flushing task state
+### Configuration
 
-By default, the emulator tracks the names of every task created since the emulator launched. The list
-of task names survives task completion, deletion, and purge queue operations. Completed / removed tasks
-do not appear in ListTasks, but calling GetTask or CreateTask with a name that has been used in the
-past will return an error. This mirrors the behaviour of Cloud Tasks - although note that unlike
-Cloud Tasks the emulator does not attempt to garbage collect the list of task names over time.
+Every setting is a startup flag. Each flag can equivalently be set via an
+environment variable derived from its name (uppercased, dashes replaced by
+underscores). Explicit flags take precedence over environment variables.
 
-For some usecases, you may want to completely reset the list of task names without restarting the
-emulator - e.g. between each scenario in a test run.
+| Flag | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `-host` | `HOST` | `localhost` | Host to bind. Use `0.0.0.0` in Docker/k8s. |
+| `-port` | `PORT` | `8123` | Port to bind. |
+| `-initial-queue` | `INITIAL_QUEUE` | (none) | Queue to create on startup. Repeat the flag for multiple queues; the env var accepts a comma-separated list. |
+| `-openid-issuer` | `OPENID_ISSUER` | (none) | Serve an OIDC discovery endpoint at this URL and use it as the JWT `iss`. See [OIDC authentication](#oidc-authentication). |
+| `-openid-signing-key` | `OPENID_SIGNING_KEY` | (baked-in dev key) | Path to a PEM-encoded RSA private key used to sign OIDC tokens. |
+| `-hard-reset-on-purge-queue` | `HARD_RESET_ON_PURGE_QUEUE` | `false` | Make `PurgeQueue` wipe all task-name history and run synchronously. See [Flushing task state](#flushing-task-state). |
+| `-insecure-skip-tls-verify` | `INSECURE_SKIP_TLS_VERIFY` | `false` | Skip TLS verification when dispatching to HTTPS targets. See [Skipping TLS verification](#skipping-tls-verification-for-https-targets). |
 
-The optional `hard-reset-on-purge-queue` flag configures the emulator so that calling `PurgeQueue`
-will remove all record of past tasks. It also switches `PurgeQueue` to be a synchronous operation
-which only returns once all tasks have been cancelled and the queue is empty. Queued tasks may, of
-course, still fire during the PurgeQueue operation - but they cannot fire after PurgeQueue has
-returned.
+For example, to configure the emulator entirely through the environment:
 
 ```sh
-go run ./cmd/emulator --hard-reset-on-purge-queue
+export HOST=localhost
+export PORT=8124
+export INITIAL_QUEUE=projects/dev/locations/here/queues/1,projects/dev/locations/here/queues/2
+export OPENID_ISSUER=http://localhost:8080
+export HARD_RESET_ON_PURGE_QUEUE=true
+
+./emulator
 ```
 
-## Configuring rate limits and retries
+## Connecting a client
 
-Rate limits and retry behaviour are **per-queue properties**, exactly as in
-production Cloud Tasks. There is no emulator-specific flag or environment
-variable for them: you set them on the queue itself through the API, using the
-standard Cloud Tasks client. The emulator then honors them when dispatching.
+The emulator listens for plaintext gRPC with no authentication, since it runs
+locally. Point the official Cloud Tasks client at its `host:port` (default
+`localhost:8123`) over an insecure channel with credentials disabled, then use
+the client exactly as you would against production.
 
-The catch is *when* you can set them:
+### Python
 
-- Set them when you **create the queue**. `UpdateQueue` is not yet implemented,
-  so you cannot change a queue's limits after creation.
-- The `-initial-queue` startup flag only takes a queue *name*, so queues created
-  that way (or via `-queue` in Docker) get the default limits. To use custom
-  limits, create the queue programmatically with the config set.
+```python
+import grpc
+from google.cloud.tasks_v2 import CloudTasksClient
+from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
 
-The honored fields and their defaults (matching production Cloud Tasks) are:
+channel = grpc.insecure_channel('localhost:8123')
+transport = CloudTasksGrpcTransport(channel=channel)
+client = CloudTasksClient(transport=transport)
 
-| Field | Default |
-| --- | --- |
-| `RateLimits.MaxDispatchesPerSecond` | 500 |
-| `RateLimits.MaxBurstSize` | 100 |
-| `RateLimits.MaxConcurrentDispatches` | 1000 |
-| `RetryConfig.MaxAttempts` | 100 |
-| `RetryConfig.MaxDoublings` | 16 |
-| `RetryConfig.MinBackoff` | 100ms |
-| `RetryConfig.MaxBackoff` | 1h |
+parent = 'projects/my-sandbox/locations/us-central1'
+queue_name = parent + '/queues/test'
+client.create_queue(queue={'name': queue_name}, parent=parent)
 
-For example, to create a queue that dispatches at most one task per second, one
-at a time, and gives up after three attempts (Go):
+# An HTTP task that should succeed (200)
+client.create_task(task={'http_request': {'http_method': 'GET', 'url': 'https://www.google.com'}}, parent=queue_name)
+# An HTTP task that returns 405 and will get retried
+client.create_task(task={'http_request': {'http_method': 'POST', 'url': 'https://www.google.com'}}, parent=queue_name)
+# An App Engine task targeting `/`
+client.create_task(task={'app_engine_http_request': {}}, parent=queue_name)
+```
+
+### Go
 
 ```go
-_, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
-	Parent: "projects/my-project/locations/us-central1",
-	Queue: &taskspb.Queue{
-		Name: "projects/my-project/locations/us-central1/queues/my-queue",
-		RateLimits: &taskspb.RateLimits{
-			MaxDispatchesPerSecond:  1,
-			MaxConcurrentDispatches: 1,
-		},
-		RetryConfig: &taskspb.RetryConfig{
-			MaxAttempts: 3,
+import (
+	"context"
+
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+ctx := context.Background()
+
+client, _ := cloudtasks.NewClient(ctx,
+	option.WithEndpoint("localhost:8123"),
+	option.WithoutAuthentication(),
+	option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+)
+
+parent := "projects/test-project/locations/us-central1"
+queue, _ := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+	Parent: parent,
+	Queue:  &taskspb.Queue{Name: parent + "/queues/test"},
+})
+
+client.CreateTask(ctx, &taskspb.CreateTaskRequest{
+	Parent: queue.GetName(),
+	Task: &taskspb.Task{
+		MessageType: &taskspb.Task_HttpRequest{
+			HttpRequest: &taskspb.HttpRequest{Url: "https://www.google.com"},
 		},
 	},
 })
 ```
 
-## Skipping TLS verification for HTTPS targets
+### PHP
 
-When developing against a target served over HTTPS with a self-signed or
-otherwise untrusted certificate, task dispatch fails TLS verification. The
-optional `insecure-skip-tls-verify` flag disables certificate verification for
-task dispatch so those deliveries succeed. It is a development convenience with
-no production equivalent, so leave it off unless you need it; the emulator logs
-a warning on startup when it is enabled.
+```php
+use Grpc\ChannelCredentials;
+use Google\Cloud\Core\InsecureCredentialsWrapper;
+use Google\Cloud\Tasks\V2\Task;
+use Google\Cloud\Tasks\V2\HttpMethod;
+use Google\Cloud\Tasks\V2\HttpRequest;
+use Google\Cloud\Tasks\V2\CloudTasksClient;
 
-```sh
-go run ./cmd/emulator --insecure-skip-tls-verify
+$client = new CloudTasksClient([
+    'apiEndpoint' => 'localhost:8123',
+    'transport' => 'grpc',
+    'credentials' => new InsecureCredentialsWrapper(),
+    'transportConfig' => [
+        'grpc' => [
+            'stubOpts' => [
+                'credentials' => ChannelCredentials::createInsecure(),
+            ],
+        ],
+    ],
+]);
+
+$http = new HttpRequest();
+$http->setHttpMethod(HttpMethod::GET)->setUrl('https://google.com');
+
+$task = new Task();
+$task->setHttpRequest($http);
+
+$queuePath = $client->queueName('dev', 'here', 'tasks');
+$response = $client->createTask($queuePath, $task);
+```
+
+### JavaScript
+
+```js
+import { CloudTasksClient } from '@google-cloud/tasks';
+import { credentials } from '@grpc/grpc-js';
+
+const client = new CloudTasksClient({
+  port: 8123,
+  servicePath: 'localhost',
+  sslCreds: credentials.createInsecure(),
+});
+
+const parent = 'projects/my-sandbox/locations/us-central1';
+const queueName = `${parent}/queues/test`;
+await client.createQueue({ parent, queue: { name: queueName } });
+
+// An HTTP task that should succeed (200)
+await client.createTask({
+  parent: queueName,
+  task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
+});
+
+// An HTTP task with an OIDC token (see the OIDC section below)
+const payload = { foo: 'bar' };
+await client.createTask({
+  parent: queueName,
+  task: {
+    httpRequest: {
+      url: 'https://myapp.example.com/worker',
+      httpMethod: 'POST',
+      body: Buffer.from(JSON.stringify(payload)).toString('base64'),
+      headers: { 'Content-Type': 'application/json' },
+      oidcToken: {
+        serviceAccountEmail: 'account@project_id.iam.gserviceaccount.com',
+      },
+    },
+  },
+});
 ```
 
 ## Embedding in Go tests
+
 If your code is written in Go, you can run the emulator in-process instead of
 starting a separate binary or container. The `emulator` package serves over an
 in-memory (bufconn) connection, so no TCP port is opened and your tests stay
@@ -274,170 +293,82 @@ func TestMyWorker(t *testing.T) {
 ```
 
 `em.ClientOptions()` returns the `option.ClientOption` values that wire the
-standard client to the in-process emulator; pass them to any client construction
-that accepts client options.
+standard client to the in-process emulator; pass them to any client
+construction that accepts client options.
 
-## Examples
+## App Engine
 
-### Python example
-Here's a little snippet of python code that you can use to talk to the emulator.
+To make calls to a local
+[App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server)
+instance, set the appropriate environment variable, e.g.:
 
-```python
-import grpc
-from google.cloud.tasks_v2 import CloudTasksClient
-from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
-
-channel = grpc.insecure_channel('localhost:8123')
-
-# Before v2.0.0 of the client
-# client = CloudTasksClient(channel=channel)
-
-transport = CloudTasksGrpcTransport(channel=channel)
-client = CloudTasksClient(transport=transport)
-
-parent = 'projects/my-sandbox/locations/us-central1'
-queue_name = parent + '/queues/test'
-client.create_queue(queue={'name': queue_name}, parent=parent)
-
-# Create a normal http task that should succeed
-client.create_task(task={'http_request': {'http_method': 'GET', 'url': 'https://www.google.com'}}, parent=queue_name) # 200
-# Create a normal http task that will throw 405s and will get retried
-client.create_task(task={'http_request': {'http_method': 'POST', 'url': 'https://www.google.com'}}, parent=queue_name) # 405
-# Create an appengine task that will target `/`
-client.create_task(task={'app_engine_http_request': {}}, parent=queue_name)
+```sh
+export APP_ENGINE_EMULATOR_HOST=http://localhost:8080
 ```
 
-### Go example
-In Go it would go something like this.
+### Targeting services
 
-```go
-import (
-	"context"
+The App Engine emulator runs services on individual localhost ports (e.g.
+`default` on `http://localhost:8080`, `worker` on `http://localhost:8081`),
+while the task emulator targets subdomains when a service is specified (e.g.
+`http://worker.localhost:8080`). To bridge the two, use one of these
+workarounds:
 
-	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
-	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"google.golang.org/api/option"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-)
+- Use a proxy that maps the subdomain to the right destination, and set
+  `APP_ENGINE_EMULATOR_HOST` to match the proxy. A straightforward way is to
+  leverage docker-compose networking to route task emulator traffic through an
+  nginx instance and pass it on to the container(s) running the App Engine
+  service(s). I.e. target `http://worker.my-proxy`.
+- Update your code to use `relative_uri` instead of `service`, and include a
+  `dispatch.yaml` in your App Engine configuration. I.e. target
+  `http://localhost:8080/worker`.
 
-ctx := context.Background()
+The following also work, but are not recommended as they will likely result in
+different code for local testing versus cloud deployment:
 
-// Point the official client at the emulator over an insecure local channel,
-// with no credentials.
-client, _ := cloudtasks.NewClient(ctx,
-	option.WithEndpoint("localhost:8123"),
-	option.WithoutAuthentication(),
-	option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-)
+- If you are only targeting one App Engine service, set
+  `APP_ENGINE_EMULATOR_HOST` to match that service. I.e. target
+  `http://localhost:8081`.
+- Use `http_request` instead of `app_engine_http_request` and specify the
+  target URL directly. I.e. target `http://localhost:8081`.
 
-parent := "projects/test-project/locations/us-central1"
-queueName := parent + "/queues/test"
-createQueueRequest := taskspb.CreateQueueRequest{
-    Parent: parent,
-    Queue: &taskspb.Queue{Name: queueName},
-}
+## OIDC authentication
 
-createQueueResp, _ := client.CreateQueue(ctx, &createQueueRequest)
+The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
+authentication for HTTP target tasks. Tokens are issued and signed by the
+emulator's (insecure) private key. The emulator will accept, and issue tokens
+for, **any** `ServiceAccountEmail` provided by the client.
 
-createTaskRequest := taskspb.CreateTaskRequest{
-    Parent: createQueueResp.GetName(),
-    Task: &taskspb.Task{
-        MessageType: &taskspb.Task_HttpRequest{
-            HttpRequest: &taskspb.HttpRequest{
-                Url: "http://www.google.com",
-            },
-        },
-    },
-}
-createdTaskResp, _ := client.CreateTask(ctx, &createTaskRequest)
+By default the JWT `iss` (issuer) field is `http://cloud-tasks-emulator`.
+
+### Verifying tokens at runtime
+
+Optionally, the emulator can host an HTTP OIDC discovery endpoint so your
+application can verify tokens with the full online flow. Enable it by specifying
+an issuer at startup:
+
+```sh
+go run ./cmd/emulator -openid-issuer http://localhost:8980
 ```
 
-### PHP example
-The following example can be used for PHP.
-```php
-use Grpc\ChannelCredentials;
-use Google\Cloud\Core\InsecureCredentialsWrapper;
-use Google\Cloud\Tasks\V2\Task;
-use Google\Cloud\Tasks\V2\HttpMethod;
-use Google\Cloud\Tasks\V2\HttpRequest;
-use Google\Cloud\Tasks\V2\CloudTasksClient;
+With this flag:
 
-$client = new CloudTasksClient([
-            'apiEndpoint' => 'localhost:8123',
-            'transport' => 'grpc',
-            'credentials' => new InsecureCredentialsWrapper(),
-            'transportConfig' => [
-                'grpc' => [
-                    'stubOpts' => [
-                        'credentials' => ChannelCredentials::createInsecure()
-                    ]
-                ]
-            ]
-        ]);
+- JWTs have an `iss` field of `http://localhost:8980`.
+- The [discovery document](https://developers.google.com/identity/protocols/oauth2/openid-connect#discovery)
+  is served at `http://localhost:8980/.well-known/openid-configuration`.
+- The emulator's public key(s), in JWK format, are served at
+  `http://localhost:8980/jwks`.
 
-$http = new HttpRequest();
-$http->setHttpMethod(HttpMethod::GET)->setUrl('https://google.com');
+The `-openid-issuer` URL can be any `http://hostname:port` value your
+application can route to. The endpoint listens on `0.0.0.0` for easy use in
+docker / k8s environments. You can also export the contents of `/jwks` if you
+prefer to hardcode the public keys in your application.
 
-$task = new Task();
+For example, verifying a token in Node.js:
 
-$task->setHttpRequest($http);
-$queuePath = $client->queueName('dev', 'here', 'tasks');
-
-$response = $client->createTask($queuePath, $task);
-```
-
-### JavaScript example
-The following example can be used for JavaScript.
 ```js
-import { CloudTasksClient } from '@google-cloud/tasks';
-import { credentials } from '@grpc/grpc-js';
-
-const client = new CloudTasksClient({
-  port: 8123,
-  servicePath: 'localhost',
-  sslCreds: credentials.createInsecure(),
-});
-
-const parent = 'projects/my-sandbox/locations/us-central1';
-const queueName = `${parent}/queues/test`;
-await client.createQueue({ parent, queue: { name: queueName } });
-
-// Create a normal http task that should succeed
-await client.createTask({
-  parent: queueName,
-  task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
-});
-// Create a normal http task that will throw 405s and will get retried
-await client.createTask({
-  parent: queueName,
-  task: { httpRequest: { httpMethod: 'POST', url: 'https://www.google.com' } },
-});
-
-// create task with OIDC token
-const payload = { foo: "bar" };
-const serviceAccountEmail = "account@project_id.iam.gserviceaccount.com"
-await client.createTask({
-    parent: queueName,
-    task: {
-    httpRequest: {
-        url: "https://myapp.example.com/worker",
-        httpMethod: "POST",
-        body: Buffer.from(JSON.stringify(payload)).toString("base64"),
-        headers: {"Content-Type": "application/json"},
-        oidcToken: {
-            serviceAccountEmail,
-        },
-    },
-    },
-});
-```
-
-Receiving HTTP calls from the emulator and verifying OIDC tokens.
-```js
-// at this point you started the emulator with the -openid-issuer flag
-// and created a http task with oidc token
-// in this example we are assuming that the issuer is http://localhost:8980
+// Started the emulator with `-openid-issuer http://localhost:8980` and created
+// an HTTP task with an OIDC token, as in the JavaScript example above.
 import { OAuth2Client } from "google-auth-library";
 
 const client = new OAuth2Client({
@@ -448,15 +379,10 @@ const client = new OAuth2Client({
   issuers: ["http://localhost:8980"],
 });
 
-// function using node.js
-// to handling the http request 
-// to https://myapp.example.com/worker
-// the is webhook used in task creation
-// that is protected by oidc token
-function httpRequestHandler() {
-  
-  // data from Authorization header
-  const idToken = "..."; 
+// Handles the incoming request to https://myapp.example.com/worker,
+// protected by the OIDC token supplied at task creation.
+async function httpRequestHandler() {
+  const idToken = "..."; // from the Authorization header
 
   const ticket = await client.verifyIdToken({
     idToken,
@@ -465,3 +391,104 @@ function httpRequestHandler() {
   const payload = ticket.getPayload();
   console.info("Payload", payload);
 }
+```
+
+### Signing with your own key
+
+By default the emulator signs tokens with a baked-in (insecure, publicly known)
+development key. To sign with your own RSA private key instead, pass a path to a
+PEM-encoded key:
+
+```sh
+go run ./cmd/emulator -openid-issuer http://localhost:8980 -openid-signing-key ./oidc.key
+```
+
+The matching public key is derived from it automatically and published at the
+`/jwks` endpoint, so verification via the discovery flow keeps working. You can
+generate a suitable key with:
+
+```sh
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out oidc.key
+```
+
+## Rate limits and retries
+
+Rate limits and retry behavior are **per-queue properties**, exactly as in
+production Cloud Tasks. There is no emulator-specific flag or environment
+variable for them: you set them on the queue itself through the API, using the
+standard Cloud Tasks client. The emulator then honors them when dispatching.
+
+The catch is *when* you can set them:
+
+- Set them when you **create the queue**. `UpdateQueue` is not implemented, so
+  you cannot change a queue's limits after creation.
+- The `-initial-queue` startup flag only takes a queue *name*, so queues created
+  that way get the default limits. To use custom limits, create the queue
+  programmatically with the config set.
+
+The honored fields and their defaults (matching production Cloud Tasks) are:
+
+| Field | Default |
+| --- | --- |
+| `RateLimits.MaxDispatchesPerSecond` | 500 |
+| `RateLimits.MaxBurstSize` | 100 |
+| `RateLimits.MaxConcurrentDispatches` | 1000 |
+| `RetryConfig.MaxAttempts` | 100 |
+| `RetryConfig.MaxDoublings` | 16 |
+| `RetryConfig.MinBackoff` | 100ms |
+| `RetryConfig.MaxBackoff` | 1h |
+
+For example, to create a queue that dispatches at most one task per second, one
+at a time, and gives up after three attempts (Go):
+
+```go
+_, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+	Parent: "projects/my-project/locations/us-central1",
+	Queue: &taskspb.Queue{
+		Name: "projects/my-project/locations/us-central1/queues/my-queue",
+		RateLimits: &taskspb.RateLimits{
+			MaxDispatchesPerSecond:  1,
+			MaxConcurrentDispatches: 1,
+		},
+		RetryConfig: &taskspb.RetryConfig{
+			MaxAttempts: 3,
+		},
+	},
+})
+```
+
+## Flushing task state
+
+By default, the emulator tracks the names of every task created since it
+launched. The list of task names survives task completion, deletion, and purge
+queue operations. Completed / removed tasks do not appear in `ListTasks`, but
+calling `GetTask` or `CreateTask` with a name that has been used in the past
+returns an error. This mirrors the behavior of Cloud Tasks - although note that,
+unlike Cloud Tasks, the emulator does not attempt to garbage collect the list of
+task names over time.
+
+For some use cases you may want to completely reset the list of task names
+without restarting the emulator - e.g. between scenarios in a test run.
+
+The optional `-hard-reset-on-purge-queue` flag makes `PurgeQueue` remove all
+record of past tasks. It also switches `PurgeQueue` to be a synchronous
+operation that only returns once all tasks have been cancelled and the queue is
+empty. Queued tasks may still fire during the `PurgeQueue` operation, but they
+cannot fire after it has returned.
+
+```sh
+go run ./cmd/emulator -hard-reset-on-purge-queue
+```
+
+## Skipping TLS verification for HTTPS targets
+
+When developing against a target served over HTTPS with a self-signed or
+otherwise untrusted certificate, task dispatch fails TLS verification. The
+optional `-insecure-skip-tls-verify` flag disables certificate verification for
+task dispatch so those deliveries succeed. It is a development convenience with
+no production equivalent, so leave it off unless you need it; the emulator logs
+a warning on startup when it is enabled.
+
+```sh
+go run ./cmd/emulator -insecure-skip-tls-verify
+```

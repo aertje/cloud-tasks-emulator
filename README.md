@@ -4,7 +4,7 @@ An emulator for [Google Cloud Tasks](https://cloud.google.com/tasks), for local
 development and testing. Google does not (yet) ship an official Cloud Tasks
 emulator, so this project fills the gap until they do.
 
-It implements the Cloud Tasks **v2** API and speaks the standard gRPC protocol,
+It implements the Cloud Tasks v2 API and speaks the standard gRPC protocol,
 so you point any official Cloud Tasks client library at it and use it as you
 normally would.
 
@@ -26,7 +26,13 @@ Known limitations:
 
 - `UpdateQueue` is not implemented, so a queue's rate-limit and retry settings
   can only be set at creation time.
-- Some response headers and formats differ from production Cloud Tasks.
+- Dispatched requests carry the standard `X-CloudTasks-*` headers (queue name,
+  task name, retry count, execution count, ETA) and `User-Agent`, but omit the
+  two *optional* headers production also sends:
+  `X-CloudTasks-TaskPreviousResponse` and `X-CloudTasks-TaskRetryReason` (and
+  their `X-AppEngine-*` equivalents for App Engine targets).
+- `GetTask` and `ListTasks` always return the `BASIC` view; the `FULL` view is
+  not implemented, so responses never include the task body or headers.
 
 ## Running the emulator
 
@@ -114,187 +120,19 @@ locally. Point the official Cloud Tasks client at its `host:port` (default
 `localhost:8123`) over an insecure channel with credentials disabled, then use
 the client exactly as you would against production.
 
-### Python
-
-```python
-import grpc
-from google.cloud.tasks_v2 import CloudTasksClient
-from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
-
-channel = grpc.insecure_channel('localhost:8123')
-transport = CloudTasksGrpcTransport(channel=channel)
-client = CloudTasksClient(transport=transport)
-
-parent = 'projects/my-sandbox/locations/us-central1'
-queue_name = parent + '/queues/test'
-client.create_queue(queue={'name': queue_name}, parent=parent)
-
-# An HTTP task that should succeed (200)
-client.create_task(task={'http_request': {'http_method': 'GET', 'url': 'https://www.google.com'}}, parent=queue_name)
-# An HTTP task that returns 405 and will get retried
-client.create_task(task={'http_request': {'http_method': 'POST', 'url': 'https://www.google.com'}}, parent=queue_name)
-# An App Engine task targeting `/`
-client.create_task(task={'app_engine_http_request': {}}, parent=queue_name)
-```
-
-### Go
-
-```go
-import (
-	"context"
-
-	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
-	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"google.golang.org/api/option"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-)
-
-ctx := context.Background()
-
-client, _ := cloudtasks.NewClient(ctx,
-	option.WithEndpoint("localhost:8123"),
-	option.WithoutAuthentication(),
-	option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-)
-
-parent := "projects/test-project/locations/us-central1"
-queue, _ := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
-	Parent: parent,
-	Queue:  &taskspb.Queue{Name: parent + "/queues/test"},
-})
-
-client.CreateTask(ctx, &taskspb.CreateTaskRequest{
-	Parent: queue.GetName(),
-	Task: &taskspb.Task{
-		MessageType: &taskspb.Task_HttpRequest{
-			HttpRequest: &taskspb.HttpRequest{Url: "https://www.google.com"},
-		},
-	},
-})
-```
-
-### PHP
-
-```php
-use Grpc\ChannelCredentials;
-use Google\Cloud\Core\InsecureCredentialsWrapper;
-use Google\Cloud\Tasks\V2\Task;
-use Google\Cloud\Tasks\V2\HttpMethod;
-use Google\Cloud\Tasks\V2\HttpRequest;
-use Google\Cloud\Tasks\V2\CloudTasksClient;
-
-$client = new CloudTasksClient([
-    'apiEndpoint' => 'localhost:8123',
-    'transport' => 'grpc',
-    'credentials' => new InsecureCredentialsWrapper(),
-    'transportConfig' => [
-        'grpc' => [
-            'stubOpts' => [
-                'credentials' => ChannelCredentials::createInsecure(),
-            ],
-        ],
-    ],
-]);
-
-$http = new HttpRequest();
-$http->setHttpMethod(HttpMethod::GET)->setUrl('https://google.com');
-
-$task = new Task();
-$task->setHttpRequest($http);
-
-$queuePath = $client->queueName('dev', 'here', 'tasks');
-$response = $client->createTask($queuePath, $task);
-```
-
-### JavaScript
-
-```js
-import { CloudTasksClient } from '@google-cloud/tasks';
-import { credentials } from '@grpc/grpc-js';
-
-const client = new CloudTasksClient({
-  port: 8123,
-  servicePath: 'localhost',
-  sslCreds: credentials.createInsecure(),
-});
-
-const parent = 'projects/my-sandbox/locations/us-central1';
-const queueName = `${parent}/queues/test`;
-await client.createQueue({ parent, queue: { name: queueName } });
-
-// An HTTP task that should succeed (200)
-await client.createTask({
-  parent: queueName,
-  task: { httpRequest: { httpMethod: 'GET', url: 'https://www.google.com' } },
-});
-
-// An HTTP task with an OIDC token (see the OIDC section below)
-const payload = { foo: 'bar' };
-await client.createTask({
-  parent: queueName,
-  task: {
-    httpRequest: {
-      url: 'https://myapp.example.com/worker',
-      httpMethod: 'POST',
-      body: Buffer.from(JSON.stringify(payload)).toString('base64'),
-      headers: { 'Content-Type': 'application/json' },
-      oidcToken: {
-        serviceAccountEmail: 'account@project_id.iam.gserviceaccount.com',
-      },
-    },
-  },
-});
-```
+See [EXAMPLES.md](./EXAMPLES.md#connecting-a-client) for connection snippets in
+Python, Go, PHP, and JavaScript.
 
 ## Embedding in Go tests
 
 If your code is written in Go, you can run the emulator in-process instead of
 starting a separate binary or container. The `emulator` package serves over an
 in-memory (bufconn) connection, so no TCP port is opened and your tests stay
-hermetic.
-
-```go
-import (
-	"context"
-	"testing"
-
-	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
-	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/aertje/cloud-tasks-emulator/v2/emulator"
-)
-
-func TestMyWorker(t *testing.T) {
-	em := emulator.New()
-	defer em.Close()
-
-	ctx := context.Background()
-	client, err := cloudtasks.NewClient(ctx, em.ClientOptions()...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-
-	// Use `client` exactly as you would against real Cloud Tasks.
-	parent := "projects/my-sandbox/locations/us-central1"
-	queue, _ := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
-		Parent: parent,
-		Queue:  &taskspb.Queue{Name: parent + "/queues/test"},
-	})
-	client.CreateTask(ctx, &taskspb.CreateTaskRequest{
-		Parent: queue.GetName(),
-		Task: &taskspb.Task{
-			MessageType: &taskspb.Task_HttpRequest{
-				HttpRequest: &taskspb.HttpRequest{Url: "https://www.google.com"},
-			},
-		},
-	})
-}
-```
-
-`em.ClientOptions()` returns the `option.ClientOption` values that wire the
-standard client to the in-process emulator; pass them to any client
+hermetic. `em.ClientOptions()` returns the `option.ClientOption` values that
+wire the standard client to the in-process emulator; pass them to any client
 construction that accepts client options.
+
+See [EXAMPLES.md](./EXAMPLES.md#embedding-in-go-tests) for a full test example.
 
 ## App Engine
 
@@ -337,7 +175,7 @@ different code for local testing versus cloud deployment:
 The emulator supports [OIDC token](https://cloud.google.com/tasks/docs/creating-http-target-tasks#token)
 authentication for HTTP target tasks. Tokens are issued and signed by the
 emulator's (insecure) private key. The emulator will accept, and issue tokens
-for, **any** `ServiceAccountEmail` provided by the client.
+for, any `ServiceAccountEmail` provided by the client.
 
 By default the JWT `iss` (issuer) field is `http://cloud-tasks-emulator`.
 
@@ -364,34 +202,8 @@ application can route to. The endpoint listens on `0.0.0.0` for easy use in
 docker / k8s environments. You can also export the contents of `/jwks` if you
 prefer to hardcode the public keys in your application.
 
-For example, verifying a token in Node.js:
-
-```js
-// Started the emulator with `-openid-issuer http://localhost:8980` and created
-// an HTTP task with an OIDC token, as in the JavaScript example above.
-import { OAuth2Client } from "google-auth-library";
-
-const client = new OAuth2Client({
-  endpoints: {
-    // JWK certs served by the emulator
-    oauth2FederatedSignonJwkCertsUrl: "http://localhost:8980/jwks",
-  },
-  issuers: ["http://localhost:8980"],
-});
-
-// Handles the incoming request to https://myapp.example.com/worker,
-// protected by the OIDC token supplied at task creation.
-async function httpRequestHandler() {
-  const idToken = "..."; // from the Authorization header
-
-  const ticket = await client.verifyIdToken({
-    idToken,
-    audience: "https://myapp.example.com/worker",
-  });
-  const payload = ticket.getPayload();
-  console.info("Payload", payload);
-}
-```
+See [EXAMPLES.md](./EXAMPLES.md#verifying-oidc-tokens-at-runtime-go) for a Go
+token verification example.
 
 ### Signing with your own key
 
@@ -413,14 +225,14 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out oidc.key
 
 ## Rate limits and retries
 
-Rate limits and retry behavior are **per-queue properties**, exactly as in
+Rate limits and retry behavior are per-queue properties, exactly as in
 production Cloud Tasks. There is no emulator-specific flag or environment
 variable for them: you set them on the queue itself through the API, using the
 standard Cloud Tasks client. The emulator then honors them when dispatching.
 
 The catch is *when* you can set them:
 
-- Set them when you **create the queue**. `UpdateQueue` is not implemented, so
+- Set them when you create the queue. `UpdateQueue` is not implemented, so
   you cannot change a queue's limits after creation.
 - The `-initial-queue` startup flag only takes a queue *name*, so queues created
   that way get the default limits. To use custom limits, create the queue
@@ -438,24 +250,8 @@ The honored fields and their defaults (matching production Cloud Tasks) are:
 | `RetryConfig.MinBackoff` | 100ms |
 | `RetryConfig.MaxBackoff` | 1h |
 
-For example, to create a queue that dispatches at most one task per second, one
-at a time, and gives up after three attempts (Go):
-
-```go
-_, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
-	Parent: "projects/my-project/locations/us-central1",
-	Queue: &taskspb.Queue{
-		Name: "projects/my-project/locations/us-central1/queues/my-queue",
-		RateLimits: &taskspb.RateLimits{
-			MaxDispatchesPerSecond:  1,
-			MaxConcurrentDispatches: 1,
-		},
-		RetryConfig: &taskspb.RetryConfig{
-			MaxAttempts: 3,
-		},
-	},
-})
-```
+See [EXAMPLES.md](./EXAMPLES.md#configuring-rate-limits-and-retries-go) for a Go
+example that creates a queue with custom rate limits and a retry cap.
 
 ## Flushing task state
 

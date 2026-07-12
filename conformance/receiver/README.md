@@ -89,3 +89,26 @@ The full raw headers of every dispatch are also written to the App Engine logs
 If `go122` has been retired by App Engine, bump `runtime` in `app.yaml` (and
 optionally the `go` directive in `go.mod`) to the newest `go1xx` on offer; the
 receiver is standard-library only, so any recent Go works.
+
+## Security
+
+The deployed endpoints are **public and unauthenticated** - there is no
+`login: admin`, ingress rule or auth check. Anyone who knows the URL can `POST`
+to `/recv/*` (skewing a capture) or `GET /captures` to read back the recorded
+headers, which for App Engine-target dispatches include an internal
+`X-Appengine-Api-Ticket` token and the caller IP.
+
+This is acceptable only because the app is **ephemeral**: it holds nothing but
+synthetic conformance traffic, keeps it **in memory** (a restart, scale-to-zero
+or redeploy wipes it), and exists only for the minutes it takes to record a
+golden. Deploy it in a throwaway project.
+
+The usual App Engine lock-downs don't fit a dual-family receiver: `login: admin`
+would 302 the HTTP-target path (`/recv/http` is a plain external request), and
+IAP blocks Cloud Tasks entirely. So the intended protection is **lifecycle** -
+tear it down once the golden is recorded:
+
+    gcloud app versions list --project=$PROJECT
+    gcloud app versions stop VERSION --project=$PROJECT   # stop serving (redeploy to record again)
+
+Re-deploying is a single command when you next need to record.

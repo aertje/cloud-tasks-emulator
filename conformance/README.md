@@ -206,18 +206,6 @@ sequenceDiagram
     Note over T: diff against golden/dispatch.json
 ```
 
-What the golden capture settled:
-
-- **`TaskRetryReason`** is family-specific: App Engine sends `App Error`; the HTTP
-  family sends an **empty** string. Confirmed empty for both a 5XX and a 4XX prior
-  response (the receiver forces a 503 then a 404), so it is not failure-class
-  specific - the HTTP target genuinely leaves the reason blank.
-- **`TaskPreviousResponse`** is the previous attempt's raw HTTP status - `503` on
-  the first retry, `404` on the second - present only on retries.
-- **`TaskExecutionCount`** differs by family: the HTTP header **excludes** 5XX
-  failures, the App Engine header counts them - so after one forced `503` the HTTP
-  retry reports `0` and the App Engine retry reports `1`.
-
 Because the receiver is hosted on App Engine, its HTTP endpoint also receives App
 Engine *frontend* headers (`X-Appengine-Api-Ticket`, `-User-Ip`, …) that real
 Cloud Tasks never sends to an arbitrary HTTP target. `normalizeDispatchHeaders`

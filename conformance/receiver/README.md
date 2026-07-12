@@ -86,10 +86,6 @@ Then record the golden from the repo's `conformance/` directory:
 The full raw headers of every dispatch are also written to the App Engine logs
 (`gcloud app logs tail`) for eyeballing while recording.
 
-If `go122` has been retired by App Engine, bump `runtime` in `app.yaml` (and
-optionally the `go` directive in `go.mod`) to the newest `go1xx` on offer; the
-receiver is standard-library only, so any recent Go works.
-
 ## Security
 
 The deployed endpoints are **public and unauthenticated** - there is no

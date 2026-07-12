@@ -4,4 +4,4 @@
 // to reuse the Capture type and run the same handler hermetically in tests.
 module github.com/aertje/cloud-tasks-emulator/conformance/receiver
 
-go 1.22
+go 1.26.4

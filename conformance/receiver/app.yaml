@@ -8,9 +8,9 @@
 # the in-memory capture log is authoritative, and scales to zero when idle so an
 # otherwise-unused capture app costs nothing between recordings.
 #
-# runtime: bump to the newest go1xx App Engine currently offers if go122 is
+# runtime: bump to the newest go1xx App Engine currently offers if go126 is
 # retired; the receiver is standard-library only, so any recent Go works.
-runtime: go122
+runtime: go126
 
 main: ./cmd/recv
 

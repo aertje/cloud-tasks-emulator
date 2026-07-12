@@ -14,26 +14,54 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
-// httpRetryReason and appEngineRetryReason are the X-*-TaskRetryReason values
-// real Cloud Tasks sends on a retry after a 5XX response, captured from
-// production (see conformance/golden/dispatch.json). The HTTP family sends an
-// empty reason; the App Engine family sends "App Error".
-const (
-	httpRetryReason      = ""
-	appEngineRetryReason = "App Error"
+// retryHeaderPolicy holds the family-specific values for the two retry-only
+// dispatch headers (X-<family>-TaskPreviousResponse / -TaskRetryReason). All
+// values are captured from production (see conformance/golden/dispatch.json):
+// the reason depends only on the family and on whether the previous attempt
+// returned an HTTP response or failed with none (e.g. a dispatch-deadline
+// timeout), not on the specific status code.
+type retryHeaderPolicy struct {
+	prefix          string // "X-CloudTasks-" or "X-AppEngine-"
+	responseReason  string // TaskRetryReason after an HTTP error response
+	timeoutPrevious string // TaskPreviousResponse after a no-response failure
+	timeoutReason   string // TaskRetryReason after a no-response failure
+}
+
+var (
+	// HTTP: an empty reason for every failure; a no-response failure is reported
+	// as a synthesized 504.
+	httpRetryPolicy = retryHeaderPolicy{
+		prefix:          "X-CloudTasks-",
+		responseReason:  "",
+		timeoutPrevious: "504",
+		timeoutReason:   "",
+	}
+	// App Engine: "App Error" for an HTTP error response, "Instance Unavailable"
+	// for a no-response failure (reported with previous response 0).
+	appEngineRetryPolicy = retryHeaderPolicy{
+		prefix:          "X-AppEngine-",
+		responseReason:  "App Error",
+		timeoutPrevious: "0",
+		timeoutReason:   "Instance Unavailable",
+	}
 )
 
-// addOptionalRetryHeaders adds the two retry-only dispatch headers -
-// X-<family>-TaskPreviousResponse and X-<family>-TaskRetryReason - to injected,
-// but only when this dispatch retries an attempt that received an HTTP response
-// (previousResponseCode > 0). Both are absent on the first attempt, and when the
-// previous attempt got no response (transport failure), matching production.
-func addOptionalRetryHeaders(injected map[string]string, prefix string, previousResponseCode int, retryReason string) {
-	if previousResponseCode <= 0 {
-		return
+// addOptionalRetryHeaders adds the two retry-only dispatch headers to injected,
+// keyed off how the previous attempt failed. previousResponseCode is the prior
+// attempt's raw HTTP status: >0 means it returned that status; <0 means it got
+// no response (a transport failure or dispatch-deadline timeout); 0 means there
+// was no previous attempt (the first dispatch), so nothing is added. Only the
+// no-response case was captured as a timeout; other no-response modes (e.g. a
+// refused connection) are unobserved and treated the same.
+func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, previousResponseCode int) {
+	switch {
+	case previousResponseCode > 0:
+		injected[p.prefix+"TaskPreviousResponse"] = strconv.Itoa(previousResponseCode)
+		injected[p.prefix+"TaskRetryReason"] = p.responseReason
+	case previousResponseCode < 0:
+		injected[p.prefix+"TaskPreviousResponse"] = p.timeoutPrevious
+		injected[p.prefix+"TaskRetryReason"] = p.timeoutReason
 	}
-	injected[prefix+"TaskPreviousResponse"] = strconv.Itoa(previousResponseCode)
-	injected[prefix+"TaskRetryReason"] = retryReason
 }
 
 func updateStateForReschedule(task *Task) {
@@ -101,12 +129,16 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	}
 	task.state.LastAttempt = &attempt
 
-	task.state.ResponseCount++
-	// A received non-5XX response counts toward the HTTP target's execution
-	// count, which excludes 5XX failures (see TaskState.ExecutionCount). A
-	// transport failure (statusCode -1) received no response and never counts.
-	if statusCode >= 100 && (statusCode < 500 || statusCode > 599) {
-		task.state.ExecutionCount++
+	// Only an attempt that actually received an HTTP response counts: a transport
+	// failure or dispatch-deadline timeout (statusCode < 0) received none. This
+	// matches what real Cloud Tasks reports as X-AppEngine-TaskExecutionCount
+	// (ResponseCount, which counts every response) and, excluding 5XX, the HTTP
+	// target's X-CloudTasks-TaskExecutionCount (see TaskState.ExecutionCount).
+	if statusCode >= 100 {
+		task.state.ResponseCount++
+		if statusCode < 500 || statusCode > 599 {
+			task.state.ExecutionCount++
+		}
 	}
 }
 
@@ -233,7 +265,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 			"X-CloudTasks-TaskRetryCount":     headerTaskRetryCount,
 			"X-CloudTasks-TaskETA":            headerTaskETA,
 		}
-		addOptionalRetryHeaders(injected, "X-CloudTasks-", state.PreviousResponseCode, httpRetryReason)
+		addOptionalRetryHeaders(injected, httpRetryPolicy, state.PreviousResponseCode)
 
 		if auth := state.HTTPRequest.OIDCToken; auth != nil {
 			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
@@ -259,7 +291,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 			"X-AppEngine-TaskExecutionCount": headerAppEngineExecutionCount,
 			"X-AppEngine-TaskETA":            headerTaskETA,
 		}
-		addOptionalRetryHeaders(injected, "X-AppEngine-", state.PreviousResponseCode, appEngineRetryReason)
+		addOptionalRetryHeaders(injected, appEngineRetryPolicy, state.PreviousResponseCode)
 	default:
 		logger.Error("dispatch: task has neither HTTPRequest nor AppEngineHTTPRequest", "task", state.Name)
 		return -1

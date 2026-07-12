@@ -144,10 +144,16 @@ and *re-dispatches* - a task, rather than what it stores. Its purpose is the two
 after a task has already failed once, so no control-plane call can observe them.
 
 The battery creates a task pointed at a small **receiver** (see
-[`receiver/`](receiver)) that forces two retries - it fails the first delivery
-with `503` and the second with `404` before succeeding - then reads back the
-per-attempt headers the receiver recorded. The two differing failures capture the
-optional headers for both a 5XX and a 4XX prior response. See `dispatch.go`.
+[`receiver/`](receiver)) that fails each attempt with a different status -
+`503`, `404`, `429`, `500`, `302` - before succeeding, then reads back the
+per-attempt headers the receiver recorded. Failing across a range of codes
+captures the optional headers for each, since the reason may differ by prior
+status. Separate timeout cases (`dispatch/http-timeout`,
+`dispatch/appengine-timeout`) instead stall the first attempt past its dispatch
+deadline, capturing what a *no-response* failure (rather than an error status)
+produces on the retry (real Cloud Tasks enforces a per-task dispatch deadline on
+the App Engine path too, reporting the timeout as `Instance Unavailable`). See
+`dispatch.go`.
 
 The receiver is deployed to **App Engine** (not tunnelled via ngrok) because that
 is the only vantage point that can observe the `X-AppEngine-*` retry headers: App
@@ -173,11 +179,11 @@ sequenceDiagram
     participant CT as Cloud Tasks (real)
     participant RCV as Receiver (App Engine)
     REC->>CT: CreateQueue (fast retry) + CreateTask (targets receiver)
-    CT->>RCV: dispatch, attempt 0
-    RCV-->>CT: 503 (forced fail)
-    CT->>RCV: dispatch, attempt 1 (retry)
-    RCV-->>CT: 404 (forced fail)
-    CT->>RCV: dispatch, attempt 2 (retry)
+    loop forced failures (503, 404, 429, 500, 302)
+        CT->>RCV: dispatch (retry)
+        RCV-->>CT: non-2xx (forced fail)
+    end
+    CT->>RCV: dispatch (final retry)
     RCV-->>CT: 200 (success)
     REC->>RCV: GET /captures?run=PREFIX
     RCV-->>REC: recorded per-attempt headers
@@ -195,11 +201,11 @@ sequenceDiagram
     participant RCV as Receiver (local httptest)
     Note over T,RCV: APP_ENGINE_EMULATOR_HOST points at the local receiver
     T->>EMU: CreateQueue (fast retry) + CreateTask (targets receiver)
-    EMU->>RCV: dispatch, attempt 0
-    RCV-->>EMU: 503 (forced fail)
-    EMU->>RCV: dispatch, attempt 1 (retry)
-    RCV-->>EMU: 404 (forced fail)
-    EMU->>RCV: dispatch, attempt 2 (retry)
+    loop forced failures (503, 404, 429, 500, 302)
+        EMU->>RCV: dispatch (retry)
+        RCV-->>EMU: non-2xx (forced fail)
+    end
+    EMU->>RCV: dispatch (final retry)
     RCV-->>EMU: 200 (success)
     T->>RCV: GET /captures?run=PREFIX
     RCV-->>T: recorded per-attempt headers

@@ -22,13 +22,18 @@ locally is byte-for-byte the handler that recorded the golden:
 
 ## How it forces the optional headers to appear
 
-The optional headers only appear on a *re-dispatch*. The handler forces two
-retries per task, with a different failure status each time: it fails the first
-delivery with `503` and the second with `404`, then succeeds (`200`) on every
-later attempt, decided from the task's `X-*-TaskRetryCount` header. Two differing
-failures capture the optional headers for both a 5XX and a 4XX prior response,
-since their `X-*-TaskRetryReason` (and, for HTTP, `X-*-TaskExecutionCount`, which
-excludes 5XX) may differ between the two.
+The optional headers only appear on a *re-dispatch*. The standard endpoints
+(`/recv/http`, `/recv/appengine`) fail each attempt with a different status -
+`503`, `404`, `429`, `500`, `302` - before succeeding with `200`, decided from
+the task's `X-*-TaskRetryCount` header. Failing across a range of codes captures
+the optional headers for each, since `X-*-TaskRetryReason` (and, for HTTP,
+`X-*-TaskExecutionCount`, which excludes 5XX) may differ by prior status.
+
+Separate endpoints, `/recv/http-timeout` and `/recv/appengine-timeout`, instead
+sleep the first attempt past the task's dispatch deadline so it fails with *no
+response* - capturing what a timeout, rather than an error status, produces on
+the retry. (Real Cloud Tasks enforces a per-task dispatch deadline on the App
+Engine path too, reporting the timeout as `Instance Unavailable`.)
 
 Every request's headers are recorded in memory, keyed by task name + attempt.
 In-memory is sufficient because the deploy is pinned to a single instance

@@ -31,7 +31,7 @@
       },
       {
         "attempt": 2,
-        "status": 200,
+        "status": 429,
         "headers": {
           "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
           "X-Appengine-Queuename": "{queue}",
@@ -41,6 +41,80 @@
           "X-Appengine-Taskpreviousresponse": "404",
           "X-Appengine-Taskretrycount": "2",
           "X-Appengine-Taskretryreason": "App Error"
+        }
+      },
+      {
+        "attempt": 3,
+        "status": 500,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "3",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "429",
+          "X-Appengine-Taskretrycount": "3",
+          "X-Appengine-Taskretryreason": "App Error"
+        }
+      },
+      {
+        "attempt": 4,
+        "status": 302,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "4",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "500",
+          "X-Appengine-Taskretrycount": "4",
+          "X-Appengine-Taskretryreason": "App Error"
+        }
+      },
+      {
+        "attempt": 5,
+        "status": 200,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "5",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "302",
+          "X-Appengine-Taskretrycount": "5",
+          "X-Appengine-Taskretryreason": "App Error"
+        }
+      }
+    ]
+  },
+  {
+    "name": "dispatch/appengine-timeout",
+    "requestType": "appengine-timeout",
+    "attempts": [
+      {
+        "attempt": 0,
+        "status": 0,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "0",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskretrycount": "0"
+        }
+      },
+      {
+        "attempt": 1,
+        "status": 200,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "0",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "0",
+          "X-Appengine-Taskretrycount": "1",
+          "X-Appengine-Taskretryreason": "Instance Unavailable"
         }
       }
     ]
@@ -77,7 +151,7 @@
       },
       {
         "attempt": 2,
-        "status": 200,
+        "status": 429,
         "headers": {
           "User-Agent": "Google-Cloud-Tasks",
           "X-Cloudtasks-Queuename": "{queue}",
@@ -86,6 +160,80 @@
           "X-Cloudtasks-Taskname": "{task}",
           "X-Cloudtasks-Taskpreviousresponse": "404",
           "X-Cloudtasks-Taskretrycount": "2",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      },
+      {
+        "attempt": 3,
+        "status": 500,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "2",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "429",
+          "X-Cloudtasks-Taskretrycount": "3",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      },
+      {
+        "attempt": 4,
+        "status": 302,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "2",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "500",
+          "X-Cloudtasks-Taskretrycount": "4",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      },
+      {
+        "attempt": 5,
+        "status": 200,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "3",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "302",
+          "X-Cloudtasks-Taskretrycount": "5",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      }
+    ]
+  },
+  {
+    "name": "dispatch/http-timeout",
+    "requestType": "http-timeout",
+    "attempts": [
+      {
+        "attempt": 0,
+        "status": 0,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "0",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskretrycount": "0"
+        }
+      },
+      {
+        "attempt": 1,
+        "status": 200,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "0",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "504",
+          "X-Cloudtasks-Taskretrycount": "1",
           "X-Cloudtasks-Taskretryreason": ""
         }
       }

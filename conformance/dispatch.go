@@ -28,12 +28,16 @@ import (
 //
 // So this battery creates a task pointed at the receiver (see
 // conformance/receiver), configures the queue to retry almost immediately, and
-// forces two retries by having the receiver fail the first delivery with 503 and
-// the second with 404 before succeeding - capturing the optional headers for
-// both a 5XX and a 4XX prior response. It then reads back what the receiver saw
-// for each attempt via the receiver's own /captures endpoint - the harness has
-// no other way to observe the dispatch request, since Cloud Tasks (real or
-// emulated) sends it directly to the target, not back through the gRPC API.
+// forces a sequence of retries by having the receiver fail each attempt with a
+// different status (503, 404, 429, 500, 302) before succeeding - capturing the
+// optional headers across a range of prior status codes. Separate timeout cases
+// instead stall the first attempt past its dispatch deadline, to capture what a
+// no-response failure produces (both HTTP and App Engine - real Cloud Tasks
+// enforces a per-task deadline on both paths). It then reads back what the
+// receiver saw for each attempt via the receiver's own /captures endpoint - the
+// harness has no other way to observe the dispatch request, since Cloud Tasks
+// (real or emulated) sends it directly to the target, not back through the gRPC
+// API.
 //
 // Because dispatch requires a real network round trip to a running receiver
 // (see conformance/receiver's doc comment on why that receiver exists and how
@@ -49,13 +53,15 @@ type DispatchAttempt struct {
 }
 
 // DispatchSnapshot is one case's golden entry: every delivery attempt the
-// receiver observed for that case's task, in attempt order. A healthy case has
-// three attempts (503 -> 404 -> 200); fewer means a retry did not happen (or the
-// task never dispatched) - that gap is itself meaningful and is surfaced by the
-// record command rather than silently swallowed.
+// receiver observed for that case's task, in attempt order. A healthy standard
+// case runs through the whole forced-status sequence before a 200 (six
+// attempts); the timeout case has two (a timed-out attempt, then a 200). Fewer
+// than expected means a retry did not happen (or the task never dispatched) -
+// that gap is itself meaningful and is surfaced by the record command rather
+// than silently swallowed.
 type DispatchSnapshot struct {
-	Name        string            `json:"name"`        // stable golden key: "dispatch/http" | "dispatch/appengine"
-	RequestType string            `json:"requestType"` // "http" | "appengine"
+	Name        string            `json:"name"`        // stable golden key, e.g. "dispatch/http"
+	RequestType string            `json:"requestType"` // "http" | "appengine" | "http-timeout"
 	Attempts    []DispatchAttempt `json:"attempts"`    // sorted by Attempt ascending
 }
 
@@ -71,6 +77,8 @@ func dispatchCases() []dispatchCase {
 	return []dispatchCase{
 		{name: "dispatch/http", reqType: "http"},
 		{name: "dispatch/appengine", reqType: "appengine"},
+		{name: "dispatch/http-timeout", reqType: "http-timeout"},
+		{name: "dispatch/appengine-timeout", reqType: "appengine-timeout"},
 	}
 }
 
@@ -82,6 +90,14 @@ func dispatchCases() []dispatchCase {
 const (
 	dispatchPollInterval = 2 * time.Second
 	dispatchPollDeadline = 90 * time.Second
+
+	// dispatchTimeoutDeadline is the dispatch deadline the timeout cases set on
+	// their task (15s is the minimum real Cloud Tasks accepts for an HTTP target);
+	// the receiver's timeout endpoint sleeps past it so the first attempt fails
+	// with no response. It is set on the App Engine timeout case too: the capture
+	// confirmed real Cloud Tasks enforces a per-task deadline on the App Engine
+	// path as well (it retries, reporting "Instance Unavailable").
+	dispatchTimeoutDeadline = 15 * time.Second
 )
 
 // RunDispatch executes the dispatch battery against the client and returns one
@@ -134,7 +150,10 @@ func createFastRetryQueue(ctx context.Context, c *Client, p Params) error {
 		Queue: &taskspb.Queue{
 			Name: p.QueuePath(),
 			RetryConfig: &taskspb.RetryConfig{
-				MaxAttempts:  5,
+				// The standard cases fail five times before succeeding, so allow
+				// enough attempts for the whole forced-status sequence plus the
+				// terminal success.
+				MaxAttempts:  10,
 				MinBackoff:   durationpb.New(time.Second),
 				MaxBackoff:   durationpb.New(5 * time.Second),
 				MaxDoublings: 1,
@@ -145,12 +164,16 @@ func createFastRetryQueue(ctx context.Context, c *Client, p Params) error {
 }
 
 // buildDispatchTask builds a task with no ScheduleTime (so it dispatches
-// immediately) pointed at the receiver's endpoint for the given request
-// family. The App Engine case leaves AppEngineRouting nil, which routes to the
-// default service - the deployed receiver when recording, or the emulator's
-// APP_ENGINE_EMULATOR_HOST target when validating hermetically.
+// immediately) pointed at the receiver's endpoint for the given request family.
+// The App Engine case leaves AppEngineRouting nil, which routes to the default
+// service - the deployed receiver when recording, or the emulator's
+// APP_ENGINE_EMULATOR_HOST target when validating hermetically. The http-timeout
+// case targets the receiver's stalling endpoint and sets a short dispatch
+// deadline so the first attempt fails with no response.
 func buildDispatchTask(p Params, reqType string, receiverURL string) *taskspb.Task {
-	if reqType == "appengine" {
+	base := strings.TrimRight(receiverURL, "/")
+	switch reqType {
+	case "appengine":
 		return &taskspb.Task{
 			Name: p.TaskPath(),
 			MessageType: &taskspb.Task_AppEngineHttpRequest{
@@ -161,12 +184,36 @@ func buildDispatchTask(p Params, reqType string, receiverURL string) *taskspb.Ta
 				},
 			},
 		}
+	case "http-timeout":
+		return &taskspb.Task{
+			Name:             p.TaskPath(),
+			DispatchDeadline: durationpb.New(dispatchTimeoutDeadline),
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					Url:        base + receiver.PathHTTPTimeout,
+					HttpMethod: taskspb.HttpMethod_POST,
+					Body:       []byte("{}"),
+				},
+			},
+		}
+	case "appengine-timeout":
+		return &taskspb.Task{
+			Name:             p.TaskPath(),
+			DispatchDeadline: durationpb.New(dispatchTimeoutDeadline),
+			MessageType: &taskspb.Task_AppEngineHttpRequest{
+				AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+					HttpMethod:  taskspb.HttpMethod_POST,
+					RelativeUri: receiver.PathAppEngineTimeout,
+					Body:        []byte("{}"),
+				},
+			},
+		}
 	}
 	return &taskspb.Task{
 		Name: p.TaskPath(),
 		MessageType: &taskspb.Task_HttpRequest{
 			HttpRequest: &taskspb.HttpRequest{
-				Url:        strings.TrimRight(receiverURL, "/") + receiver.PathHTTP,
+				Url:        base + receiver.PathHTTP,
 				HttpMethod: taskspb.HttpMethod_POST,
 				Body:       []byte("{}"),
 			},

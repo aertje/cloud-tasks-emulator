@@ -19,13 +19,15 @@
 //
 // # Forcing retries
 //
-// The optional headers only appear on a *re-dispatch*, so the handler forces two
-// retries per task, with a different failure status each time: it fails the
-// first delivery with 503 and the second with 404, then succeeds (200) on every
-// later attempt, keyed off the task's retry-count header. Two differing failures
-// capture the optional headers for both a 5XX and a 4XX prior response, since
-// their X-*-TaskRetryReason (and, for HTTP targets, X-*-TaskExecutionCount, which
-// excludes 5XX) may differ between the two.
+// The optional headers only appear on a *re-dispatch*, so the standard endpoints
+// fail each attempt with a different status - 503, 404, 429, 500, 302 - before
+// succeeding, capturing the optional headers for a range of prior status codes
+// (they may differ by code, and for HTTP targets X-*-TaskExecutionCount excludes
+// 5XX). Separate timeout endpoints (/recv/http-timeout, /recv/appengine-timeout)
+// instead let the first attempt exceed the task's dispatch deadline, to capture
+// what a no-response failure - rather than an error status - produces on the
+// retry (real Cloud Tasks enforces a per-task deadline on both the HTTP and App
+// Engine paths).
 //
 // # Capture & readback
 //
@@ -44,16 +46,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Request paths the two target families are pointed at. They are recorded on the
 // Capture so a reader can tell which family a request arrived on even before
 // inspecting its headers.
 const (
-	PathHTTP      = "/recv/http"
-	PathAppEngine = "/recv/appengine"
-	PathCaptures  = "/captures"
+	PathHTTP             = "/recv/http"
+	PathAppEngine        = "/recv/appengine"
+	PathHTTPTimeout      = "/recv/http-timeout"
+	PathAppEngineTimeout = "/recv/appengine-timeout"
+	PathCaptures         = "/captures"
 )
+
+// timeoutSleep is how long the timeout endpoint sleeps on the first attempt. It
+// must exceed the dispatch deadline the timeout case sets on its task (15s) so
+// the caller cancels the request with no response - a deadline failure rather
+// than an HTTP status.
+const timeoutSleep = 18 * time.Second
 
 // Capture is one received request: which endpoint it hit, the task/queue it
 // belonged to, which attempt it was, the status this handler returned, and every
@@ -109,29 +120,57 @@ func (s *store) filter(run string) []Capture {
 	return out
 }
 
-// NewHandler builds the receiver's HTTP handler: the two dispatch endpoints that
-// force one retry and record each request, plus the /captures readback. The same
-// handler serves the App Engine deploy (cmd/recv) and the local test server.
+// NewHandler builds the receiver's HTTP handler: the two standard dispatch
+// endpoints that fail a sequence of attempts before succeeding, the timeout
+// endpoints that stall the first attempt past its deadline, and the /captures
+// readback. The same handler serves the App Engine deploy (cmd/recv) and the
+// local test server.
 func NewHandler() http.Handler {
 	s := &store{}
 	mux := http.NewServeMux()
 	mux.HandleFunc(PathHTTP, s.dispatch)
 	mux.HandleFunc(PathAppEngine, s.dispatch)
+	mux.HandleFunc(PathHTTPTimeout, s.dispatchTimeout)
+	mux.HandleFunc(PathAppEngineTimeout, s.dispatchTimeout)
 	mux.HandleFunc(PathCaptures, s.readback)
 	return mux
 }
 
 // dispatch records the request and applies the forced-retry response policy:
-// fail the first delivery (attempt 0) with 503 and the second (attempt 1) with
-// 404 so Cloud Tasks retries twice, then succeed with 200 on every later
-// attempt. The two retried requests are the ones that carry the optional
-// TaskPreviousResponse / TaskRetryReason headers - for a 5XX and a 4XX prior
-// response respectively.
+// each attempt is failed with the next status in forcedStatusSequence before
+// the task finally succeeds with 200. Every failure surfaces the optional
+// TaskPreviousResponse / TaskRetryReason headers on the following attempt, so a
+// single task captures them across a range of prior status codes.
 func (s *store) dispatch(w http.ResponseWriter, r *http.Request) {
 	family, queue, task, attempt := identify(r)
-
 	status := forcedStatus(attempt)
+	s.record(r, family, queue, task, attempt, status)
 
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(strconv.Itoa(status)))
+}
+
+// dispatchTimeout records the request, then on the first attempt sleeps past the
+// task's dispatch deadline so the caller cancels it with no response - a timeout
+// failure rather than an error status. Later attempts succeed with 200, so the
+// retry that follows the timeout is captured (with whatever optional headers a
+// no-response failure produces). Status 0 marks the timed-out attempt.
+func (s *store) dispatchTimeout(w http.ResponseWriter, r *http.Request) {
+	family, queue, task, attempt := identify(r)
+	if attempt == 0 {
+		s.record(r, family, queue, task, attempt, 0)
+		time.Sleep(timeoutSleep)
+		return // the caller has almost certainly closed the connection by now
+	}
+
+	s.record(r, family, queue, task, attempt, http.StatusOK)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(strconv.Itoa(http.StatusOK)))
+}
+
+// record appends one request's headers to the capture log and dumps the raw
+// headers to the log for eyeballing in the deploy logs while recording.
+func (s *store) record(r *http.Request, family, queue, task string, attempt, status int) {
 	c := Capture{
 		Endpoint:  r.URL.Path,
 		Family:    family,
@@ -143,13 +182,8 @@ func (s *store) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.add(c)
 
-	// Dump the full raw headers so they can be eyeballed in the deploy logs while
-	// recording the golden - the whole point of the capture.
 	log.Printf("dispatch %s family=%s queue=%s task=%s attempt=%d -> %d\n%s",
 		r.URL.Path, family, queue, task, attempt, status, dumpHeaders(c.Headers))
-
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(strconv.Itoa(status)))
 }
 
 // readback serves the recorded captures for a run as JSON. Query param `run` is
@@ -162,19 +196,26 @@ func (s *store) readback(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// forcedStatus is the response policy: attempt 0 fails with 503, attempt 1 fails
-// with 404, and every later attempt succeeds with 200. The two distinct failure
-// codes force two retries that surface the optional headers for both a 5XX and a
-// 4XX prior response.
+// forcedStatusSequence is the per-attempt failure policy for the standard
+// endpoints: each attempt is failed with the next code in this list - a 5XX, a
+// 4XX, a rate-limit, another 5XX and a redirect - so the optional retry headers
+// are captured for a range of prior status codes. The 302 carries no Location,
+// so it is treated as a failure rather than followed.
+var forcedStatusSequence = []int{
+	http.StatusServiceUnavailable,  // 503
+	http.StatusNotFound,            // 404
+	http.StatusTooManyRequests,     // 429
+	http.StatusInternalServerError, // 500
+	http.StatusFound,               // 302
+}
+
+// forcedStatus returns the status to fail attempt n with, or 200 once the
+// sequence is exhausted and the task should succeed.
 func forcedStatus(attempt int) int {
-	switch attempt {
-	case 0:
-		return http.StatusServiceUnavailable // 503
-	case 1:
-		return http.StatusNotFound // 404
-	default:
-		return http.StatusOK // 200
+	if attempt >= 0 && attempt < len(forcedStatusSequence) {
+		return forcedStatusSequence[attempt]
 	}
+	return http.StatusOK
 }
 
 // identify pulls the family and the task-identifying fields out of a request's

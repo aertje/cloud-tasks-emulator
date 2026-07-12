@@ -45,6 +45,9 @@ type TaskState struct {
 	DispatchDeadline time.Duration
 
 	DispatchCount int32
+	// ResponseCount counts attempts that received an HTTP response - a transport
+	// failure or dispatch-deadline timeout received none and is not counted. It
+	// backs the App Engine target's X-AppEngine-TaskExecutionCount.
 	ResponseCount int32
 	// ExecutionCount counts attempts that received a non-5XX response. It backs
 	// the HTTP target's X-CloudTasks-TaskExecutionCount, which - unlike the App

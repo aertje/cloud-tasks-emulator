@@ -104,7 +104,7 @@ func (task *Task) markDone() {
 
 // State returns a snapshot of the task state.
 //
-// Note: TaskState and its Maybe-wrapped members (HTTPRequest /
+// Note: TaskState and its maybe.M-wrapped members (HTTPRequest /
 // AppEngineHTTPRequest / Attempt) are value types and copy by value, but the
 // Headers map and Body slice they carry are references, so the snapshot is
 // shallow. Callers that need a deep copy should round-trip via taskToProto at

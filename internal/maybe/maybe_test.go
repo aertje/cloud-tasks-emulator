@@ -27,7 +27,7 @@ func TestNoneAbsent(t *testing.T) {
 }
 
 func TestZeroValueIsNone(t *testing.T) {
-	var m Maybe[string]
+	var m M[string]
 
 	assert.False(t, m.IsPresent())
 	assert.Equal(t, None[string](), m)
@@ -62,7 +62,7 @@ func TestPtrReturnsCopy(t *testing.T) {
 	p := m.Ptr()
 	*p = 100
 
-	// Mutating the returned pointer must not affect the Maybe.
+	// Mutating the returned pointer must not affect the M.
 	assert.Equal(t, 3, m.OrZero())
 }
 

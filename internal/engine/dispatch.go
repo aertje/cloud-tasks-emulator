@@ -55,7 +55,7 @@ var (
 // dispatch), so nothing is added. Only the no-response case was captured as a
 // timeout; other no-response modes (e.g. a refused connection) are unobserved
 // and treated the same.
-func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, previous maybe.Maybe[int]) {
+func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, previous maybe.M[int]) {
 	code, ok := previous.Get()
 	if !ok {
 		return
@@ -125,7 +125,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	rpcCodeName := toCodeName(rpcCode)
 
 	// Complete the in-flight LastAttempt with its response fields. LastAttempt is
-	// a value-typed Maybe, so State() snapshots already hold their own copy of the
+	// a value-typed maybe.M, so State() snapshots already hold their own copy of the
 	// Attempt; storing the completed value here cannot mutate a snapshot the gRPC
 	// edge is reading (unlocked) via taskToProto.
 	attempt := task.state.LastAttempt.OrZero()

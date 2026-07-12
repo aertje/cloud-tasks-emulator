@@ -277,7 +277,7 @@ func timestampToProto(t time.Time) *timestamppb.Timestamp {
 // absent repeated/bytes field from an explicitly empty one (both decode to a
 // nil getter result), so an empty value maps to None and round-trips back to an
 // absent proto field.
-func someIfNonNil[T []byte | map[string]string](v T) maybe.Maybe[T] {
+func someIfNonNil[T []byte | map[string]string](v T) maybe.M[T] {
 	if v == nil {
 		return maybe.None[T]()
 	}

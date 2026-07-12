@@ -13,22 +13,22 @@ func TestSetInitialTaskStateAppEngineNoEmulatorDefaults(t *testing.T) {
 	}
 	setInitialTaskState(&state, "projects/bluebook/locations/us-east1/queues/agentq", "")
 
-	assert.Equal(t, "https://bluebook.appspot.com", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host)
+	assert.Equal(t, "https://bluebook.appspot.com", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host.OrZero())
 }
 
 func TestInitialTaskStateAppEngineNoEmulatorTargeted(t *testing.T) {
 	state := TaskState{
 		AppEngineHTTPRequest: maybe.Some(AppEngineHTTPRequest{
 			AppEngineRouting: maybe.Some(AppEngineRouting{
-				Service:  "worker",
-				Version:  "v1",
-				Instance: "2",
+				Service:  maybe.Some("worker"),
+				Version:  maybe.Some("v1"),
+				Instance: maybe.Some("2"),
 			}),
 		}),
 	}
 	setInitialTaskState(&state, "projects/bluebook/locations/us-east1/queues/agentq", "")
 
-	assert.Equal(t, "https://2-dot-v1-dot-worker-dot-bluebook.appspot.com", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host)
+	assert.Equal(t, "https://2-dot-v1-dot-worker-dot-bluebook.appspot.com", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host.OrZero())
 }
 
 func TestSetInitialTaskStateAppEngineEmulatorDefaults(t *testing.T) {
@@ -37,20 +37,20 @@ func TestSetInitialTaskStateAppEngineEmulatorDefaults(t *testing.T) {
 	}
 	setInitialTaskState(&state, "projects/bluebook/locations/us-east1/queues/agentq", "http://localhost:1234")
 
-	assert.Equal(t, "http://localhost:1234", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host)
+	assert.Equal(t, "http://localhost:1234", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host.OrZero())
 }
 
 func TestSetInitialTaskStateAppEngineEmulatorTargeted(t *testing.T) {
 	state := TaskState{
 		AppEngineHTTPRequest: maybe.Some(AppEngineHTTPRequest{
 			AppEngineRouting: maybe.Some(AppEngineRouting{
-				Service:  "worker",
-				Version:  "v1",
-				Instance: "2",
+				Service:  maybe.Some("worker"),
+				Version:  maybe.Some("v1"),
+				Instance: maybe.Some("2"),
 			}),
 		}),
 	}
 	setInitialTaskState(&state, "projects/bluebook/locations/us-east1/queues/agentq", "http://nginx")
 
-	assert.Equal(t, "http://2.v1.worker.nginx", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host)
+	assert.Equal(t, "http://2.v1.worker.nginx", state.AppEngineHTTPRequest.OrZero().AppEngineRouting.OrZero().Host.OrZero())
 }

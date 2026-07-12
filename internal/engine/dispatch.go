@@ -261,9 +261,9 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 	case state.HTTPRequest.IsPresent():
 		hr, _ := state.HTTPRequest.Get()
 		method = hr.Method.OrZero()
-		url = hr.URL
-		body = hr.Body
-		srcHeaders = hr.Headers
+		url = hr.URL.OrZero()
+		body = hr.Body.OrZero()
+		srcHeaders = hr.Headers.OrZero()
 
 		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
 		injected = map[string]string{
@@ -277,7 +277,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		addOptionalRetryHeaders(injected, httpRetryPolicy, state.PreviousResponseCode)
 
 		if auth, ok := hr.OIDCToken.Get(); ok {
-			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
+			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience.OrZero())
 			if err != nil {
 				logger.Error("dispatch: create OIDC token", "task", state.Name, "err", err)
 				return -1
@@ -288,9 +288,9 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		ae, _ := state.AppEngineHTTPRequest.Get()
 
 		method = ae.Method.OrZero()
-		url = ae.AppEngineRouting.OrZero().Host + ae.RelativeURI.OrZero()
-		body = ae.Body
-		srcHeaders = ae.Headers
+		url = ae.AppEngineRouting.OrZero().Host.OrZero() + ae.RelativeURI.OrZero()
+		body = ae.Body.OrZero()
+		srcHeaders = ae.Headers.OrZero()
 
 		// These headers are only set on dispatch, see https://cloud.google.com/tasks/docs/reference/rpc/google.cloud.tasks.v2#google.cloud.tasks.v2.AppEngineHttpRequest
 		injected = map[string]string{

@@ -148,39 +148,43 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 	// Some rather than mutated in place.
 	if hr, ok := s.HTTPRequest.Get(); ok {
 		hr.Method = hr.Method.Or(http.MethodPost)
-		if hr.Headers == nil {
-			hr.Headers = make(map[string]string)
+		headers := hr.Headers.OrZero()
+		if headers == nil {
+			headers = make(map[string]string)
 		}
 		// Cloud Tasks overrides any caller-supplied User-Agent.
-		hr.Headers["User-Agent"] = "Google-Cloud-Tasks"
+		headers["User-Agent"] = "Google-Cloud-Tasks"
+		hr.Headers = maybe.Some(headers)
 		s.HTTPRequest = maybe.Some(hr)
 	}
 
 	if ae, ok := s.AppEngineHTTPRequest.Get(); ok {
 		ae.Method = ae.Method.Or(http.MethodPost)
-		if ae.Headers == nil {
-			ae.Headers = make(map[string]string)
+		headers := ae.Headers.OrZero()
+		if headers == nil {
+			headers = make(map[string]string)
 		}
-		ae.Headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"
+		headers["User-Agent"] = "AppEngine-Google; (+http://code.google.com/appengine)"
 
-		if len(ae.Body) > 0 {
+		if body := ae.Body.OrZero(); len(body) > 0 {
 			// HTTP field names are case-insensitive, so a caller-supplied
 			// "content-type" must suppress the default just as "Content-Type"
 			// would - otherwise the task carries two Content-Type headers, which
 			// Cloud Tasks does not allow (see conformance/golden/headers.json).
 			// The default itself is added under the canonical casing.
-			if !hasHeaderFold(ae.Headers, "Content-Type") {
-				ae.Headers["Content-Type"] = "application/octet-stream"
+			if !hasHeaderFold(headers, "Content-Type") {
+				headers["Content-Type"] = "application/octet-stream"
 			}
 			// Content-Length is output-only and computed by Cloud Tasks, which
 			// materializes it on the stored AppEngine task.
-			ae.Headers["Content-Length"] = strconv.Itoa(len(ae.Body))
+			headers["Content-Length"] = strconv.Itoa(len(body))
 		}
+		ae.Headers = maybe.Some(headers)
 
 		// Routing is always present on a stored AppEngine task; an absent one
 		// defaults to the zero routing, whose Host is then filled in below.
 		routing := ae.AppEngineRouting.OrZero()
-		if routing.Host == "" {
+		if routing.Host.OrZero() == "" {
 			var host, domainSeparator string
 
 			if appEngineHost == "" {
@@ -200,17 +204,17 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 				panic(err)
 			}
 
-			if routing.Service != "" {
-				hostURL.Host = routing.Service + domainSeparator + hostURL.Host
+			if svc := routing.Service.OrZero(); svc != "" {
+				hostURL.Host = svc + domainSeparator + hostURL.Host
 			}
-			if routing.Version != "" {
-				hostURL.Host = routing.Version + domainSeparator + hostURL.Host
+			if ver := routing.Version.OrZero(); ver != "" {
+				hostURL.Host = ver + domainSeparator + hostURL.Host
 			}
-			if routing.Instance != "" {
-				hostURL.Host = routing.Instance + domainSeparator + hostURL.Host
+			if inst := routing.Instance.OrZero(); inst != "" {
+				hostURL.Host = inst + domainSeparator + hostURL.Host
 			}
 
-			routing.Host = hostURL.String()
+			routing.Host = maybe.Some(hostURL.String())
 		}
 		ae.AppEngineRouting = maybe.Some(routing)
 

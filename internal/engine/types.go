@@ -6,13 +6,11 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 )
 
-// Optionality convention for the state types below: a maybe.Maybe[T] marks a
-// value that may be genuinely absent - an unset input still awaiting a
-// server-assigned default, or state a task has not reached yet (e.g. the
-// response of an attempt still in flight). Values that always carry a meaning
-// within a present parent stay plain: counters, names, the queue-run enum, and
-// the request scalars whose empty value already reads as "unset" and are
-// defaulted at creation (Method, URL, RelativeURI, Headers, Body).
+// Optionality convention for the state types below: a field that may be
+// genuinely absent - an unset input still awaiting a server default, or state a
+// task has not reached yet - is a maybe.Maybe[T]. Everything else is always
+// present and stays plain: counters, resource names, the queue-run enum, an
+// attempt's status code/message, and a token's service-account email.
 
 // QueueRunState mirrors tasks.Queue_State but lives in the engine layer.
 type QueueRunState int
@@ -110,19 +108,21 @@ type AttemptStatus struct {
 
 // HTTPRequest is the engine view of a Cloud Tasks HTTP target. Method is the
 // uppercase HTTP verb (e.g. "POST"); absent means unspecified and is defaulted
-// to POST at creation.
+// to POST at creation. URL is absent only on an unvalidated creation input; a
+// live task always carries one.
 type HTTPRequest struct {
-	URL       string
+	URL       maybe.Maybe[string]
 	Method    maybe.Maybe[string]
-	Headers   map[string]string
-	Body      []byte
+	Headers   maybe.Maybe[map[string]string]
+	Body      maybe.Maybe[[]byte]
 	OIDCToken maybe.Maybe[OIDCToken]
 }
 
-// OIDCToken describes the OIDC credentials to mint for the HTTP target.
+// OIDCToken describes the OIDC credentials to mint for the HTTP target. Audience
+// is absent when the caller left it to default to the target URL.
 type OIDCToken struct {
 	ServiceAccountEmail string
-	Audience            string
+	Audience            maybe.Maybe[string]
 }
 
 // AppEngineHTTPRequest is the engine view of an App Engine target. Method
@@ -132,14 +132,16 @@ type AppEngineHTTPRequest struct {
 	Method           maybe.Maybe[string]
 	AppEngineRouting maybe.Maybe[AppEngineRouting]
 	RelativeURI      maybe.Maybe[string]
-	Headers          map[string]string
-	Body             []byte
+	Headers          maybe.Maybe[map[string]string]
+	Body             maybe.Maybe[[]byte]
 }
 
-// AppEngineRouting describes the App Engine service routing for a request.
+// AppEngineRouting describes the App Engine service routing for a request. Each
+// field is absent when the caller left it to the App Engine default; Host is
+// absent on input and filled in at creation.
 type AppEngineRouting struct {
-	Service  string
-	Version  string
-	Instance string
-	Host     string
+	Service  maybe.Maybe[string]
+	Version  maybe.Maybe[string]
+	Instance maybe.Maybe[string]
+	Host     maybe.Maybe[string]
 }

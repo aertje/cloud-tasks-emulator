@@ -621,10 +621,11 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 	// deliberately not fully parsed here (an invalid percent-escape, say, is
 	// accepted and only fails when the task is dispatched).
 	if hr, ok := ts.HTTPRequest.Get(); ok {
-		if hr.URL == "" {
+		url := hr.URL.OrZero()
+		if url == "" {
 			return nil, TaskState{}, ErrHTTPRequestURLRequired
 		}
-		if !strings.HasPrefix(hr.URL, "http://") && !strings.HasPrefix(hr.URL, "https://") {
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 			return nil, TaskState{}, ErrHTTPRequestURLScheme
 		}
 	}

@@ -149,7 +149,7 @@ func httpTaskState(name string, schedule time.Time) TaskState {
 	return TaskState{
 		Name:         name,
 		ScheduleTime: scheduleTime,
-		HTTPRequest:  maybe.Some(HTTPRequest{URL: "http://example.test/"}),
+		HTTPRequest:  maybe.Some(HTTPRequest{URL: maybe.Some("http://example.test/")}),
 	}
 }
 

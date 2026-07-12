@@ -120,15 +120,15 @@ func taskFromProto(t *tasks.Task) engine.TaskState {
 	}
 	if hr := t.GetHttpRequest(); hr != nil {
 		req := engine.HTTPRequest{
-			URL:     hr.GetUrl(),
+			URL:     maybe.OfNonZero(hr.GetUrl()),
 			Method:  maybe.OfNonZero(httpMethodFromProto(hr.GetHttpMethod())),
-			Headers: copyHeaders(hr.GetHeaders()),
-			Body:    hr.GetBody(),
+			Headers: someIfNonNil(copyHeaders(hr.GetHeaders())),
+			Body:    someIfNonNil(hr.GetBody()),
 		}
 		if ot := hr.GetOidcToken(); ot != nil {
 			req.OIDCToken = maybe.Some(engine.OIDCToken{
 				ServiceAccountEmail: ot.GetServiceAccountEmail(),
-				Audience:            ot.GetAudience(),
+				Audience:            maybe.OfNonZero(ot.GetAudience()),
 			})
 		}
 		s.HTTPRequest = maybe.Some(req)
@@ -137,15 +137,15 @@ func taskFromProto(t *tasks.Task) engine.TaskState {
 		req := engine.AppEngineHTTPRequest{
 			Method:      maybe.OfNonZero(httpMethodFromProto(ae.GetHttpMethod())),
 			RelativeURI: maybe.OfNonZero(ae.GetRelativeUri()),
-			Headers:     copyHeaders(ae.GetHeaders()),
-			Body:        ae.GetBody(),
+			Headers:     someIfNonNil(copyHeaders(ae.GetHeaders())),
+			Body:        someIfNonNil(ae.GetBody()),
 		}
 		if r := ae.GetAppEngineRouting(); r != nil {
 			req.AppEngineRouting = maybe.Some(engine.AppEngineRouting{
-				Service:  r.GetService(),
-				Version:  r.GetVersion(),
-				Instance: r.GetInstance(),
-				Host:     r.GetHost(),
+				Service:  maybe.OfNonZero(r.GetService()),
+				Version:  maybe.OfNonZero(r.GetVersion()),
+				Instance: maybe.OfNonZero(r.GetInstance()),
+				Host:     maybe.OfNonZero(r.GetHost()),
 			})
 		}
 		s.AppEngineHTTPRequest = maybe.Some(req)
@@ -191,16 +191,16 @@ func taskToProto(s engine.TaskState, view tasks.Task_View) *tasks.Task {
 	}
 	if hr, ok := s.HTTPRequest.Get(); ok {
 		req := &tasks.HttpRequest{
-			Url:        hr.URL,
+			Url:        hr.URL.OrZero(),
 			HttpMethod: httpMethodToProto(hr.Method.OrZero()),
-			Headers:    copyHeaders(hr.Headers),
-			Body:       hr.Body,
+			Headers:    copyHeaders(hr.Headers.OrZero()),
+			Body:       hr.Body.OrZero(),
 		}
 		if auth, ok := hr.OIDCToken.Get(); ok {
 			req.AuthorizationHeader = &tasks.HttpRequest_OidcToken{
 				OidcToken: &tasks.OidcToken{
 					ServiceAccountEmail: auth.ServiceAccountEmail,
-					Audience:            auth.Audience,
+					Audience:            auth.Audience.OrZero(),
 				},
 			}
 		}
@@ -212,18 +212,18 @@ func taskToProto(s engine.TaskState, view tasks.Task_View) *tasks.Task {
 		req := &tasks.AppEngineHttpRequest{
 			HttpMethod:  httpMethodToProto(ae.Method.OrZero()),
 			RelativeUri: ae.RelativeURI.OrZero(),
-			Headers:     copyHeaders(ae.Headers),
-			Body:        ae.Body,
+			Headers:     copyHeaders(ae.Headers.OrZero()),
+			Body:        ae.Body.OrZero(),
 		}
 		if view != tasks.Task_FULL {
 			req.Body = nil
 		}
 		if r, ok := ae.AppEngineRouting.Get(); ok {
 			req.AppEngineRouting = &tasks.AppEngineRouting{
-				Service:  r.Service,
-				Version:  r.Version,
-				Instance: r.Instance,
-				Host:     r.Host,
+				Service:  r.Service.OrZero(),
+				Version:  r.Version.OrZero(),
+				Instance: r.Instance.OrZero(),
+				Host:     r.Host.OrZero(),
 			}
 		}
 		t.MessageType = &tasks.Task_AppEngineHttpRequest{AppEngineHttpRequest: req}
@@ -270,6 +270,18 @@ func attemptToProto(a engine.Attempt) *tasks.Attempt {
 
 func timestampToProto(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
+}
+
+// someIfNonNil wraps a nilable reference field pulled from a proto: a nil
+// map/slice becomes None, anything else Some. Proto3 cannot distinguish an
+// absent repeated/bytes field from an explicitly empty one (both decode to a
+// nil getter result), so an empty value maps to None and round-trips back to an
+// absent proto field.
+func someIfNonNil[T []byte | map[string]string](v T) maybe.Maybe[T] {
+	if v == nil {
+		return maybe.None[T]()
+	}
+	return maybe.Some(v)
 }
 
 func copyHeaders(in map[string]string) map[string]string {

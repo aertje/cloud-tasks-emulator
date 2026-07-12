@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/aertje/cloud-tasks-emulator/conformance/receiver"
+	"github.com/aertje/cloud-tasks-emulator/test/conformance/receiver"
 )
 
 func main() {

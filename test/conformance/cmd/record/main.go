@@ -21,7 +21,7 @@
 //	  -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
 //	  -out=golden/happypath.json
 //
-// Record the dispatch-headers golden (needs a deployed receiver - see conformance/receiver):
+// Record the dispatch-headers golden (needs a deployed receiver - see test/conformance/receiver):
 //
 //	go run ./cmd/record -target=real -kind=dispatch \
 //	  -project=$PROJECT -location=us-central1 \
@@ -36,7 +36,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/conformance"
+	"github.com/aertje/cloud-tasks-emulator/test/conformance"
 )
 
 func main() {
@@ -125,7 +125,7 @@ func recordHappyPath(ctx context.Context, client *conformance.Client, opts confo
 
 func recordDispatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, receiverURL, out string) {
 	if receiverURL == "" {
-		fmt.Fprintln(os.Stderr, "error: -kind=dispatch requires -receiver-url (see conformance/receiver)")
+		fmt.Fprintln(os.Stderr, "error: -kind=dispatch requires -receiver-url (see test/conformance/receiver)")
 		os.Exit(1)
 	}
 

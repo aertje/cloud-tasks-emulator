@@ -13,7 +13,7 @@ import (
 	"time"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/aertje/cloud-tasks-emulator/conformance/receiver"
+	"github.com/aertje/cloud-tasks-emulator/test/conformance/receiver"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -27,7 +27,7 @@ import (
 // dispatch request itself, and only once a task has already failed once.
 //
 // So this battery creates a task pointed at the receiver (see
-// conformance/receiver), configures the queue to retry almost immediately, and
+// test/conformance/receiver), configures the queue to retry almost immediately, and
 // forces a sequence of retries by having the receiver fail each attempt with a
 // different status (503, 404, 429, 500, 302) before succeeding - capturing the
 // optional headers across a range of prior status codes. Separate timeout cases
@@ -40,7 +40,7 @@ import (
 // API.
 //
 // Because dispatch requires a real network round trip to a running receiver
-// (see conformance/receiver's doc comment on why that receiver exists and how
+// (see test/conformance/receiver's doc comment on why that receiver exists and how
 // it forces the retry), this battery is driven with an explicit receiverURL
 // rather than being self-contained like the other two.
 
@@ -102,7 +102,7 @@ const (
 
 // RunDispatch executes the dispatch battery against the client and returns one
 // snapshot per case. receiverURL is the base URL of a running receiver (see
-// conformance/receiver) - either a deployed App Engine app (to record the
+// test/conformance/receiver) - either a deployed App Engine app (to record the
 // golden from real Cloud Tasks) or a local server (for hermetic emulator
 // validation). Like the other batteries, a failure at any stage is recorded as
 // data (an empty or short Attempts slice) rather than aborting the run.

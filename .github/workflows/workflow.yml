@@ -28,13 +28,13 @@ jobs:
       - name: Test
         run: go test -race ./...
       - name: Conformance tests
-        run: go -C conformance test -tags conformance ./...
+        run: go -C test/conformance test -tags conformance ./...
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       matrix:
-        module: [., conformance, docker-smoketests]
+        module: [., test/conformance, test/smoketest]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -60,11 +60,11 @@ jobs:
         uses: actions/cache@v6
         with:
           path: /tmp/smoketest-packages
-          key:  smoketests-pkgs-${{ hashFiles('docker-smoketests/go.*') }}
+          key:  smoketests-pkgs-${{ hashFiles('test/smoketest/go.*') }}
           restore-keys: |
             smoketests-pkgs
       - name: Run container smoketests
-        run:  EMULATOR_DOCKER_IMAGE=$IMAGE_NAME docker-smoketests/smoketests.sh
+        run:  EMULATOR_DOCKER_IMAGE=$IMAGE_NAME test/smoketest/smoketests.sh
   docker-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 20

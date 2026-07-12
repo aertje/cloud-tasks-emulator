@@ -7,10 +7,10 @@ either target through the **official Cloud Tasks client**
 real caller using the SDK sees (routing headers, deadlines and all), not a
 reconstruction.
 
-This is a **separate Go module** (`conformance/go.mod`) so it can depend on the
+This is a **separate Go module** (`test/conformance/go.mod`) so it can depend on the
 current client without disturbing the emulator's intentionally-pinned dependency
-graph. Run all commands below from inside the `conformance/` directory (or with
-`go -C conformance ...`).
+graph. Run all commands below from inside the `test/conformance/` directory (or with
+`go -C test/conformance ...`).
 
 One battery of deliberately-malformed RPCs runs against either target:
 
@@ -44,7 +44,7 @@ gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/cloud-platform,openid,https://www.googleapis.com/auth/userinfo.email
 gcloud services enable cloudtasks.googleapis.com --project $PROJECT
 
-cd conformance
+cd test/conformance
 go run ./cmd/record \
   -target=real -project=$PROJECT -location=us-central1 \
   -out=golden/errors.json
@@ -57,7 +57,7 @@ committing the snapshot.
 ## Validate the emulator
 
 ```sh
-cd conformance
+cd test/conformance
 go test -tags conformance ./...
 ```
 
@@ -74,7 +74,7 @@ To eyeball the emulator's current behaviour without a golden:
 
 ```sh
 go run ./cmd/emulator -port 8123 &                                  # from repo root
-cd conformance
+cd test/conformance
 go run ./cmd/record -target=emulator -addr=localhost:8123 -out=/tmp/emu.json
 ```
 
@@ -123,7 +123,7 @@ Record it against real Cloud Tasks. `FULL` view requires the
 `cloudtasks.tasks.fullView` IAM permission on the queue (owner/editor have it):
 
 ```sh
-cd conformance
+cd test/conformance
 go run ./cmd/record \
   -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
   -out=golden/happypath.json
@@ -222,7 +222,7 @@ Record it against real Cloud Tasks (needs the receiver deployed - the App Engine
 app does dispatch real task traffic, unlike the control-plane batteries):
 
 ```sh
-cd conformance/receiver && gcloud app deploy app.yaml --project=$PROJECT
+cd test/conformance/receiver && gcloud app deploy app.yaml --project=$PROJECT
 
 cd .. && go run ./cmd/record \
   -target=real -kind=dispatch -project=$PROJECT -location=us-central1 \

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aertje/cloud-tasks-emulator/conformance"
-	"github.com/aertje/cloud-tasks-emulator/conformance/receiver"
+	"github.com/aertje/cloud-tasks-emulator/test/conformance"
+	"github.com/aertje/cloud-tasks-emulator/test/conformance/receiver"
 )
 
 const (
@@ -27,7 +27,7 @@ const (
 // against it, and asserts every captured code+template matches the golden
 // snapshot recorded from the real API.
 //
-//	go test -tags conformance ./conformance/
+//	go test -tags conformance ./test/conformance/
 //
 // Skips if the golden file is absent (record it first - see cmd/record).
 func TestEmulatorErrors(t *testing.T) {
@@ -80,7 +80,7 @@ func TestEmulatorErrors(t *testing.T) {
 // golden recorded from the real API (see RunHappyPath for what each stage
 // probes, including the BASIC/FULL view division of the body).
 //
-//	go test -tags conformance ./conformance/
+//	go test -tags conformance ./test/conformance/
 //
 // Skips if the happy-path golden is absent (record it with
 // `cmd/record -kind=happypath -target=real`).
@@ -121,13 +121,13 @@ func TestEmulatorHappyPath(t *testing.T) {
 // what it observes, including the retry-only TaskPreviousResponse/TaskRetryReason
 // headers).
 //
-//	go test -tags conformance ./conformance/
+//	go test -tags conformance ./test/conformance/
 //
 // It is hermetic: a local receiver stands in for the deployed App Engine app.
 // Emulator HTTP-target tasks point straight at it, and App Engine-target tasks
 // reach it via APP_ENGINE_EMULATOR_HOST, so no real Cloud Tasks or App Engine
 // deploy is involved - only the golden was recorded from real (see
-// conformance/receiver).
+// test/conformance/receiver).
 //
 // Skips if the dispatch golden is absent (record it with
 // `cmd/record -kind=dispatch -target=real -receiver-url=...`).
@@ -171,7 +171,7 @@ func TestEmulatorDispatch(t *testing.T) {
 func startEmulator(t *testing.T, extraEnv ...string) string {
 	t.Helper()
 
-	repoRoot, err := filepath.Abs("..")
+	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}

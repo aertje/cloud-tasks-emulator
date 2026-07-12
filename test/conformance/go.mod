@@ -1,7 +1,7 @@
 // The conformance harness is its own module so its heavier client/transport
 // dependency graph (the full official Cloud Tasks client, OpenTelemetry, etc.)
 // stays isolated from the emulator's leaner parent module.
-module github.com/aertje/cloud-tasks-emulator/conformance
+module github.com/aertje/cloud-tasks-emulator/test/conformance
 
 go 1.26.4
 
@@ -9,9 +9,9 @@ go 1.26.4
 // separate so its App Engine deploy stays free of the heavy client graph). It is
 // pulled in locally so the dispatch battery and its hermetic test reuse the same
 // Capture type and handler that record the golden.
-replace github.com/aertje/cloud-tasks-emulator/conformance/receiver => ./receiver
+replace github.com/aertje/cloud-tasks-emulator/test/conformance/receiver => ./receiver
 
-require github.com/aertje/cloud-tasks-emulator/conformance/receiver v0.0.0-00010101000000-000000000000
+require github.com/aertje/cloud-tasks-emulator/test/conformance/receiver v0.0.0-00010101000000-000000000000
 
 require (
 	cloud.google.com/go/cloudtasks v1.18.0

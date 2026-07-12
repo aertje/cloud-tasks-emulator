@@ -94,7 +94,7 @@ underscores). Explicit flags take precedence over environment variables.
 | `-initial-queue` | `INITIAL_QUEUE` | (none) | Queue to create on startup. Repeat the flag for multiple queues; the env var accepts a comma-separated list. |
 | `-openid-issuer` | `OPENID_ISSUER` | (none) | Serve an OIDC discovery endpoint at this URL and use it as the JWT `iss`. See [OIDC authentication](#oidc-authentication). |
 | `-openid-signing-key` | `OPENID_SIGNING_KEY` | (baked-in dev key) | Path to a PEM-encoded RSA private key used to sign OIDC tokens. |
-| `-hard-reset-on-purge-queue` | `HARD_RESET_ON_PURGE_QUEUE` | `false` | Make `PurgeQueue` wipe all task-name history and run synchronously. See [Flushing task state](#flushing-task-state). |
+| `-hard-reset-on-purge-queue` | `HARD_RESET_ON_PURGE_QUEUE` | `false` | Make `PurgeQueue` release reserved task names immediately and run synchronously. See [Flushing task state](#flushing-task-state). |
 | `-insecure-skip-tls-verify` | `INSECURE_SKIP_TLS_VERIFY` | `false` | Skip TLS verification when dispatching to HTTPS targets. See [Skipping TLS verification](#skipping-tls-verification-for-https-targets). |
 
 For example, to configure the emulator entirely through the environment:
@@ -251,19 +251,20 @@ example that creates a queue with custom rate limits and a retry cap.
 
 ## Flushing task state
 
-By default, the emulator tracks the names of every task created since it
-launched. The list of task names survives task completion, deletion, and purge
-queue operations. Completed / removed tasks do not appear in `ListTasks`, but
-calling `GetTask` or `CreateTask` with a name that has been used in the past
-returns an error. This mirrors the behavior of Cloud Tasks - although note that,
-unlike Cloud Tasks, the emulator does not attempt to garbage collect the list of
-task names over time.
+When a task completes, is deleted, or is removed by a purge queue operation, the
+emulator reserves its name for a short cooldown rather than freeing it
+immediately. During the cooldown the task no longer appears in `ListTasks`, but
+calling `GetTask` or `CreateTask` with that name returns an error, mirroring the
+recently-deleted behavior of Cloud Tasks. Once the cooldown elapses a background
+sweep reclaims the name and it becomes reusable again. The cooldown defaults to
+one minute. (Queue names are reserved the same way.)
 
-For some use cases you may want to completely reset the list of task names
-without restarting the emulator - e.g. between scenarios in a test run.
+For some use cases you may want to release reserved names immediately - e.g.
+between scenarios in a test run - rather than waiting out the cooldown.
 
-The optional `-hard-reset-on-purge-queue` flag makes `PurgeQueue` remove all
-record of past tasks. It also switches `PurgeQueue` to be a synchronous
+The optional `-hard-reset-on-purge-queue` flag makes `PurgeQueue` drop the
+reserved names outright, so they can be reused without waiting out the cooldown.
+It also switches `PurgeQueue` to be a synchronous
 operation that only returns once all tasks have been cancelled and the queue is
 empty. Queued tasks may still fire during the `PurgeQueue` operation, but they
 cannot fire after it has returned.

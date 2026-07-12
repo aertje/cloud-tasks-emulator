@@ -42,6 +42,13 @@ type Options struct {
 	// responsible for its own transport).
 	InsecureSkipTLSVerify bool
 
+	// AppEngineHost is the base URL that App Engine target tasks route to
+	// instead of the production https://<project>.appspot.com. It exists for
+	// local development against an App Engine emulator and has no equivalent in
+	// production Cloud Tasks; leave it empty to keep the appspot.com routing.
+	// New captures it once and threads it to each queue's tasks.
+	AppEngineHost string
+
 	// TombstoneTTL is how long a deleted queue/task name stays reserved before
 	// it becomes reusable. New reads it once at construction (defaulting to
 	// defaultTombstoneTTL when zero) and drives the background sweep with it, so
@@ -96,6 +103,11 @@ type Engine struct {
 
 	// hardResetOnPurge mirrors Options.HardResetOnPurgeQueue.
 	hardResetOnPurge bool
+
+	// appEngineHost mirrors Options.AppEngineHost: the base URL App Engine
+	// target tasks route to instead of appspot.com. Empty keeps the production
+	// routing. Threaded to each queue at CreateQueue.
+	appEngineHost string
 
 	// now supplies the current time, injectable for tests.
 	now func() time.Time
@@ -156,6 +168,7 @@ func New(opts *Options) *Engine {
 		dispatcher:       dispatcher,
 		oidc:             *oidcCfg,
 		hardResetOnPurge: opts.HardResetOnPurgeQueue,
+		appEngineHost:    opts.AppEngineHost,
 		now:              now,
 		ttl:              ttl,
 		logger:           logger,
@@ -397,7 +410,7 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, func(task *Task) {
+	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineHost, func(task *Task) {
 		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)

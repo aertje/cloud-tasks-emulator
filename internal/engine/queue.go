@@ -66,6 +66,11 @@ type Queue struct {
 	// unset). Never nil for a live queue.
 	logger *slog.Logger
 
+	// appEngineHost is the base URL App Engine target tasks on this queue route
+	// to instead of appspot.com. Threaded down from the engine; empty keeps the
+	// production appspot.com routing.
+	appEngineHost string
+
 	// ctx bounds the lifetime of in-flight dispatches on this queue; cancel is
 	// called exactly once, by Delete, to abort any HTTP requests still in
 	// flight. It is deliberately not derived from a gRPC request context: the
@@ -75,7 +80,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, appEngineHost string, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,6 +95,7 @@ func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logg
 		oidcCfg:                oidcCfg,
 		dispatcher:             dispatcher,
 		logger:                 logger,
+		appEngineHost:          appEngineHost,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
 		stopAll:                make(chan struct{}),

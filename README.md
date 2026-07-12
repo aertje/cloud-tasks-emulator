@@ -96,6 +96,7 @@ underscores). Explicit flags take precedence over environment variables.
 | `-openid-signing-key` | `OPENID_SIGNING_KEY` | (baked-in dev key) | Path to a PEM-encoded RSA private key used to sign OIDC tokens. |
 | `-hard-reset-on-purge-queue` | `HARD_RESET_ON_PURGE_QUEUE` | `false` | Make `PurgeQueue` release reserved task names immediately and run synchronously. See [Flushing task state](#flushing-task-state). |
 | `-insecure-skip-tls-verify` | `INSECURE_SKIP_TLS_VERIFY` | `false` | Skip TLS verification when dispatching to HTTPS targets. See [Skipping TLS verification](#skipping-tls-verification-for-https-targets). |
+| `-app-engine-emulator-host` | `APP_ENGINE_EMULATOR_HOST` | (none) | Base URL that App Engine target tasks route to instead of `https://<project>.appspot.com`. See [App Engine](#app-engine). |
 
 For example, to configure the emulator entirely through the environment:
 
@@ -134,10 +135,11 @@ See [EXAMPLES.md](./EXAMPLES.md#embedding-in-go-tests) for a full test example.
 
 To make calls to a local
 [App Engine emulator](https://cloud.google.com/appengine/docs/standard/python3/testing-and-deploying-your-app#local-dev-server)
-instance, set the appropriate environment variable, e.g.:
+instance, point App Engine target tasks at it with the
+`-app-engine-emulator-host` flag (or its `APP_ENGINE_EMULATOR_HOST` env var), e.g.:
 
 ```sh
-export APP_ENGINE_EMULATOR_HOST=http://localhost:8080
+go run ./cmd/emulator -app-engine-emulator-host http://localhost:8080
 ```
 
 ### Targeting services
@@ -149,7 +151,7 @@ while the task emulator targets subdomains when a service is specified (e.g.
 workarounds:
 
 - Use a proxy that maps the subdomain to the right destination, and set
-  `APP_ENGINE_EMULATOR_HOST` to match the proxy. A straightforward way is to
+  `-app-engine-emulator-host` to match the proxy. A straightforward way is to
   leverage docker-compose networking to route task emulator traffic through an
   nginx instance and pass it on to the container(s) running the App Engine
   service(s). I.e. target `http://worker.my-proxy`.
@@ -161,7 +163,7 @@ The following also work, but are not recommended as they will likely result in
 different code for local testing versus cloud deployment:
 
 - If you are only targeting one App Engine service, set
-  `APP_ENGINE_EMULATOR_HOST` to match that service. I.e. target
+  `-app-engine-emulator-host` to match that service. I.e. target
   `http://localhost:8081`.
 - Use `http_request` instead of `app_engine_http_request` and specify the
   target URL directly. I.e. target `http://localhost:8081`.

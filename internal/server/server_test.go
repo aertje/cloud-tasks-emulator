@@ -642,11 +642,10 @@ func TestSuccessTaskExecution(t *testing.T) {
 }
 
 func TestSuccessAppEngineTaskExecution(t *testing.T) {
-	// Not parallel: it sets the process-wide APP_ENGINE_EMULATOR_HOST env var.
-	_, client := setUp(t, ServerOptions{})
+	t.Parallel()
 
 	target := startTestServer(t)
-	t.Setenv("APP_ENGINE_EMULATOR_HOST", target.URL)
+	_, client := setUp(t, ServerOptions{AppEngineHost: target.URL})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -690,11 +689,10 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 // rather than being dispatched alongside it. Real Cloud Tasks emits a single
 // Content-Type honouring the caller's value (see conformance/golden/headers.json).
 func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
-	// Not parallel: it sets the process-wide APP_ENGINE_EMULATOR_HOST env var.
-	_, client := setUp(t, ServerOptions{})
+	t.Parallel()
 
 	target := startTestServer(t)
-	t.Setenv("APP_ENGINE_EMULATOR_HOST", target.URL)
+	_, client := setUp(t, ServerOptions{AppEngineHost: target.URL})
 
 	createdQueue := createTestQueue(t, client)
 

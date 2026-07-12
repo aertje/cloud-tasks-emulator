@@ -4,7 +4,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -95,7 +94,7 @@ type Task struct {
 
 // newTask creates a new task for the specified queue
 func newTask(queue *Queue, taskState TaskState, onDone func(task *Task)) *Task {
-	setInitialTaskState(&taskState, queue.name)
+	setInitialTaskState(&taskState, queue.name, queue.appEngineHost)
 
 	return &Task{
 		queue:  queue,
@@ -139,7 +138,11 @@ func hasHeaderFold(headers map[string]string, name string) bool {
 	return false
 }
 
-func setInitialTaskState(s *TaskState, queueName string) {
+// setInitialTaskState fills in the server-assigned defaults on a freshly created
+// task. appEngineHost is the base URL App Engine target tasks route to instead
+// of the production appspot.com host; an empty value keeps the appspot.com
+// routing.
+func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		s.Name = queueName + "/tasks/" + taskID
@@ -197,9 +200,7 @@ func setInitialTaskState(s *TaskState, queueName string) {
 		if ae.AppEngineRouting.Host == "" {
 			var host, domainSeparator string
 
-			emulatorHost := os.Getenv("APP_ENGINE_EMULATOR_HOST")
-
-			if emulatorHost == "" {
+			if appEngineHost == "" {
 				// TODO: the new route format for appengine is <PROJECT_ID>.<REGION_ID>.r.appspot.com
 				// TODO: support custom domains
 				// https://cloud.google.com/appengine/docs/standard/python/how-requests-are-routed
@@ -207,7 +208,7 @@ func setInitialTaskState(s *TaskState, queueName string) {
 				host = "https://" + parts.project + ".appspot.com"
 				domainSeparator = "-dot-"
 			} else {
-				host = emulatorHost
+				host = appEngineHost
 				domainSeparator = "."
 			}
 

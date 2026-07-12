@@ -594,11 +594,11 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		// its task ID must be valid, it must belong to this queue, and it must
 		// be unique. A malformed name and a well-formed name carrying an illegal
 		// task ID are distinct errors (real Cloud Tasks reports them differently).
-		taskID, structured := splitTaskName(ts.Name)
+		parts, structured := parseTaskName(ts.Name)
 		if !structured {
 			return nil, TaskState{}, ErrInvalidTaskName
 		}
-		if !isValidTaskID(taskID) {
+		if !isValidTaskID(parts.taskId) {
 			return nil, TaskState{}, ErrInvalidTaskID
 		}
 		if !strings.HasPrefix(ts.Name, parent+"/tasks/") {

@@ -12,27 +12,24 @@ import (
 )
 
 var (
-	taskNameRE *regexp.Regexp
-
-	// taskNameStructureRE matches the resource-name shape of a task without
-	// constraining the task-ID charset: the trailing capture is the task ID,
-	// validated separately by taskIDRE. This lets a structurally-valid name
-	// carrying an illegal ID be told apart from a malformed name - real Cloud
-	// Tasks reports those two cases with different messages.
-	taskNameStructureRE = regexp.MustCompile(`^projects/[a-zA-Z0-9:.-]+/locations/[a-zA-Z0-9-]+/queues/[a-zA-Z0-9-]+/tasks/(.+)$`)
+	// taskNameRE matches the resource-name shape of a task and captures its four
+	// segments. The task-ID capture is deliberately lenient ((.+)) rather than
+	// charset-constrained: a structurally-valid name carrying an illegal ID is
+	// captured rather than rejected, so callers can tell it apart from a
+	// malformed name and report the offending value. Validate the ID separately
+	// with isValidTaskID. Real Cloud Tasks reports those two cases with different
+	// messages.
+	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
+	taskNameRE = regexp.MustCompile(`^projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/(.+)$`)
 
 	// taskIDRE matches a syntactically valid task ID.
 	taskIDRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,500}$`)
 )
 
-func init() {
-	// Format requirements as per https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name
-	taskNameRE = regexp.MustCompile("projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)/tasks/([a-zA-Z0-9_-]+)")
-}
-
 // parseTaskName splits a task resource name into its parts. ok is false when
 // the name does not match the required structure, so callers can avoid a
-// nil-index panic on the submatch slice.
+// nil-index panic on the submatch slice. The captured taskId may contain
+// illegal characters; validate it with isValidTaskID when that matters.
 func parseTaskName(name string) (TaskNameParts, bool) {
 	matches := taskNameRE.FindStringSubmatch(name)
 	if matches == nil {
@@ -44,18 +41,6 @@ func parseTaskName(name string) (TaskNameParts, bool) {
 		queueId:  matches[3],
 		taskId:   matches[4],
 	}, true
-}
-
-// splitTaskName returns the task-ID segment of a task resource name and whether
-// the name has the required projects/.../queues/.../tasks/<id> structure. The
-// ID is returned even when it contains illegal characters so the caller can
-// report the offending value; validate it with isValidTaskID.
-func splitTaskName(name string) (taskID string, structured bool) {
-	m := taskNameStructureRE.FindStringSubmatch(name)
-	if m == nil {
-		return "", false
-	}
-	return m[1], true
 }
 
 func isValidTaskID(id string) bool {

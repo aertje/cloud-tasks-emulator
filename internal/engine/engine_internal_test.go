@@ -150,10 +150,11 @@ func httpTaskState(name string, schedule time.Time) TaskState {
 
 func TestParseTaskName(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantOK  bool
-		wantIDs TaskNameParts
+		name        string
+		input       string
+		wantOK      bool
+		wantIDs     TaskNameParts
+		wantValidID bool
 	}{
 		{
 			name:   "valid",
@@ -165,6 +166,22 @@ func TestParseTaskName(t *testing.T) {
 				queueId:  "que",
 				taskId:   "tsk",
 			},
+			wantValidID: true,
+		},
+		{
+			// A structurally-valid name carrying an illegal task ID parses (the
+			// ID is captured leniently) but fails isValidTaskID, so the caller
+			// can distinguish it from a malformed name.
+			name:   "illegal id chars",
+			input:  testParent + "/tasks/not a valid id",
+			wantOK: true,
+			wantIDs: TaskNameParts{
+				project:  "p",
+				location: "l",
+				queueId:  "q",
+				taskId:   "not a valid id",
+			},
+			wantValidID: false,
 		},
 		{name: "empty", input: "", wantOK: false},
 		{name: "missing tasks segment", input: "projects/p/locations/l/queues/q", wantOK: false},
@@ -176,30 +193,7 @@ func TestParseTaskName(t *testing.T) {
 			assert.Equal(t, tc.wantOK, ok)
 			if tc.wantOK {
 				assert.Equal(t, tc.wantIDs, got)
-			}
-		})
-	}
-}
-
-func TestSplitAndValidateTaskID(t *testing.T) {
-	tests := []struct {
-		name           string
-		input          string
-		wantStructured bool
-		wantID         string
-		wantValidID    bool
-	}{
-		{name: "valid", input: testParent + "/tasks/abc-123_ID", wantStructured: true, wantID: "abc-123_ID", wantValidID: true},
-		{name: "illegal id chars", input: testParent + "/tasks/not a valid id", wantStructured: true, wantID: "not a valid id", wantValidID: false},
-		{name: "malformed", input: "is-this-a-name", wantStructured: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			id, structured := splitTaskName(tc.input)
-			assert.Equal(t, tc.wantStructured, structured)
-			if tc.wantStructured {
-				assert.Equal(t, tc.wantID, id)
-				assert.Equal(t, tc.wantValidID, isValidTaskID(id))
+				assert.Equal(t, tc.wantValidID, isValidTaskID(got.taskId))
 			}
 		})
 	}

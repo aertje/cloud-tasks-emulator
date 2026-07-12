@@ -89,22 +89,22 @@ func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logg
 		name:                   state.Name,
 		state:                  state,
 		fire:                   make(chan *Task),
-		sem:                    make(chan struct{}, int(state.RateLimits.MaxConcurrentDispatches)),
+		sem:                    make(chan struct{}, int(state.RateLimits.MaxConcurrentDispatches.OrZero())),
 		ts:                     make(map[string]*Task),
 		onTaskDone:             onTaskDone,
 		oidcCfg:                oidcCfg,
 		dispatcher:             dispatcher,
 		logger:                 logger,
 		appEngineHost:          appEngineHost,
-		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize),
-		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond,
+		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize.OrZero()),
+		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond.OrZero(),
 		stopAll:                make(chan struct{}),
 		stopDispatch:           make(chan struct{}),
 		ctx:                    ctx,
 		cancel:                 cancel,
 	}
 	// Fill the token bucket
-	for i := 0; i < int(state.RateLimits.MaxBurstSize); i++ {
+	for i := 0; i < int(state.RateLimits.MaxBurstSize.OrZero()); i++ {
 		queue.tokenBucket <- true
 	}
 
@@ -141,28 +141,14 @@ func (queue *Queue) retireTask(task *Task) {
 }
 
 func setInitialQueueState(s *QueueState) {
-	if s.RateLimits.MaxDispatchesPerSecond == 0 {
-		s.RateLimits.MaxDispatchesPerSecond = 500.0
-	}
-	if s.RateLimits.MaxBurstSize == 0 {
-		s.RateLimits.MaxBurstSize = 100
-	}
-	if s.RateLimits.MaxConcurrentDispatches == 0 {
-		s.RateLimits.MaxConcurrentDispatches = 1000
-	}
+	s.RateLimits.MaxDispatchesPerSecond = s.RateLimits.MaxDispatchesPerSecond.Or(500.0)
+	s.RateLimits.MaxBurstSize = s.RateLimits.MaxBurstSize.Or(100)
+	s.RateLimits.MaxConcurrentDispatches = s.RateLimits.MaxConcurrentDispatches.Or(1000)
 
-	if s.RetryConfig.MaxAttempts == 0 {
-		s.RetryConfig.MaxAttempts = 100
-	}
-	if s.RetryConfig.MaxDoublings == 0 {
-		s.RetryConfig.MaxDoublings = 16
-	}
-	if s.RetryConfig.MinBackoff == 0 {
-		s.RetryConfig.MinBackoff = 100 * time.Millisecond
-	}
-	if s.RetryConfig.MaxBackoff == 0 {
-		s.RetryConfig.MaxBackoff = 3600 * time.Second
-	}
+	s.RetryConfig.MaxAttempts = s.RetryConfig.MaxAttempts.Or(100)
+	s.RetryConfig.MaxDoublings = s.RetryConfig.MaxDoublings.Or(16)
+	s.RetryConfig.MinBackoff = s.RetryConfig.MinBackoff.Or(100 * time.Millisecond)
+	s.RetryConfig.MaxBackoff = s.RetryConfig.MaxBackoff.Or(3600 * time.Second)
 
 	s.State = QueueRunStateRunning
 }

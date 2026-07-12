@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
@@ -47,18 +48,23 @@ var (
 )
 
 // addOptionalRetryHeaders adds the two retry-only dispatch headers to injected,
-// keyed off how the previous attempt failed. previousResponseCode is the prior
-// attempt's raw HTTP status: >0 means it returned that status; <0 means it got
-// no response (a transport failure or dispatch-deadline timeout); 0 means there
-// was no previous attempt (the first dispatch), so nothing is added. Only the
-// no-response case was captured as a timeout; other no-response modes (e.g. a
-// refused connection) are unobserved and treated the same.
-func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, previousResponseCode int) {
+// keyed off how the previous attempt failed. previous is the prior attempt's
+// raw HTTP status: a positive value means it returned that status; a negative
+// value means it got no response (a transport failure or dispatch-deadline
+// timeout); an absent value means there was no previous attempt (the first
+// dispatch), so nothing is added. Only the no-response case was captured as a
+// timeout; other no-response modes (e.g. a refused connection) are unobserved
+// and treated the same.
+func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, previous maybe.Maybe[int]) {
+	code, ok := previous.Get()
+	if !ok {
+		return
+	}
 	switch {
-	case previousResponseCode > 0:
-		injected[p.prefix+"TaskPreviousResponse"] = strconv.Itoa(previousResponseCode)
+	case code > 0:
+		injected[p.prefix+"TaskPreviousResponse"] = strconv.Itoa(code)
 		injected[p.prefix+"TaskRetryReason"] = p.responseReason
-	case previousResponseCode < 0:
+	case code < 0:
 		injected[p.prefix+"TaskPreviousResponse"] = p.timeoutPrevious
 		injected[p.prefix+"TaskRetryReason"] = p.timeoutReason
 	}
@@ -70,10 +76,10 @@ func updateStateForReschedule(task *Task) {
 
 	retryConfig := task.queue.state.RetryConfig
 
-	doubling := min(task.state.DispatchCount-1, retryConfig.MaxDoublings)
-	backoff := min(retryConfig.MinBackoff*time.Duration(1<<uint32(doubling)), retryConfig.MaxBackoff)
+	doubling := min(task.state.DispatchCount-1, retryConfig.MaxDoublings.OrZero())
+	backoff := min(retryConfig.MinBackoff.OrZero()*time.Duration(1<<uint32(doubling)), retryConfig.MaxBackoff.OrZero())
 
-	task.state.ScheduleTime = task.state.ScheduleTime.Add(backoff)
+	task.state.ScheduleTime = maybe.Some(task.state.ScheduleTime.OrZero().Add(backoff))
 }
 
 func updateStateForDispatch(task *Task) TaskState {
@@ -84,23 +90,24 @@ func updateStateForDispatch(task *Task) TaskState {
 
 	// Capture the previous attempt's response code before its Attempt is
 	// overwritten below, so this dispatch can report it via
-	// X-*-TaskPreviousResponse (retries only).
-	previousResponseCode := 0
-	if prev := task.state.LastAttempt; prev != nil {
+	// X-*-TaskPreviousResponse (retries only). Absent when there was no previous
+	// attempt (the first dispatch).
+	previousResponseCode := maybe.None[int]()
+	if prev, ok := task.state.LastAttempt.Get(); ok {
 		previousResponseCode = prev.ResponseCode
 	}
 
-	task.state.LastAttempt = &Attempt{
+	task.state.LastAttempt = maybe.Some(Attempt{
 		ScheduleTime: task.state.ScheduleTime,
-		DispatchTime: dispatchTime,
-	}
+		DispatchTime: maybe.Some(dispatchTime),
+	})
 
 	task.state.DispatchCount++
 
-	if task.state.FirstAttempt == nil {
-		task.state.FirstAttempt = &Attempt{
-			DispatchTime: dispatchTime,
-		}
+	if !task.state.FirstAttempt.IsPresent() {
+		task.state.FirstAttempt = maybe.Some(Attempt{
+			DispatchTime: maybe.Some(dispatchTime),
+		})
 	}
 
 	// PreviousResponseCode rides on the returned snapshot only, not the retained
@@ -117,17 +124,18 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	rpcCode := toRPCStatusCode(statusCode)
 	rpcCodeName := toCodeName(rpcCode)
 
-	// Copy-on-write: publish a fresh Attempt rather than mutating the one already
-	// handed out through State() snapshots, whose *Attempt is shared shallowly
-	// and read (unlocked) by the gRPC edge via taskToProto.
-	attempt := *task.state.LastAttempt
-	attempt.ResponseTime = time.Now()
-	attempt.ResponseCode = statusCode
-	attempt.ResponseStatus = &AttemptStatus{
+	// Complete the in-flight LastAttempt with its response fields. LastAttempt is
+	// a value-typed Maybe, so State() snapshots already hold their own copy of the
+	// Attempt; storing the completed value here cannot mutate a snapshot the gRPC
+	// edge is reading (unlocked) via taskToProto.
+	attempt := task.state.LastAttempt.OrZero()
+	attempt.ResponseTime = maybe.Some(time.Now())
+	attempt.ResponseCode = maybe.Some(statusCode)
+	attempt.ResponseStatus = maybe.Some(AttemptStatus{
 		Code:    rpcCode,
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
-	}
-	task.state.LastAttempt = &attempt
+	})
+	task.state.LastAttempt = maybe.Some(attempt)
 
 	// Only an attempt that actually received an HTTP response counts: a transport
 	// failure or dispatch-deadline timeout (statusCode < 0) received none. This
@@ -158,7 +166,7 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 
 	task.stateMutex.Lock()
 	dispatchCount := task.state.DispatchCount
-	maxAttempts := task.queue.state.RetryConfig.MaxAttempts
+	maxAttempts := task.queue.state.RetryConfig.MaxAttempts.OrZero()
 	task.stateMutex.Unlock()
 
 	if dispatchCount >= maxAttempts {
@@ -223,7 +231,7 @@ func insecureTransport() *http.Transport {
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
 func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger *slog.Logger, transport http.RoundTripper) int {
-	client := &http.Client{Timeout: state.DispatchDeadline, Transport: transport}
+	client := &http.Client{Timeout: state.DispatchDeadline.OrZero(), Transport: transport}
 
 	nameParts, ok := parseTaskName(state.Name)
 	if !ok {
@@ -239,7 +247,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 	// response (state.ResponseCount). See TaskState.ExecutionCount.
 	headerHTTPExecutionCount := fmt.Sprintf("%v", state.ExecutionCount)
 	headerAppEngineExecutionCount := fmt.Sprintf("%v", state.ResponseCount)
-	headerTaskETA := fmt.Sprintf("%f", float64(state.ScheduleTime.UnixNano())/1e9)
+	headerTaskETA := fmt.Sprintf("%f", float64(state.ScheduleTime.OrZero().UnixNano())/1e9)
 
 	var (
 		method     string
@@ -250,11 +258,12 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 	)
 
 	switch {
-	case state.HTTPRequest != nil:
-		method = state.HTTPRequest.Method
-		url = state.HTTPRequest.URL
-		body = state.HTTPRequest.Body
-		srcHeaders = state.HTTPRequest.Headers
+	case state.HTTPRequest.IsPresent():
+		hr, _ := state.HTTPRequest.Get()
+		method = hr.Method.OrZero()
+		url = hr.URL
+		body = hr.Body
+		srcHeaders = hr.Headers
 
 		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
 		injected = map[string]string{
@@ -267,7 +276,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		}
 		addOptionalRetryHeaders(injected, httpRetryPolicy, state.PreviousResponseCode)
 
-		if auth := state.HTTPRequest.OIDCToken; auth != nil {
+		if auth, ok := hr.OIDCToken.Get(); ok {
 			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
 			if err != nil {
 				logger.Error("dispatch: create OIDC token", "task", state.Name, "err", err)
@@ -275,11 +284,11 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 			}
 			injected["Authorization"] = "Bearer " + tokenStr
 		}
-	case state.AppEngineHTTPRequest != nil:
-		ae := state.AppEngineHTTPRequest
+	case state.AppEngineHTTPRequest.IsPresent():
+		ae, _ := state.AppEngineHTTPRequest.Get()
 
-		method = ae.Method
-		url = ae.AppEngineRouting.Host + ae.RelativeURI
+		method = ae.Method.OrZero()
+		url = ae.AppEngineRouting.OrZero().Host + ae.RelativeURI.OrZero()
 		body = ae.Body
 		srcHeaders = ae.Headers
 

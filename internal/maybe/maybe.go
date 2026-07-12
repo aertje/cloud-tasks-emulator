@@ -30,6 +30,17 @@ func OfPtr[T any](p *T) Maybe[T] {
 	return Some(*p)
 }
 
+// OfNonZero returns Some(v) unless v is the zero value of T, in which case it
+// returns None. It bridges APIs that overload a zero value to mean "absent"
+// (such as proto3 scalar fields) into a Maybe.
+func OfNonZero[T comparable](v T) Maybe[T] {
+	var zero T
+	if v == zero {
+		return None[T]()
+	}
+	return Some(v)
+}
+
 // IsPresent reports whether a value is present.
 func (m Maybe[T]) IsPresent() bool {
 	return m.present
@@ -47,6 +58,16 @@ func (m Maybe[T]) OrElse(def T) T {
 		return m.value
 	}
 	return def
+}
+
+// Or returns m if it is present, otherwise Some(def). Unlike OrElse it keeps the
+// result wrapped, so it reads as "fill in a default when absent" (e.g. applying
+// a server-assigned default to an optional field).
+func (m Maybe[T]) Or(def T) Maybe[T] {
+	if m.present {
+		return m
+	}
+	return Some(def)
 }
 
 // OrZero returns the contained value if present, otherwise the zero value of T.

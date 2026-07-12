@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 )
 
 var (
@@ -102,9 +104,11 @@ func (task *Task) markDone() {
 
 // State returns a snapshot of the task state.
 //
-// Note: TaskState is a value type but contains pointers (HTTPRequest /
-// AppEngineHTTPRequest / Attempt / Headers map), so the snapshot is shallow.
-// Callers that need a deep copy should round-trip via taskToProto at the edge.
+// Note: TaskState and its Maybe-wrapped members (HTTPRequest /
+// AppEngineHTTPRequest / Attempt) are value types and copy by value, but the
+// Headers map and Body slice they carry are references, so the snapshot is
+// shallow. Callers that need a deep copy should round-trip via taskToProto at
+// the edge.
 func (t *Task) State() TaskState {
 	t.stateMutex.Lock()
 	defer t.stateMutex.Unlock()
@@ -134,31 +138,26 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 	}
 
 	// Cloud only sets whole-second precision on CreateTime.
-	s.CreateTime = time.Unix(time.Now().Unix(), 0)
+	s.CreateTime = maybe.Some(time.Unix(time.Now().Unix(), 0))
 
-	if s.ScheduleTime.IsZero() {
-		s.ScheduleTime = time.Now()
-	}
-	if s.DispatchDeadline == 0 {
-		s.DispatchDeadline = 600 * time.Second
-	}
+	s.ScheduleTime = s.ScheduleTime.Or(time.Now())
+	s.DispatchDeadline = s.DispatchDeadline.Or(600 * time.Second)
 
-	if s.HTTPRequest != nil {
-		if s.HTTPRequest.Method == "" {
-			s.HTTPRequest.Method = http.MethodPost
-		}
-		if s.HTTPRequest.Headers == nil {
-			s.HTTPRequest.Headers = make(map[string]string)
+	// HTTPRequest / AppEngineHTTPRequest are value-typed Maybes, so their
+	// defaults are applied to a copy pulled out with Get and stored back with
+	// Some rather than mutated in place.
+	if hr, ok := s.HTTPRequest.Get(); ok {
+		hr.Method = hr.Method.Or(http.MethodPost)
+		if hr.Headers == nil {
+			hr.Headers = make(map[string]string)
 		}
 		// Cloud Tasks overrides any caller-supplied User-Agent.
-		s.HTTPRequest.Headers["User-Agent"] = "Google-Cloud-Tasks"
+		hr.Headers["User-Agent"] = "Google-Cloud-Tasks"
+		s.HTTPRequest = maybe.Some(hr)
 	}
 
-	if s.AppEngineHTTPRequest != nil {
-		ae := s.AppEngineHTTPRequest
-		if ae.Method == "" {
-			ae.Method = http.MethodPost
-		}
+	if ae, ok := s.AppEngineHTTPRequest.Get(); ok {
+		ae.Method = ae.Method.Or(http.MethodPost)
 		if ae.Headers == nil {
 			ae.Headers = make(map[string]string)
 		}
@@ -178,11 +177,10 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 			ae.Headers["Content-Length"] = strconv.Itoa(len(ae.Body))
 		}
 
-		if ae.AppEngineRouting == nil {
-			ae.AppEngineRouting = &AppEngineRouting{}
-		}
-
-		if ae.AppEngineRouting.Host == "" {
+		// Routing is always present on a stored AppEngine task; an absent one
+		// defaults to the zero routing, whose Host is then filled in below.
+		routing := ae.AppEngineRouting.OrZero()
+		if routing.Host == "" {
 			var host, domainSeparator string
 
 			if appEngineHost == "" {
@@ -202,22 +200,22 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 				panic(err)
 			}
 
-			if ae.AppEngineRouting.Service != "" {
-				hostURL.Host = ae.AppEngineRouting.Service + domainSeparator + hostURL.Host
+			if routing.Service != "" {
+				hostURL.Host = routing.Service + domainSeparator + hostURL.Host
 			}
-			if ae.AppEngineRouting.Version != "" {
-				hostURL.Host = ae.AppEngineRouting.Version + domainSeparator + hostURL.Host
+			if routing.Version != "" {
+				hostURL.Host = routing.Version + domainSeparator + hostURL.Host
 			}
-			if ae.AppEngineRouting.Instance != "" {
-				hostURL.Host = ae.AppEngineRouting.Instance + domainSeparator + hostURL.Host
+			if routing.Instance != "" {
+				hostURL.Host = routing.Instance + domainSeparator + hostURL.Host
 			}
 
-			ae.AppEngineRouting.Host = hostURL.String()
+			routing.Host = hostURL.String()
 		}
+		ae.AppEngineRouting = maybe.Some(routing)
 
-		if ae.RelativeURI == "" {
-			ae.RelativeURI = "/"
-		}
+		ae.RelativeURI = ae.RelativeURI.Or("/")
+		s.AppEngineHTTPRequest = maybe.Some(ae)
 	}
 }
 
@@ -250,7 +248,7 @@ func (task *Task) Delete() {
 // It is initially called by the queue, later by the task reschedule.
 func (task *Task) Schedule() {
 	task.stateMutex.Lock()
-	scheduleTime := task.state.ScheduleTime
+	scheduleTime := task.state.ScheduleTime.OrZero()
 	task.stateMutex.Unlock()
 
 	fromNow := time.Until(scheduleTime)

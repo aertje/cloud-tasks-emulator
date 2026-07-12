@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestDispatchConcurrencyIsBounded(t *testing.T) {
 		Name: testParent,
 		// A generous rate limit so the token bucket, a separate axis, does not
 		// throttle the backlog and mask the concurrency bound under test.
-		RateLimits: RateLimits{MaxConcurrentDispatches: maxConcurrent, MaxBurstSize: 100, MaxDispatchesPerSecond: 1000},
+		RateLimits: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](maxConcurrent), MaxBurstSize: maybe.Some[int32](100), MaxDispatchesPerSecond: maybe.Some[float64](1000)},
 	})
 	require.NoError(t, err)
 

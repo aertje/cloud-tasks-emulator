@@ -1,6 +1,18 @@
 package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
+)
+
+// Optionality convention for the state types below: a maybe.Maybe[T] marks a
+// value that may be genuinely absent - an unset input still awaiting a
+// server-assigned default, or state a task has not reached yet (e.g. the
+// response of an attempt still in flight). Values that always carry a meaning
+// within a present parent stay plain: counters, names, the queue-run enum, and
+// the request scalars whose empty value already reads as "unset" and are
+// defaulted at creation (Method, URL, RelativeURI, Headers, Body).
 
 // QueueRunState mirrors tasks.Queue_State but lives in the engine layer.
 type QueueRunState int
@@ -12,19 +24,21 @@ const (
 	QueueRunStateDisabled
 )
 
-// RateLimits holds the per-queue dispatch rate configuration.
+// RateLimits holds the per-queue dispatch rate configuration. Each field is a
+// Maybe: absent means "apply the server default" (see setInitialQueueState).
 type RateLimits struct {
-	MaxDispatchesPerSecond  float64
-	MaxBurstSize            int32
-	MaxConcurrentDispatches int32
+	MaxDispatchesPerSecond  maybe.Maybe[float64]
+	MaxBurstSize            maybe.Maybe[int32]
+	MaxConcurrentDispatches maybe.Maybe[int32]
 }
 
-// RetryConfig holds the per-queue retry/backoff configuration.
+// RetryConfig holds the per-queue retry/backoff configuration. Each field is a
+// Maybe: absent means "apply the server default" (see setInitialQueueState).
 type RetryConfig struct {
-	MaxAttempts  int32
-	MaxDoublings int32
-	MinBackoff   time.Duration
-	MaxBackoff   time.Duration
+	MaxAttempts  maybe.Maybe[int32]
+	MaxDoublings maybe.Maybe[int32]
+	MinBackoff   maybe.Maybe[time.Duration]
+	MaxBackoff   maybe.Maybe[time.Duration]
 }
 
 // QueueState is the engine's view of a queue. Proto<->QueueState mapping
@@ -37,12 +51,15 @@ type QueueState struct {
 }
 
 // TaskState is the engine's view of a task. Exactly one of HTTPRequest /
-// AppEngineHTTPRequest is non-nil for any live task.
+// AppEngineHTTPRequest is present for any live task.
 type TaskState struct {
-	Name             string
-	CreateTime       time.Time
-	ScheduleTime     time.Time
-	DispatchDeadline time.Duration
+	Name string
+	// CreateTime, ScheduleTime and DispatchDeadline are absent on a task-creation
+	// input and filled with server-assigned values by setInitialTaskState, after
+	// which they are always present on a live task.
+	CreateTime       maybe.Maybe[time.Time]
+	ScheduleTime     maybe.Maybe[time.Time]
+	DispatchDeadline maybe.Maybe[time.Duration]
 
 	DispatchCount int32
 	// ResponseCount counts attempts that received an HTTP response - a transport
@@ -56,29 +73,32 @@ type TaskState struct {
 	ExecutionCount int32
 
 	// PreviousResponseCode is the raw HTTP status of the previous attempt. It is
-	// populated only on the snapshot returned by updateStateForDispatch (0 on the
-	// first attempt, or when the previous attempt received no HTTP response) and
-	// feeds the retry-only X-*-TaskPreviousResponse dispatch header.
-	PreviousResponseCode int
+	// populated only on the snapshot returned by updateStateForDispatch (absent on
+	// the first attempt, or when the previous attempt received no HTTP response)
+	// and feeds the retry-only X-*-TaskPreviousResponse dispatch header.
+	PreviousResponseCode maybe.Maybe[int]
 
-	FirstAttempt *Attempt
-	LastAttempt  *Attempt
+	FirstAttempt maybe.Maybe[Attempt]
+	LastAttempt  maybe.Maybe[Attempt]
 
-	HTTPRequest          *HTTPRequest
-	AppEngineHTTPRequest *AppEngineHTTPRequest
+	HTTPRequest          maybe.Maybe[HTTPRequest]
+	AppEngineHTTPRequest maybe.Maybe[AppEngineHTTPRequest]
 }
 
-// Attempt records a single dispatch attempt against a task target.
+// Attempt records a single dispatch attempt against a task target. The response
+// fields (ResponseTime, ResponseStatus, ResponseCode) are absent until the
+// attempt has completed.
 type Attempt struct {
-	ScheduleTime   time.Time
-	DispatchTime   time.Time
-	ResponseTime   time.Time
-	ResponseStatus *AttemptStatus
+	ScheduleTime   maybe.Maybe[time.Time]
+	DispatchTime   maybe.Maybe[time.Time]
+	ResponseTime   maybe.Maybe[time.Time]
+	ResponseStatus maybe.Maybe[AttemptStatus]
 	// ResponseCode is the raw HTTP status the target returned for this attempt
-	// (e.g. 503), or 0 when no HTTP response was received (transport failure). It
-	// is kept alongside the RPC-coded ResponseStatus so the next dispatch can
-	// report it via X-*-TaskPreviousResponse.
-	ResponseCode int
+	// (e.g. 503), or a negative marker when no HTTP response was received
+	// (transport failure). It is absent until the attempt completes. It is kept
+	// alongside the RPC-coded ResponseStatus so the next dispatch can report it
+	// via X-*-TaskPreviousResponse.
+	ResponseCode maybe.Maybe[int]
 }
 
 // AttemptStatus is the gRPC-style status of a dispatch attempt.
@@ -88,14 +108,15 @@ type AttemptStatus struct {
 	Message string
 }
 
-// HTTPRequest is the engine view of a Cloud Tasks HTTP target.
-// Method is the uppercase HTTP verb (e.g. "POST"); empty means unspecified.
+// HTTPRequest is the engine view of a Cloud Tasks HTTP target. Method is the
+// uppercase HTTP verb (e.g. "POST"); absent means unspecified and is defaulted
+// to POST at creation.
 type HTTPRequest struct {
 	URL       string
-	Method    string
+	Method    maybe.Maybe[string]
 	Headers   map[string]string
 	Body      []byte
-	OIDCToken *OIDCToken
+	OIDCToken maybe.Maybe[OIDCToken]
 }
 
 // OIDCToken describes the OIDC credentials to mint for the HTTP target.
@@ -104,11 +125,13 @@ type OIDCToken struct {
 	Audience            string
 }
 
-// AppEngineHTTPRequest is the engine view of an App Engine target.
+// AppEngineHTTPRequest is the engine view of an App Engine target. Method
+// (absent defaults to POST) and RelativeURI (absent defaults to "/") are filled
+// in at creation.
 type AppEngineHTTPRequest struct {
-	Method           string
-	AppEngineRouting *AppEngineRouting
-	RelativeURI      string
+	Method           maybe.Maybe[string]
+	AppEngineRouting maybe.Maybe[AppEngineRouting]
+	RelativeURI      maybe.Maybe[string]
 	Headers          map[string]string
 	Body             []byte
 }

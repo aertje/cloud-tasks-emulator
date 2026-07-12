@@ -1,0 +1,21 @@
+# App Engine deploy config for the dispatch-header receiver.
+#
+# Deploy from this directory (it is the module root):
+#
+#	gcloud app deploy app.yaml --project=$PROJECT
+#
+# basic_scaling with max_instances: 1 pins all traffic to a single instance so
+# the in-memory capture log is authoritative, and scales to zero when idle so an
+# otherwise-unused capture app costs nothing between recordings.
+#
+# runtime: bump to the newest go1xx App Engine currently offers if go126 is
+# retired; the receiver is standard-library only, so any recent Go works.
+runtime: go126
+
+main: ./cmd/recv
+
+instance_class: B1
+
+basic_scaling:
+  max_instances: 1
+  idle_timeout: 5m

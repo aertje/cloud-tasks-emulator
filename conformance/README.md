@@ -130,11 +130,112 @@ go run ./cmd/record \
 ```
 
 `TestEmulatorErrors`'s sibling `TestEmulatorHappyPath` diffs the
-emulator against `golden/happypath.json` (and skips if it's absent). Dispatch-time
-wire headers are out of scope here - this battery is control-plane only; cover
-those with a hermetic emulator dispatch unit test.
+emulator against `golden/happypath.json` (and skips if it's absent). This battery
+is control-plane only; the headers Cloud Tasks puts on the wire when it *dispatches*
+a task are covered by the dispatch battery below.
+
+## Dispatch-headers battery
+
+A third battery captures what Cloud Tasks puts on the wire when it dispatches -
+and *re-dispatches* - a task, rather than what it stores. Its purpose is the two
+*optional* retry headers whose value format is documented nowhere:
+`X-CloudTasks-TaskPreviousResponse` / `X-CloudTasks-TaskRetryReason` and their
+`X-AppEngine-*` equivalents. They appear only on the dispatch request, and only
+after a task has already failed once, so no control-plane call can observe them.
+
+The battery creates a task pointed at a small **receiver** (see
+[`receiver/`](receiver)) that fails each attempt with a different status -
+`503`, `404`, `429`, `500`, `302` - before succeeding, then reads back the
+per-attempt headers the receiver recorded. Failing across a range of codes
+captures the optional headers for each, since the reason may differ by prior
+status. Separate timeout cases (`dispatch/http-timeout`,
+`dispatch/appengine-timeout`) instead stall the first attempt past its dispatch
+deadline, capturing what a *no-response* failure (rather than an error status)
+produces on the retry (real Cloud Tasks enforces a per-task dispatch deadline on
+the App Engine path too, reporting the timeout as `Instance Unavailable`). See
+`dispatch.go`.
+
+The receiver is deployed to **App Engine** (not tunnelled via ngrok) because that
+is the only vantage point that can observe the `X-AppEngine-*` retry headers: App
+Engine-target tasks route through internal App Engine routing that cannot be
+pointed at a tunnel. One deployed app covers both families - an HTTP-target task
+points its URL at `https://PROJECT.appspot.com/recv/http`, an App Engine-target
+task routes to `/recv/appengine`. See [`receiver/README.md`](receiver/README.md)
+for the project setup and deploy steps.
+
+### Recording (real) vs validating (emulator)
+
+The same receiver handler and the same battery drive both flows; only the target
+differs. The golden is recorded **once** against real Cloud Tasks, then every
+validation run diffs the emulator against it - no GCP involved.
+
+Recording the golden - the App Engine app is the dispatch target real Cloud Tasks
+delivers to:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant REC as cmd/record (real)
+    participant CT as Cloud Tasks (real)
+    participant RCV as Receiver (App Engine)
+    REC->>CT: CreateQueue (fast retry) + CreateTask (targets receiver)
+    loop forced failures (503, 404, 429, 500, 302)
+        CT->>RCV: dispatch (retry)
+        RCV-->>CT: non-2xx (forced fail)
+    end
+    CT->>RCV: dispatch (final retry)
+    RCV-->>CT: 200 (success)
+    REC->>RCV: GET /captures?run=PREFIX
+    RCV-->>REC: recorded per-attempt headers
+    Note over REC: write golden/dispatch.json
+```
+
+Validating the emulator - a local receiver stands in for the App Engine app, and
+`APP_ENGINE_EMULATOR_HOST` makes the emulator's App Engine tasks reach it too:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as TestEmulatorDispatch
+    participant EMU as Emulator
+    participant RCV as Receiver (local httptest)
+    Note over T,RCV: APP_ENGINE_EMULATOR_HOST points at the local receiver
+    T->>EMU: CreateQueue (fast retry) + CreateTask (targets receiver)
+    loop forced failures (503, 404, 429, 500, 302)
+        EMU->>RCV: dispatch (retry)
+        RCV-->>EMU: non-2xx (forced fail)
+    end
+    EMU->>RCV: dispatch (final retry)
+    RCV-->>EMU: 200 (success)
+    T->>RCV: GET /captures?run=PREFIX
+    RCV-->>T: recorded per-attempt headers
+    Note over T: diff against golden/dispatch.json
+```
+
+Because the receiver is hosted on App Engine, its HTTP endpoint also receives App
+Engine *frontend* headers (`X-Appengine-Api-Ticket`, `-User-Ip`, …) that real
+Cloud Tasks never sends to an arbitrary HTTP target. `normalizeDispatchHeaders`
+allowlists only the actual dispatch headers plus `User-Agent`, dropping that noise
+(and placeholdering the run-scoped queue name, task name and ETA) before diffing.
+
+Record it against real Cloud Tasks (needs the receiver deployed - the App Engine
+app does dispatch real task traffic, unlike the control-plane batteries):
+
+```sh
+cd conformance/receiver && gcloud app deploy app.yaml --project=$PROJECT
+
+cd .. && go run ./cmd/record \
+  -target=real -kind=dispatch -project=$PROJECT -location=us-central1 \
+  -receiver-url=https://$PROJECT.appspot.com -out=golden/dispatch.json
+```
+
+`TestEmulatorDispatch` validates the emulator hermetically: it runs the receiver
+as a local server, points emulator HTTP tasks straight at it and sets
+`APP_ENGINE_EMULATOR_HOST` so App Engine tasks reach it too, then diffs the
+observed headers against `golden/dispatch.json` (skipping if it's absent). No GCP
+is involved in validation - only the golden was recorded from real.
 
 ## Scope
 
-Error states plus the happy-path battery above. Other success-response shapes
-remain out of scope.
+Error states, the happy-path battery and the dispatch-headers battery above. Other
+success-response shapes remain out of scope.

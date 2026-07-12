@@ -6,6 +6,7 @@ package conformance_test
 import (
 	"context"
 	"net"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,11 +14,13 @@ import (
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/conformance"
+	"github.com/aertje/cloud-tasks-emulator/conformance/receiver"
 )
 
 const (
 	errorsGoldenPath    = "golden/errors.json"
 	happyPathGoldenPath = "golden/happypath.json"
+	dispatchGoldenPath  = "golden/dispatch.json"
 )
 
 // TestEmulatorErrors builds and starts the emulator, replays the error battery
@@ -112,9 +115,60 @@ func TestEmulatorHappyPath(t *testing.T) {
 	}
 }
 
-// startEmulator builds the emulator from the repo root, runs it on a free port,
-// and returns its address. The process is killed on test cleanup.
-func startEmulator(t *testing.T) string {
+// TestEmulatorDispatch replays the dispatch battery against the emulator and
+// asserts the headers it puts on the wire when it dispatches - and re-dispatches
+// - a task match the golden recorded from real Cloud Tasks (see RunDispatch for
+// what it observes, including the retry-only TaskPreviousResponse/TaskRetryReason
+// headers).
+//
+//	go test -tags conformance ./conformance/
+//
+// It is hermetic: a local receiver stands in for the deployed App Engine app.
+// Emulator HTTP-target tasks point straight at it, and App Engine-target tasks
+// reach it via APP_ENGINE_EMULATOR_HOST, so no real Cloud Tasks or App Engine
+// deploy is involved - only the golden was recorded from real (see
+// conformance/receiver).
+//
+// Skips if the dispatch golden is absent (record it with
+// `cmd/record -kind=dispatch -target=real -receiver-url=...`).
+func TestEmulatorDispatch(t *testing.T) {
+	if _, err := os.Stat(dispatchGoldenPath); os.IsNotExist(err) {
+		t.Skipf("no dispatch golden at %s; record it with cmd/record -kind=dispatch -target=real", dispatchGoldenPath)
+	}
+	golden, err := conformance.LoadDispatch(dispatchGoldenPath)
+	if err != nil {
+		t.Fatalf("load dispatch golden: %v", err)
+	}
+
+	recv := httptest.NewServer(receiver.NewHandler())
+	defer recv.Close()
+
+	addr := startEmulator(t, "APP_ENGINE_EMULATOR_HOST="+recv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	client, err := conformance.NewEmulatorClient(ctx, addr)
+	if err != nil {
+		t.Fatalf("dial emulator: %v", err)
+	}
+	defer client.Close()
+
+	snaps := conformance.RunDispatch(ctx, client, conformance.RunOptions{
+		Project:  "conformance-test",
+		Location: "us-central1",
+		Prefix:   "emu",
+	}, recv.URL)
+
+	for _, d := range conformance.CompareDispatch(golden, snaps) {
+		t.Errorf("%s", d.String())
+	}
+}
+
+// startEmulator builds the emulator from the repo root, runs it on a free port
+// with the process environment plus any extraEnv entries ("KEY=value"), and
+// returns its address. The process is killed on test cleanup.
+func startEmulator(t *testing.T, extraEnv ...string) string {
 	t.Helper()
 
 	repoRoot, err := filepath.Abs("..")
@@ -131,6 +185,7 @@ func startEmulator(t *testing.T) string {
 
 	port := freePort(t)
 	cmd := exec.Command(bin, "-port", port)
+	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start emulator: %v", err)

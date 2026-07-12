@@ -20,6 +20,12 @@
 //	go run ./cmd/record \
 //	  -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
 //	  -out=golden/happypath.json
+//
+// Record the dispatch-headers golden (needs a deployed receiver - see conformance/receiver):
+//
+//	go run ./cmd/record -target=real -kind=dispatch \
+//	  -project=$PROJECT -location=us-central1 \
+//	  -receiver-url=https://$PROJECT.appspot.com -out=golden/dispatch.json
 package main
 
 import (
@@ -35,12 +41,13 @@ import (
 
 func main() {
 	target := flag.String("target", "emulator", "real | emulator")
-	kind := flag.String("kind", "errors", "errors | happypath (which battery to record)")
+	kind := flag.String("kind", "errors", "errors | happypath | dispatch (which battery to record)")
 	project := flag.String("project", "", "GCP project id (real) or placeholder (emulator)")
 	location := flag.String("location", "us-central1", "location id")
 	addr := flag.String("addr", "localhost:8123", "emulator address (target=emulator)")
 	out := flag.String("out", "", "output JSON path (default: stdout)")
 	variants := flag.Int("variants", 3, "differing-input variants per case (errors battery only)")
+	receiverURL := flag.String("receiver-url", "", "receiver base URL, e.g. https://PROJECT.appspot.com (kind=dispatch)")
 	flag.Parse()
 
 	if *project == "" {
@@ -77,8 +84,10 @@ func main() {
 		recordErrors(ctx, client, opts, *out)
 	case "happypath":
 		recordHappyPath(ctx, client, opts, *out)
+	case "dispatch":
+		recordDispatch(ctx, client, opts, *receiverURL, *out)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|happypath)\n", *kind)
+		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|happypath|dispatch)\n", *kind)
 		os.Exit(1)
 	}
 }
@@ -112,6 +121,36 @@ func recordHappyPath(ctx context.Context, client *conformance.Client, opts confo
 
 	writeJSON(out, func(path string) error { return conformance.SaveHappyPath(path, snaps) })
 	fmt.Fprintf(os.Stderr, "done: %d observations, %d with errors\n", len(snaps), failed)
+}
+
+func recordDispatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, receiverURL, out string) {
+	if receiverURL == "" {
+		fmt.Fprintln(os.Stderr, "error: -kind=dispatch requires -receiver-url (see conformance/receiver)")
+		os.Exit(1)
+	}
+
+	snaps := conformance.RunDispatch(ctx, client, opts, receiverURL)
+
+	noRetry := 0
+	for _, s := range snaps {
+		retried := false
+		for _, a := range s.Attempts {
+			if a.Attempt >= 1 {
+				retried = true
+				break
+			}
+		}
+		if retried {
+			fmt.Fprintf(os.Stderr, "  %s: retry observed (%d attempts)\n", s.Name, len(s.Attempts))
+		} else {
+			noRetry++
+			fmt.Fprintf(os.Stderr, "  NO RETRY observed for %s (%d attempts captured) - is the receiver reachable and deployed?\n",
+				s.Name, len(s.Attempts))
+		}
+	}
+
+	writeJSON(out, func(path string) error { return conformance.SaveDispatch(path, snaps) })
+	fmt.Fprintf(os.Stderr, "done: %d cases, %d without an observed retry\n", len(snaps), noRetry)
 }
 
 // writeJSON sends the battery output to stdout or the given path.

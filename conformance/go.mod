@@ -5,6 +5,14 @@ module github.com/aertje/cloud-tasks-emulator/conformance
 
 go 1.26.4
 
+// The dispatch-header receiver is a lean, stdlib-only sibling module (kept
+// separate so its App Engine deploy stays free of the heavy client graph). It is
+// pulled in locally so the dispatch battery and its hermetic test reuse the same
+// Capture type and handler that record the golden.
+replace github.com/aertje/cloud-tasks-emulator/conformance/receiver => ./receiver
+
+require github.com/aertje/cloud-tasks-emulator/conformance/receiver v0.0.0-00010101000000-000000000000
+
 require (
 	cloud.google.com/go/cloudtasks v1.18.0
 	google.golang.org/api v0.286.0

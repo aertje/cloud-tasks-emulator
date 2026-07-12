@@ -7,11 +7,34 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
+
+// httpRetryReason and appEngineRetryReason are the X-*-TaskRetryReason values
+// real Cloud Tasks sends on a retry after a 5XX response, captured from
+// production (see conformance/golden/dispatch.json). The HTTP family sends an
+// empty reason; the App Engine family sends "App Error".
+const (
+	httpRetryReason      = ""
+	appEngineRetryReason = "App Error"
+)
+
+// addOptionalRetryHeaders adds the two retry-only dispatch headers -
+// X-<family>-TaskPreviousResponse and X-<family>-TaskRetryReason - to injected,
+// but only when this dispatch retries an attempt that received an HTTP response
+// (previousResponseCode > 0). Both are absent on the first attempt, and when the
+// previous attempt got no response (transport failure), matching production.
+func addOptionalRetryHeaders(injected map[string]string, prefix string, previousResponseCode int, retryReason string) {
+	if previousResponseCode <= 0 {
+		return
+	}
+	injected[prefix+"TaskPreviousResponse"] = strconv.Itoa(previousResponseCode)
+	injected[prefix+"TaskRetryReason"] = retryReason
+}
 
 func updateStateForReschedule(task *Task) {
 	task.stateMutex.Lock()
@@ -31,6 +54,14 @@ func updateStateForDispatch(task *Task) TaskState {
 
 	dispatchTime := time.Now()
 
+	// Capture the previous attempt's response code before its Attempt is
+	// overwritten below, so this dispatch can report it via
+	// X-*-TaskPreviousResponse (retries only).
+	previousResponseCode := 0
+	if prev := task.state.LastAttempt; prev != nil {
+		previousResponseCode = prev.ResponseCode
+	}
+
 	task.state.LastAttempt = &Attempt{
 		ScheduleTime: task.state.ScheduleTime,
 		DispatchTime: dispatchTime,
@@ -44,7 +75,11 @@ func updateStateForDispatch(task *Task) TaskState {
 		}
 	}
 
-	return task.state
+	// PreviousResponseCode rides on the returned snapshot only, not the retained
+	// state, which would otherwise carry a stale value into the next dispatch.
+	frozen := task.state
+	frozen.PreviousResponseCode = previousResponseCode
+	return frozen
 }
 
 func updateStateAfterDispatch(task *Task, statusCode int) {
@@ -59,6 +94,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	// and read (unlocked) by the gRPC edge via taskToProto.
 	attempt := *task.state.LastAttempt
 	attempt.ResponseTime = time.Now()
+	attempt.ResponseCode = statusCode
 	attempt.ResponseStatus = &AttemptStatus{
 		Code:    rpcCode,
 		Message: fmt.Sprintf("%s(%d): HTTP status code %d", rpcCodeName, rpcCode, statusCode),
@@ -66,6 +102,12 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	task.state.LastAttempt = &attempt
 
 	task.state.ResponseCount++
+	// A received non-5XX response counts toward the HTTP target's execution
+	// count, which excludes 5XX failures (see TaskState.ExecutionCount). A
+	// transport failure (statusCode -1) received no response and never counts.
+	if statusCode >= 100 && (statusCode < 500 || statusCode > 599) {
+		task.state.ExecutionCount++
+	}
 }
 
 func (task *Task) reschedule(retry bool, statusCode int) {
@@ -160,7 +202,11 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 	headerQueueName := nameParts.queueId
 	headerTaskName := nameParts.taskId
 	headerTaskRetryCount := fmt.Sprintf("%v", state.DispatchCount-1)
-	headerTaskExecutionCount := fmt.Sprintf("%v", state.ResponseCount)
+	// The two families count executions differently: the HTTP header excludes
+	// 5XX failures (state.ExecutionCount), the App Engine header counts every
+	// response (state.ResponseCount). See TaskState.ExecutionCount.
+	headerHTTPExecutionCount := fmt.Sprintf("%v", state.ExecutionCount)
+	headerAppEngineExecutionCount := fmt.Sprintf("%v", state.ResponseCount)
 	headerTaskETA := fmt.Sprintf("%f", float64(state.ScheduleTime.UnixNano())/1e9)
 
 	var (
@@ -179,14 +225,15 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		srcHeaders = state.HTTPRequest.Headers
 
 		// Headers as per https://cloud.google.com/tasks/docs/creating-http-target-tasks#handler
-		// TODO: optional headers
 		injected = map[string]string{
+			"User-Agent":                      "Google-Cloud-Tasks",
 			"X-CloudTasks-QueueName":          headerQueueName,
 			"X-CloudTasks-TaskName":           headerTaskName,
-			"X-CloudTasks-TaskExecutionCount": headerTaskExecutionCount,
+			"X-CloudTasks-TaskExecutionCount": headerHTTPExecutionCount,
 			"X-CloudTasks-TaskRetryCount":     headerTaskRetryCount,
 			"X-CloudTasks-TaskETA":            headerTaskETA,
 		}
+		addOptionalRetryHeaders(injected, "X-CloudTasks-", state.PreviousResponseCode, httpRetryReason)
 
 		if auth := state.HTTPRequest.OIDCToken; auth != nil {
 			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience)
@@ -205,14 +252,14 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		srcHeaders = ae.Headers
 
 		// These headers are only set on dispatch, see https://cloud.google.com/tasks/docs/reference/rpc/google.cloud.tasks.v2#google.cloud.tasks.v2.AppEngineHttpRequest
-		// TODO: optional headers
 		injected = map[string]string{
 			"X-AppEngine-QueueName":          headerQueueName,
 			"X-AppEngine-TaskName":           headerTaskName,
 			"X-AppEngine-TaskRetryCount":     headerTaskRetryCount,
-			"X-AppEngine-TaskExecutionCount": headerTaskExecutionCount,
+			"X-AppEngine-TaskExecutionCount": headerAppEngineExecutionCount,
 			"X-AppEngine-TaskETA":            headerTaskETA,
 		}
+		addOptionalRetryHeaders(injected, "X-AppEngine-", state.PreviousResponseCode, appEngineRetryReason)
 	default:
 		logger.Error("dispatch: task has neither HTTPRequest nor AppEngineHTTPRequest", "task", state.Name)
 		return -1

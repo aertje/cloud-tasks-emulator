@@ -46,6 +46,17 @@ type TaskState struct {
 
 	DispatchCount int32
 	ResponseCount int32
+	// ExecutionCount counts attempts that received a non-5XX response. It backs
+	// the HTTP target's X-CloudTasks-TaskExecutionCount, which - unlike the App
+	// Engine target's X-AppEngine-TaskExecutionCount (which uses ResponseCount) -
+	// excludes failures due to 5XX status codes.
+	ExecutionCount int32
+
+	// PreviousResponseCode is the raw HTTP status of the previous attempt. It is
+	// populated only on the snapshot returned by updateStateForDispatch (0 on the
+	// first attempt, or when the previous attempt received no HTTP response) and
+	// feeds the retry-only X-*-TaskPreviousResponse dispatch header.
+	PreviousResponseCode int
 
 	FirstAttempt *Attempt
 	LastAttempt  *Attempt
@@ -60,6 +71,11 @@ type Attempt struct {
 	DispatchTime   time.Time
 	ResponseTime   time.Time
 	ResponseStatus *AttemptStatus
+	// ResponseCode is the raw HTTP status the target returned for this attempt
+	// (e.g. 503), or 0 when no HTTP response was received (transport failure). It
+	// is kept alongside the RPC-coded ResponseStatus so the next dispatch can
+	// report it via X-*-TaskPreviousResponse.
+	ResponseCode int
 }
 
 // AttemptStatus is the gRPC-style status of a dispatch attempt.

@@ -26,11 +26,9 @@ Known limitations:
 
 - `UpdateQueue` is not implemented, so a queue's rate-limit and retry settings
   can only be set at creation time.
-- Dispatched requests carry the standard `X-CloudTasks-*` headers (queue name,
-  task name, retry count, execution count, ETA) and `User-Agent`, but omit the
-  two *optional* headers production also sends:
-  `X-CloudTasks-TaskPreviousResponse` and `X-CloudTasks-TaskRetryReason` (and
-  their `X-AppEngine-*` equivalents for App Engine targets).
+- Pagination is not supported. `ListQueues` and `ListTasks` ignore the
+  `page_size` and `page_token` request fields and return every result in a
+  single response with an empty `next_page_token`.
 
 ## Running the emulator
 

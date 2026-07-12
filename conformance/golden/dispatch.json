@@ -1,0 +1,94 @@
+[
+  {
+    "name": "dispatch/appengine",
+    "requestType": "appengine",
+    "attempts": [
+      {
+        "attempt": 0,
+        "status": 503,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "0",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskretrycount": "0"
+        }
+      },
+      {
+        "attempt": 1,
+        "status": 404,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "1",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "503",
+          "X-Appengine-Taskretrycount": "1",
+          "X-Appengine-Taskretryreason": "App Error"
+        }
+      },
+      {
+        "attempt": 2,
+        "status": 200,
+        "headers": {
+          "User-Agent": "AppEngine-Google; (+http://code.google.com/appengine)",
+          "X-Appengine-Queuename": "{queue}",
+          "X-Appengine-Tasketa": "{eta}",
+          "X-Appengine-Taskexecutioncount": "2",
+          "X-Appengine-Taskname": "{task}",
+          "X-Appengine-Taskpreviousresponse": "404",
+          "X-Appengine-Taskretrycount": "2",
+          "X-Appengine-Taskretryreason": "App Error"
+        }
+      }
+    ]
+  },
+  {
+    "name": "dispatch/http",
+    "requestType": "http",
+    "attempts": [
+      {
+        "attempt": 0,
+        "status": 503,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "0",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskretrycount": "0"
+        }
+      },
+      {
+        "attempt": 1,
+        "status": 404,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "0",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "503",
+          "X-Cloudtasks-Taskretrycount": "1",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      },
+      {
+        "attempt": 2,
+        "status": 200,
+        "headers": {
+          "User-Agent": "Google-Cloud-Tasks",
+          "X-Cloudtasks-Queuename": "{queue}",
+          "X-Cloudtasks-Tasketa": "{eta}",
+          "X-Cloudtasks-Taskexecutioncount": "1",
+          "X-Cloudtasks-Taskname": "{task}",
+          "X-Cloudtasks-Taskpreviousresponse": "404",
+          "X-Cloudtasks-Taskretrycount": "2",
+          "X-Cloudtasks-Taskretryreason": ""
+        }
+      }
+    ]
+  }
+]

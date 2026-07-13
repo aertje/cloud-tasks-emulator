@@ -81,7 +81,7 @@ type Task struct {
 
 // newTask creates a new task for the specified queue
 func newTask(queue *Queue, taskState TaskState, onDone func(task *Task)) *Task {
-	setInitialTaskState(&taskState, queue.name, queue.appEngineHost)
+	setInitialTaskState(&taskState, queue.name, queue.appEngineHost, queue.appEngineRegionID)
 
 	return &Task{
 		queue:  queue,
@@ -130,8 +130,11 @@ func hasHeaderFold(headers map[string]string, name string) bool {
 // setInitialTaskState fills in the server-assigned defaults on a freshly created
 // task. appEngineHost is the base URL App Engine target tasks route to instead
 // of the production appspot.com host; an empty value keeps the appspot.com
-// routing.
-func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
+// routing. appEngineRegionID selects the regional appspot.com host format
+// <project>.<region>.r.appspot.com when set; an empty value keeps the legacy
+// <project>.appspot.com format. appEngineRegionID is ignored when appEngineHost
+// is set.
+func setInitialTaskState(s *TaskState, queueName string, appEngineHost string, appEngineRegionID string) {
 	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		s.Name = queueName + "/tasks/" + taskID
@@ -188,11 +191,15 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string) {
 			var host, domainSeparator string
 
 			if appEngineHost == "" {
-				// TODO: the new route format for appengine is <PROJECT_ID>.<REGION_ID>.r.appspot.com
 				// TODO: support custom domains
 				// https://cloud.google.com/appengine/docs/standard/python/how-requests-are-routed
 				parts, _ := parseTaskName(s.Name)
-				host = "https://" + parts.project + ".appspot.com"
+				if appEngineRegionID != "" {
+					// The regional host format production Cloud Tasks emits.
+					host = "https://" + parts.project + "." + appEngineRegionID + ".r.appspot.com"
+				} else {
+					host = "https://" + parts.project + ".appspot.com"
+				}
 				domainSeparator = "-dot-"
 			} else {
 				host = appEngineHost

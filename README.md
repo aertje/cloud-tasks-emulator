@@ -29,6 +29,9 @@ Known limitations:
 - Pagination is not supported. `ListQueues` and `ListTasks` ignore the
   `page_size` and `page_token` request fields and return every result in a
   single response with an empty `next_page_token`.
+- App Engine target tasks route to the `appspot.com` host. Custom domains are
+  not supported. See [App Engine](#app-engine) for the appspot.com routing
+  options.
 
 ## Running the emulator
 
@@ -97,6 +100,7 @@ underscores). Explicit flags take precedence over environment variables.
 | `-hard-reset-on-purge-queue` | `HARD_RESET_ON_PURGE_QUEUE` | `false` | Make `PurgeQueue` release reserved task names immediately and run synchronously. See [Flushing task state](#flushing-task-state). |
 | `-insecure-skip-tls-verify` | `INSECURE_SKIP_TLS_VERIFY` | `false` | Skip TLS verification when dispatching to HTTPS targets. See [Skipping TLS verification](#skipping-tls-verification-for-https-targets). |
 | `-app-engine-emulator-host` | `APP_ENGINE_EMULATOR_HOST` | (none) | Base URL that App Engine target tasks route to instead of `https://<project>.appspot.com`. See [App Engine](#app-engine). |
+| `-app-engine-region-id` | `APP_ENGINE_REGION_ID` | (none) | App Engine region ID (e.g. `uc`) used to emit the regional host format `https://<project>.<region>.r.appspot.com` that production Cloud Tasks uses. Leave unset for the legacy `https://<project>.appspot.com` format. Ignored when `-app-engine-emulator-host` is set. See [App Engine](#app-engine). |
 
 For example, to configure the emulator entirely through the environment:
 
@@ -167,6 +171,24 @@ different code for local testing versus cloud deployment:
   `http://localhost:8081`.
 - Use `http_request` instead of `app_engine_http_request` and specify the
   target URL directly. I.e. target `http://localhost:8081`.
+
+### Production appspot.com routing
+
+When `-app-engine-emulator-host` is not set, App Engine target tasks route to
+`https://<project>.appspot.com` by default. Production Cloud Tasks instead uses
+the regional host format `https://<project>.<region>.r.appspot.com`, where
+`<region>` is the App Engine region ID (a short code such as `uc` for
+`us-central1`, not the full location name).
+
+To match production, set `-app-engine-region-id` (or `APP_ENGINE_REGION_ID`) to
+your app's region ID:
+
+```sh
+go run ./cmd/emulator -app-engine-region-id uc
+```
+
+Leave the flag unset to keep the legacy `https://<project>.appspot.com` format.
+The flag is ignored when `-app-engine-emulator-host` is set.
 
 ## OIDC authentication
 

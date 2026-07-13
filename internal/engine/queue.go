@@ -71,6 +71,11 @@ type Queue struct {
 	// production appspot.com routing.
 	appEngineHost string
 
+	// appEngineRegionID is the App Engine region ID used in the default
+	// appspot.com routing for tasks on this queue. Threaded down from the
+	// engine; empty keeps the legacy <project>.appspot.com format.
+	appEngineRegionID string
+
 	// ctx bounds the lifetime of in-flight dispatches on this queue; cancel is
 	// called exactly once, by Delete, to abort any HTTP requests still in
 	// flight. It is deliberately not derived from a gRPC request context: the
@@ -80,7 +85,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, appEngineHost string, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, appEngineHost string, appEngineRegionID string, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,6 +101,7 @@ func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logg
 		dispatcher:             dispatcher,
 		logger:                 logger,
 		appEngineHost:          appEngineHost,
+		appEngineRegionID:      appEngineRegionID,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize.OrZero()),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond.OrZero(),
 		stopAll:                make(chan struct{}),

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 )
 
@@ -21,14 +22,16 @@ const defaultTombstoneTTL = time.Minute
 type Options struct {
 	// HardResetOnPurgeQueue makes PurgeQueue synchronously delete tasks and
 	// release their name handles. This mirrors a development-environment
-	// behaviour rather than production Cloud Tasks.
-	HardResetOnPurgeQueue bool
+	// behaviour rather than production Cloud Tasks. Absent defaults to false
+	// (production-like) in New.
+	HardResetOnPurgeQueue maybe.M[bool]
 
 	// OIDC holds the token-signing configuration used when dispatching tasks
-	// with an OIDC token, and published via the issuer's HTTP endpoints. It is a
-	// pointer only to express optionality: New defaults it to oidc.DefaultConfig
-	// when nil and snapshots it by value, so mutating it after New has no effect.
-	OIDC *oidc.Config
+	// with an OIDC token, and published via the issuer's HTTP endpoints. Absent
+	// means New defaults it to oidc.DefaultConfig. New snapshots the config by
+	// value, so replacing or mutating the supplied config's top-level fields
+	// after New has no effect.
+	OIDC maybe.M[oidc.Config]
 
 	// Dispatcher delivers tasks. New defaults it to HTTPDispatcher when nil;
 	// tests supply a fake to drive lifecycle/retry logic without network I/O.
@@ -37,31 +40,32 @@ type Options struct {
 	// InsecureSkipTLSVerify disables TLS certificate verification when
 	// dispatching tasks to HTTPS targets. It exists for local development
 	// against targets using self-signed certificates and has no equivalent in
-	// production Cloud Tasks; leave it false unless you need it. Read by New
-	// only when it defaults the Dispatcher (an injected Dispatcher is
-	// responsible for its own transport).
-	InsecureSkipTLSVerify bool
+	// production Cloud Tasks; absent defaults to false in New. Read by New only
+	// when it defaults the Dispatcher (an injected Dispatcher is responsible for
+	// its own transport).
+	InsecureSkipTLSVerify maybe.M[bool]
 
 	// AppEngineEmulatorHost is the base URL that App Engine target tasks route to
 	// instead of the production https://<project>.appspot.com. It exists for
 	// local development against an App Engine emulator and has no equivalent in
-	// production Cloud Tasks; leave it empty to keep the appspot.com routing.
-	// New captures it once and threads it to each queue's tasks.
-	AppEngineEmulatorHost string
+	// production Cloud Tasks; absent keeps the appspot.com routing. New captures
+	// it once and threads it to each queue's tasks.
+	AppEngineEmulatorHost maybe.M[string]
 
 	// AppEngineRegionID selects the App Engine region ID (e.g. "uc" for
 	// us-central1) used in the default appspot.com routing, producing the
 	// regional host format <project>.<region>.r.appspot.com that production
-	// Cloud Tasks emits. Leave it empty to keep the legacy
-	// <project>.appspot.com format. Ignored when AppEngineEmulatorHost is set. New
-	// captures it once and threads it to each queue's tasks.
-	AppEngineRegionID string
+	// Cloud Tasks emits. Absent keeps the legacy <project>.appspot.com format.
+	// Ignored when AppEngineEmulatorHost is present. New captures it once and
+	// threads it to each queue's tasks.
+	AppEngineRegionID maybe.M[string]
 
-	// TombstoneTTL is how long a deleted queue/task name stays reserved before
-	// it becomes reusable. New reads it once at construction (defaulting to
-	// defaultTombstoneTTL when zero) and drives the background sweep with it, so
-	// unlike the lazily-read fields above it is not observed if mutated later.
-	TombstoneTTL time.Duration
+	// TombstoneTTL is how long a deleted queue/task name stays reserved before it
+	// becomes reusable. Absent - or a non-positive value, which cannot drive the
+	// sweep ticker - defaults to defaultTombstoneTTL. New reads it once at
+	// construction and drives the background sweep with it, so unlike the lazily-
+	// read fields above it is not observed if mutated later.
+	TombstoneTTL maybe.M[time.Duration]
 
 	// Logger receives the engine's queue-lifecycle and dispatch diagnostics. New
 	// resolves it once (defaulting to slog.Default() when nil) and tags it with a
@@ -145,17 +149,17 @@ func New(opts *Options) *Engine {
 	if opts == nil {
 		opts = &Options{}
 	}
-	oidcCfg := oidc.DefaultConfig()
-	if opts.OIDC != nil {
-		oidcCfg = opts.OIDC
+	oidcCfg := opts.OIDC.Ptr()
+	if oidcCfg == nil {
+		oidcCfg = oidc.DefaultConfig()
 	}
 	now := time.Now
 	if opts.clock != nil {
 		now = opts.clock
 	}
-	ttl := opts.TombstoneTTL
-	if ttl <= 0 {
-		ttl = defaultTombstoneTTL
+	ttl := defaultTombstoneTTL
+	if v, ok := opts.TombstoneTTL.Get(); ok && v > 0 {
+		ttl = v
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -167,7 +171,7 @@ func New(opts *Options) *Engine {
 	dispatcher := opts.Dispatcher
 	if dispatcher == nil {
 		d := HTTPDispatcher{logger: logger}
-		if opts.InsecureSkipTLSVerify {
+		if opts.InsecureSkipTLSVerify.OrElse(false) {
 			d.transport = insecureTransport()
 			logger.Warn("insecure mode: TLS certificate verification is disabled for task dispatch")
 		}
@@ -180,9 +184,9 @@ func New(opts *Options) *Engine {
 		tTombstones:           make(map[string]time.Time),
 		dispatcher:            dispatcher,
 		oidc:                  *oidcCfg,
-		hardResetOnPurge:      opts.HardResetOnPurgeQueue,
-		appEngineEmulatorHost: opts.AppEngineEmulatorHost,
-		appEngineRegionID:     opts.AppEngineRegionID,
+		hardResetOnPurge:      opts.HardResetOnPurgeQueue.OrElse(false),
+		appEngineEmulatorHost: opts.AppEngineEmulatorHost.OrZero(),
+		appEngineRegionID:     opts.AppEngineRegionID.OrZero(),
 		now:                   now,
 		ttl:                   ttl,
 		logger:                logger,

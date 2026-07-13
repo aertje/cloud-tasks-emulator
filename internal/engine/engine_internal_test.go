@@ -124,7 +124,7 @@ func newClockedTestEngine(t *testing.T, clock *fakeClock, ttl time.Duration) *En
 	t.Helper()
 	e := New(&Options{
 		Dispatcher:   newFakeDispatcher(200),
-		TombstoneTTL: ttl,
+		TombstoneTTL: maybe.Some(ttl),
 		clock:        clock.Now,
 	})
 	t.Cleanup(e.Stop)
@@ -370,7 +370,7 @@ func TestSoftPurgeKeepsNamesReserved(t *testing.T) {
 }
 
 func TestHardResetReleasesNames(t *testing.T) {
-	e := newTestEngineOpts(t, Options{Dispatcher: newFakeDispatcher(200), HardResetOnPurgeQueue: true})
+	e := newTestEngineOpts(t, Options{Dispatcher: newFakeDispatcher(200), HardResetOnPurgeQueue: maybe.Some(true)})
 	createRunningQueue(t, e)
 	ctx := t.Context()
 
@@ -406,7 +406,7 @@ func TestHardResetPurgeRespectsContext(t *testing.T) {
 		<-blockDispatch // Never returns until the test unblocks it.
 		return 200
 	}
-	e := newTestEngineOpts(t, Options{Dispatcher: d, HardResetOnPurgeQueue: true})
+	e := newTestEngineOpts(t, Options{Dispatcher: d, HardResetOnPurgeQueue: maybe.Some(true)})
 	createRunningQueue(t, e)
 	t.Cleanup(func() { close(blockDispatch) })
 

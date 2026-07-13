@@ -16,6 +16,7 @@ import (
 
 	. "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	. "github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 	"github.com/stretchr/testify/assert"
@@ -490,7 +491,7 @@ func TestPurgeQueueDoesNotReleaseTaskNamesByDefault(t *testing.T) {
 
 func TestPurgeQueueOptionallyPerformsHardReset(t *testing.T) {
 	t.Parallel()
-	_, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: true})
+	_, client := setUp(t, ServerOptions{HardResetOnPurgeQueue: maybe.Some(true)})
 
 	createdQueue := createTestQueueWithSlowRetry(t, client)
 
@@ -645,7 +646,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	t.Parallel()
 
 	target := startTestServer(t)
-	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: target.URL})
+	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: maybe.Some(target.URL)})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -692,7 +693,7 @@ func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
 	target := startTestServer(t)
-	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: target.URL})
+	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: maybe.Some(target.URL)})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -837,7 +838,7 @@ func TestTLSVerificationRejectsUntrustedCert(t *testing.T) {
 // InsecureSkipTLSVerify set, dispatch to a self-signed HTTPS target succeeds.
 func TestInsecureSkipTLSVerifyAcceptsUntrustedCert(t *testing.T) {
 	t.Parallel()
-	_, client := setUp(t, ServerOptions{InsecureSkipTLSVerify: true})
+	_, client := setUp(t, ServerOptions{InsecureSkipTLSVerify: maybe.Some(true)})
 	target := startTestTLSServer(t)
 	createdQueue := createTestQueue(t, client)
 
@@ -906,7 +907,7 @@ func TestOIDCAuthenticatedTaskExecution(t *testing.T) {
 	t.Parallel()
 	oidcConfig := oidc.DefaultConfig()
 	oidcConfig.IssuerURL = "http://localhost:8980"
-	_, client := setUp(t, ServerOptions{OIDC: oidcConfig})
+	_, client := setUp(t, ServerOptions{OIDC: maybe.Some(*oidcConfig)})
 
 	target := startTestServer(t)
 

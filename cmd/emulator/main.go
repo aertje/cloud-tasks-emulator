@@ -16,6 +16,7 @@ import (
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 
@@ -90,7 +91,9 @@ func main() {
 		panic(err)
 	}
 
-	oidcCfg := oidc.DefaultConfig()
+	// oidcCfg stays absent unless a flag customizes it, leaving New to default it
+	// to oidc.DefaultConfig - the default is resolved in one place, not here.
+	var oidcCfg maybe.M[oidc.Config]
 	if *openidSigningKey != "" {
 		pemBytes, err := os.ReadFile(*openidSigningKey)
 		if err != nil {
@@ -100,26 +103,33 @@ func main() {
 		if err != nil {
 			panic(fmt.Errorf("loading -openid-signing-key: %w", err))
 		}
-		oidcCfg = cfg
+		oidcCfg = maybe.Some(*cfg)
 		slog.Info("signing OIDC tokens with custom key", "path", *openidSigningKey)
 	}
 
-	var openIDServer *http.Server
+	var openIDServer maybe.M[*http.Server]
 	if *openidIssuer != "" {
-		srv, cfg, err := oidc.ConfigureIssuer(*openidIssuer, *oidcCfg)
+		// ConfigureIssuer publishes JWKS from a concrete config, so it needs the
+		// signing key up front; fall back to the default key only when no custom
+		// key was supplied.
+		base, ok := oidcCfg.Get()
+		if !ok {
+			base = *oidc.DefaultConfig()
+		}
+		srv, cfg, err := oidc.ConfigureIssuer(*openidIssuer, base)
 		if err != nil {
 			panic(err)
 		}
-		openIDServer = srv
-		oidcCfg = &cfg
+		openIDServer = maybe.Some(srv)
+		oidcCfg = maybe.Some(cfg)
 		slog.Info("serving OpenID configuration", "issuer", *openidIssuer, "addr", srv.Addr)
 	}
 
 	emulatorServer := server.NewServer(server.ServerOptions{
-		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
-		InsecureSkipTLSVerify: *insecureSkipTLSVerify,
-		AppEngineEmulatorHost: *appEngineEmulatorHost,
-		AppEngineRegionID:     *appEngineRegionID,
+		HardResetOnPurgeQueue: maybe.Some(*hardResetOnPurgeQueue),
+		InsecureSkipTLSVerify: maybe.Some(*insecureSkipTLSVerify),
+		AppEngineEmulatorHost: maybe.OfNonZero(*appEngineEmulatorHost),
+		AppEngineRegionID:     maybe.OfNonZero(*appEngineRegionID),
 		OIDC:                  oidcCfg,
 	})
 
@@ -146,7 +156,7 @@ func main() {
 // them exits or a SIGINT/SIGTERM arrives, then shuts the other down too. It
 // also stops the emulator engine so no queue or dispatch goroutine outlives
 // the process. It returns the first non-nil error from any server.
-func serve(grpcServer *grpc.Server, lis net.Listener, openIDServer *http.Server, emulatorServer *server.Server) error {
+func serve(grpcServer *grpc.Server, lis net.Listener, openIDServer maybe.M[*http.Server], emulatorServer *server.Server) error {
 	// Cancelled on signal, or by any server goroutine returning (via the deferred
 	// cancel), so one server stopping brings the others down with it.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -164,10 +174,10 @@ func serve(grpcServer *grpc.Server, lis net.Listener, openIDServer *http.Server,
 		return nil
 	})
 
-	if openIDServer != nil {
+	if srv, ok := openIDServer.Get(); ok {
 		group.Go(func() error {
 			defer cancel()
-			if err := openIDServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("OpenID server: %w", err)
 			}
 			return nil
@@ -183,8 +193,8 @@ func serve(grpcServer *grpc.Server, lis net.Listener, openIDServer *http.Server,
 		// the engine so its queue and dispatch goroutines don't outlive us.
 		grpcServer.GracefulStop()
 		emulatorServer.Stop()
-		if openIDServer != nil {
-			if err := openIDServer.Shutdown(context.Background()); err != nil {
+		if srv, ok := openIDServer.Get(); ok {
+			if err := srv.Shutdown(context.Background()); err != nil {
 				return fmt.Errorf("OpenID server shutdown: %w", err)
 			}
 		}

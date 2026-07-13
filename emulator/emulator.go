@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
@@ -44,7 +45,7 @@ type Option func(*server.ServerOptions)
 // WithHardResetOnPurgeQueue mirrors the binary's -hard-reset-on-purge-queue
 // flag: PurgeQueue synchronously deletes tasks and releases their name handles.
 func WithHardResetOnPurgeQueue(v bool) Option {
-	return func(o *server.ServerOptions) { o.HardResetOnPurgeQueue = v }
+	return func(o *server.ServerOptions) { o.HardResetOnPurgeQueue = maybe.Some(v) }
 }
 
 // WithInsecureSkipTLSVerify mirrors the binary's -insecure-skip-tls-verify
@@ -52,7 +53,7 @@ func WithHardResetOnPurgeQueue(v bool) Option {
 // is intended for local development against self-signed certificates and has no
 // production equivalent; leave it off unless you need it.
 func WithInsecureSkipTLSVerify(v bool) Option {
-	return func(o *server.ServerOptions) { o.InsecureSkipTLSVerify = v }
+	return func(o *server.ServerOptions) { o.InsecureSkipTLSVerify = maybe.Some(v) }
 }
 
 // WithLogger routes the emulator's queue-lifecycle and dispatch diagnostics to

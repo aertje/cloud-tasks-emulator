@@ -27,7 +27,7 @@ func TestNoneAbsent(t *testing.T) {
 }
 
 func TestZeroValueIsNone(t *testing.T) {
-	var m Maybe[string]
+	var m M[string]
 
 	assert.False(t, m.IsPresent())
 	assert.Equal(t, None[string](), m)
@@ -62,7 +62,7 @@ func TestPtrReturnsCopy(t *testing.T) {
 	p := m.Ptr()
 	*p = 100
 
-	// Mutating the returned pointer must not affect the Maybe.
+	// Mutating the returned pointer must not affect the M.
 	assert.Equal(t, 3, m.OrZero())
 }
 
@@ -74,6 +74,20 @@ func TestOrElse(t *testing.T) {
 func TestOrZero(t *testing.T) {
 	assert.Equal(t, 5, Some(5).OrZero())
 	assert.Equal(t, 0, None[int]().OrZero())
+}
+
+func TestOfNonZero(t *testing.T) {
+	assert.Equal(t, Some(5), OfNonZero(5))
+	assert.Equal(t, None[int](), OfNonZero(0))
+	assert.Equal(t, Some("x"), OfNonZero("x"))
+	assert.Equal(t, None[string](), OfNonZero(""))
+}
+
+func TestOr(t *testing.T) {
+	assert.Equal(t, Some(5), Some(5).Or(99))
+	assert.Equal(t, Some(99), None[int]().Or(99))
+	// A present zero value is kept, not replaced by the default.
+	assert.Equal(t, Some(0), Some(0).Or(99))
 }
 
 func TestMap(t *testing.T) {

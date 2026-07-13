@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/engine"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -29,21 +30,20 @@ func queueFromProto(q *tasks.Queue) engine.QueueState {
 	}
 	if rl := q.GetRateLimits(); rl != nil {
 		s.RateLimits = engine.RateLimits{
-			MaxDispatchesPerSecond:  rl.GetMaxDispatchesPerSecond(),
-			MaxBurstSize:            rl.GetMaxBurstSize(),
-			MaxConcurrentDispatches: rl.GetMaxConcurrentDispatches(),
+			MaxDispatchesPerSecond:  maybe.OfNonZero(rl.GetMaxDispatchesPerSecond()),
+			MaxBurstSize:            maybe.OfNonZero(rl.GetMaxBurstSize()),
+			MaxConcurrentDispatches: maybe.OfNonZero(rl.GetMaxConcurrentDispatches()),
 		}
 	}
 	if rc := q.GetRetryConfig(); rc != nil {
 		s.RetryConfig = engine.RetryConfig{
-			MaxAttempts:  rc.GetMaxAttempts(),
-			MaxDoublings: rc.GetMaxDoublings(),
-		}
-		if rc.GetMinBackoff() != nil {
-			s.RetryConfig.MinBackoff = rc.GetMinBackoff().AsDuration()
-		}
-		if rc.GetMaxBackoff() != nil {
-			s.RetryConfig.MaxBackoff = rc.GetMaxBackoff().AsDuration()
+			MaxAttempts:  maybe.OfNonZero(rc.GetMaxAttempts()),
+			MaxDoublings: maybe.OfNonZero(rc.GetMaxDoublings()),
+			// GetMinBackoff/GetMaxBackoff and AsDuration are nil-safe, yielding a
+			// zero duration when the field is absent; a zero backoff is treated as
+			// "unset, apply the server default" (see setInitialQueueState).
+			MinBackoff: maybe.OfNonZero(rc.GetMinBackoff().AsDuration()),
+			MaxBackoff: maybe.OfNonZero(rc.GetMaxBackoff().AsDuration()),
 		}
 	}
 	return s
@@ -54,15 +54,15 @@ func queueToProto(s engine.QueueState) *tasks.Queue {
 		Name:  s.Name,
 		State: queueRunStateToProto(s.State),
 		RateLimits: &tasks.RateLimits{
-			MaxDispatchesPerSecond:  s.RateLimits.MaxDispatchesPerSecond,
-			MaxBurstSize:            s.RateLimits.MaxBurstSize,
-			MaxConcurrentDispatches: s.RateLimits.MaxConcurrentDispatches,
+			MaxDispatchesPerSecond:  s.RateLimits.MaxDispatchesPerSecond.OrZero(),
+			MaxBurstSize:            s.RateLimits.MaxBurstSize.OrZero(),
+			MaxConcurrentDispatches: s.RateLimits.MaxConcurrentDispatches.OrZero(),
 		},
 		RetryConfig: &tasks.RetryConfig{
-			MaxAttempts:  s.RetryConfig.MaxAttempts,
-			MaxDoublings: s.RetryConfig.MaxDoublings,
-			MinBackoff:   durationpb.New(s.RetryConfig.MinBackoff),
-			MaxBackoff:   durationpb.New(s.RetryConfig.MaxBackoff),
+			MaxAttempts:  s.RetryConfig.MaxAttempts.OrZero(),
+			MaxDoublings: s.RetryConfig.MaxDoublings.OrZero(),
+			MinBackoff:   durationpb.New(s.RetryConfig.MinBackoff.OrZero()),
+			MaxBackoff:   durationpb.New(s.RetryConfig.MaxBackoff.OrZero()),
 		},
 	}
 }
@@ -103,49 +103,52 @@ func taskFromProto(t *tasks.Task) engine.TaskState {
 		ResponseCount: t.GetResponseCount(),
 	}
 	if ct := t.GetCreateTime(); ct != nil {
-		s.CreateTime = ct.AsTime()
+		s.CreateTime = maybe.Some(ct.AsTime())
 	}
 	if st := t.GetScheduleTime(); st != nil {
-		s.ScheduleTime = st.AsTime()
+		s.ScheduleTime = maybe.Some(st.AsTime())
 	}
-	if dd := t.GetDispatchDeadline(); dd != nil {
-		s.DispatchDeadline = dd.AsDuration()
-	}
+	// GetDispatchDeadline and AsDuration are nil-safe, yielding a zero duration
+	// when absent; a zero deadline is treated as "unset, apply the server
+	// default" (see setInitialTaskState) rather than a zero (no-timeout) client.
+	s.DispatchDeadline = maybe.OfNonZero(t.GetDispatchDeadline().AsDuration())
 	if fa := t.GetFirstAttempt(); fa != nil {
-		s.FirstAttempt = attemptFromProto(fa)
+		s.FirstAttempt = maybe.Some(attemptFromProto(fa))
 	}
 	if la := t.GetLastAttempt(); la != nil {
-		s.LastAttempt = attemptFromProto(la)
+		s.LastAttempt = maybe.Some(attemptFromProto(la))
 	}
 	if hr := t.GetHttpRequest(); hr != nil {
-		s.HTTPRequest = &engine.HTTPRequest{
-			URL:     hr.GetUrl(),
-			Method:  httpMethodFromProto(hr.GetHttpMethod()),
-			Headers: copyHeaders(hr.GetHeaders()),
-			Body:    hr.GetBody(),
+		req := engine.HTTPRequest{
+			URL:     maybe.OfNonZero(hr.GetUrl()),
+			Method:  maybe.OfNonZero(httpMethodFromProto(hr.GetHttpMethod())),
+			Headers: someIfNonNil(copyHeaders(hr.GetHeaders())),
+			Body:    someIfNonNil(hr.GetBody()),
 		}
 		if ot := hr.GetOidcToken(); ot != nil {
-			s.HTTPRequest.OIDCToken = &engine.OIDCToken{
+			req.OIDCToken = maybe.Some(engine.OIDCToken{
 				ServiceAccountEmail: ot.GetServiceAccountEmail(),
-				Audience:            ot.GetAudience(),
-			}
+				Audience:            maybe.OfNonZero(ot.GetAudience()),
+			})
 		}
+		s.HTTPRequest = maybe.Some(req)
 	}
 	if ae := t.GetAppEngineHttpRequest(); ae != nil {
-		s.AppEngineHTTPRequest = &engine.AppEngineHTTPRequest{
-			Method:      httpMethodFromProto(ae.GetHttpMethod()),
-			RelativeURI: ae.GetRelativeUri(),
-			Headers:     copyHeaders(ae.GetHeaders()),
-			Body:        ae.GetBody(),
+		req := engine.AppEngineHTTPRequest{
+			Method:      maybe.OfNonZero(httpMethodFromProto(ae.GetHttpMethod())),
+			RelativeURI: maybe.OfNonZero(ae.GetRelativeUri()),
+			Headers:     someIfNonNil(copyHeaders(ae.GetHeaders())),
+			Body:        someIfNonNil(ae.GetBody()),
 		}
 		if r := ae.GetAppEngineRouting(); r != nil {
-			s.AppEngineHTTPRequest.AppEngineRouting = &engine.AppEngineRouting{
-				Service:  r.GetService(),
-				Version:  r.GetVersion(),
-				Instance: r.GetInstance(),
-				Host:     r.GetHost(),
-			}
+			req.AppEngineRouting = maybe.Some(engine.AppEngineRouting{
+				Service:  maybe.OfNonZero(r.GetService()),
+				Version:  maybe.OfNonZero(r.GetVersion()),
+				Instance: maybe.OfNonZero(r.GetInstance()),
+				Host:     maybe.OfNonZero(r.GetHost()),
+			})
 		}
+		s.AppEngineHTTPRequest = maybe.Some(req)
 	}
 	return s
 }
@@ -171,95 +174,95 @@ func taskToProto(s engine.TaskState, view tasks.Task_View) *tasks.Task {
 		ResponseCount: s.ResponseCount,
 		View:          view,
 	}
-	if !s.CreateTime.IsZero() {
-		t.CreateTime = timestampToProto(s.CreateTime)
+	if ct, ok := s.CreateTime.Get(); ok {
+		t.CreateTime = timestampToProto(ct)
 	}
-	if !s.ScheduleTime.IsZero() {
-		t.ScheduleTime = timestampToProto(s.ScheduleTime)
+	if st, ok := s.ScheduleTime.Get(); ok {
+		t.ScheduleTime = timestampToProto(st)
 	}
-	if s.DispatchDeadline != 0 {
-		t.DispatchDeadline = durationpb.New(s.DispatchDeadline)
+	if dd, ok := s.DispatchDeadline.Get(); ok {
+		t.DispatchDeadline = durationpb.New(dd)
 	}
-	if s.FirstAttempt != nil {
-		t.FirstAttempt = attemptToProto(s.FirstAttempt)
+	if fa, ok := s.FirstAttempt.Get(); ok {
+		t.FirstAttempt = attemptToProto(fa)
 	}
-	if s.LastAttempt != nil {
-		t.LastAttempt = attemptToProto(s.LastAttempt)
+	if la, ok := s.LastAttempt.Get(); ok {
+		t.LastAttempt = attemptToProto(la)
 	}
-	if s.HTTPRequest != nil {
-		hr := &tasks.HttpRequest{
-			Url:        s.HTTPRequest.URL,
-			HttpMethod: httpMethodToProto(s.HTTPRequest.Method),
-			Headers:    copyHeaders(s.HTTPRequest.Headers),
-			Body:       s.HTTPRequest.Body,
+	if hr, ok := s.HTTPRequest.Get(); ok {
+		req := &tasks.HttpRequest{
+			Url:        hr.URL.OrZero(),
+			HttpMethod: httpMethodToProto(hr.Method.OrZero()),
+			Headers:    copyHeaders(hr.Headers.OrZero()),
+			Body:       hr.Body.OrZero(),
 		}
-		if s.HTTPRequest.OIDCToken != nil {
-			hr.AuthorizationHeader = &tasks.HttpRequest_OidcToken{
+		if auth, ok := hr.OIDCToken.Get(); ok {
+			req.AuthorizationHeader = &tasks.HttpRequest_OidcToken{
 				OidcToken: &tasks.OidcToken{
-					ServiceAccountEmail: s.HTTPRequest.OIDCToken.ServiceAccountEmail,
-					Audience:            s.HTTPRequest.OIDCToken.Audience,
+					ServiceAccountEmail: auth.ServiceAccountEmail,
+					Audience:            auth.Audience.OrZero(),
 				},
 			}
 		}
 		if view != tasks.Task_FULL {
-			hr.Body = nil
+			req.Body = nil
 		}
-		t.MessageType = &tasks.Task_HttpRequest{HttpRequest: hr}
-	} else if s.AppEngineHTTPRequest != nil {
-		ae := &tasks.AppEngineHttpRequest{
-			HttpMethod:  httpMethodToProto(s.AppEngineHTTPRequest.Method),
-			RelativeUri: s.AppEngineHTTPRequest.RelativeURI,
-			Headers:     copyHeaders(s.AppEngineHTTPRequest.Headers),
-			Body:        s.AppEngineHTTPRequest.Body,
+		t.MessageType = &tasks.Task_HttpRequest{HttpRequest: req}
+	} else if ae, ok := s.AppEngineHTTPRequest.Get(); ok {
+		req := &tasks.AppEngineHttpRequest{
+			HttpMethod:  httpMethodToProto(ae.Method.OrZero()),
+			RelativeUri: ae.RelativeURI.OrZero(),
+			Headers:     copyHeaders(ae.Headers.OrZero()),
+			Body:        ae.Body.OrZero(),
 		}
 		if view != tasks.Task_FULL {
-			ae.Body = nil
+			req.Body = nil
 		}
-		if r := s.AppEngineHTTPRequest.AppEngineRouting; r != nil {
-			ae.AppEngineRouting = &tasks.AppEngineRouting{
-				Service:  r.Service,
-				Version:  r.Version,
-				Instance: r.Instance,
-				Host:     r.Host,
+		if r, ok := ae.AppEngineRouting.Get(); ok {
+			req.AppEngineRouting = &tasks.AppEngineRouting{
+				Service:  r.Service.OrZero(),
+				Version:  r.Version.OrZero(),
+				Instance: r.Instance.OrZero(),
+				Host:     r.Host.OrZero(),
 			}
 		}
-		t.MessageType = &tasks.Task_AppEngineHttpRequest{AppEngineHttpRequest: ae}
+		t.MessageType = &tasks.Task_AppEngineHttpRequest{AppEngineHttpRequest: req}
 	}
 	return t
 }
 
-func attemptFromProto(a *tasks.Attempt) *engine.Attempt {
-	out := &engine.Attempt{}
+func attemptFromProto(a *tasks.Attempt) engine.Attempt {
+	out := engine.Attempt{}
 	if a.GetScheduleTime() != nil {
-		out.ScheduleTime = a.GetScheduleTime().AsTime()
+		out.ScheduleTime = maybe.Some(a.GetScheduleTime().AsTime())
 	}
 	if a.GetDispatchTime() != nil {
-		out.DispatchTime = a.GetDispatchTime().AsTime()
+		out.DispatchTime = maybe.Some(a.GetDispatchTime().AsTime())
 	}
 	if a.GetResponseTime() != nil {
-		out.ResponseTime = a.GetResponseTime().AsTime()
+		out.ResponseTime = maybe.Some(a.GetResponseTime().AsTime())
 	}
 	if rs := a.GetResponseStatus(); rs != nil {
-		out.ResponseStatus = &engine.AttemptStatus{Code: rs.GetCode(), Message: rs.GetMessage()}
+		out.ResponseStatus = maybe.Some(engine.AttemptStatus{Code: rs.GetCode(), Message: rs.GetMessage()})
 	}
 	return out
 }
 
-func attemptToProto(a *engine.Attempt) *tasks.Attempt {
+func attemptToProto(a engine.Attempt) *tasks.Attempt {
 	out := &tasks.Attempt{}
-	if !a.ScheduleTime.IsZero() {
-		out.ScheduleTime = timestampToProto(a.ScheduleTime)
+	if st, ok := a.ScheduleTime.Get(); ok {
+		out.ScheduleTime = timestampToProto(st)
 	}
-	if !a.DispatchTime.IsZero() {
-		out.DispatchTime = timestampToProto(a.DispatchTime)
+	if dt, ok := a.DispatchTime.Get(); ok {
+		out.DispatchTime = timestampToProto(dt)
 	}
-	if !a.ResponseTime.IsZero() {
-		out.ResponseTime = timestampToProto(a.ResponseTime)
+	if rt, ok := a.ResponseTime.Get(); ok {
+		out.ResponseTime = timestampToProto(rt)
 	}
-	if a.ResponseStatus != nil {
+	if rs, ok := a.ResponseStatus.Get(); ok {
 		out.ResponseStatus = &rpcstatus.Status{
-			Code:    a.ResponseStatus.Code,
-			Message: a.ResponseStatus.Message,
+			Code:    rs.Code,
+			Message: rs.Message,
 		}
 	}
 	return out
@@ -267,6 +270,18 @@ func attemptToProto(a *engine.Attempt) *tasks.Attempt {
 
 func timestampToProto(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
+}
+
+// someIfNonNil wraps a nilable reference field pulled from a proto: a nil
+// map/slice becomes None, anything else Some. Proto3 cannot distinguish an
+// absent repeated/bytes field from an explicitly empty one (both decode to a
+// nil getter result), so an empty value maps to None and round-trips back to an
+// absent proto field.
+func someIfNonNil[T []byte | map[string]string](v T) maybe.M[T] {
+	if v == nil {
+		return maybe.None[T]()
+	}
+	return maybe.Some(v)
 }
 
 func copyHeaders(in map[string]string) map[string]string {

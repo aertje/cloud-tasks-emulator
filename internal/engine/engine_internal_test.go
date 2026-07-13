@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,12 +140,16 @@ func createRunningQueue(t *testing.T, e *Engine) *Queue {
 }
 
 // httpTaskState builds a valid HTTP task state, optionally with a fixed name and
-// schedule time (zero schedule dispatches immediately).
+// schedule time (zero schedule leaves it unset, so it dispatches immediately).
 func httpTaskState(name string, schedule time.Time) TaskState {
+	scheduleTime := maybe.None[time.Time]()
+	if !schedule.IsZero() {
+		scheduleTime = maybe.Some(schedule)
+	}
 	return TaskState{
 		Name:         name,
-		ScheduleTime: schedule,
-		HTTPRequest:  &HTTPRequest{URL: "http://example.test/"},
+		ScheduleTime: scheduleTime,
+		HTTPRequest:  maybe.Some(HTTPRequest{URL: maybe.Some("http://example.test/")}),
 	}
 }
 
@@ -209,25 +214,25 @@ func TestBackoffReschedule(t *testing.T) {
 	}{
 		{
 			name:          "first retry uses min backoff",
-			retry:         RetryConfig{MinBackoff: 100 * time.Millisecond, MaxBackoff: time.Hour, MaxDoublings: 16},
+			retry:         RetryConfig{MinBackoff: maybe.Some(100 * time.Millisecond), MaxBackoff: maybe.Some(time.Hour), MaxDoublings: maybe.Some[int32](16)},
 			dispatchCount: 1,
 			wantBackoff:   100 * time.Millisecond,
 		},
 		{
 			name:          "doubles each attempt",
-			retry:         RetryConfig{MinBackoff: 100 * time.Millisecond, MaxBackoff: time.Hour, MaxDoublings: 16},
+			retry:         RetryConfig{MinBackoff: maybe.Some(100 * time.Millisecond), MaxBackoff: maybe.Some(time.Hour), MaxDoublings: maybe.Some[int32](16)},
 			dispatchCount: 3, // doubling = 2 => x4
 			wantBackoff:   400 * time.Millisecond,
 		},
 		{
 			name:          "capped by max doublings",
-			retry:         RetryConfig{MinBackoff: 1 * time.Second, MaxBackoff: time.Hour, MaxDoublings: 1},
+			retry:         RetryConfig{MinBackoff: maybe.Some(1 * time.Second), MaxBackoff: maybe.Some(time.Hour), MaxDoublings: maybe.Some[int32](1)},
 			dispatchCount: 5, // doubling capped at 1 => x2
 			wantBackoff:   2 * time.Second,
 		},
 		{
 			name:          "capped by max backoff",
-			retry:         RetryConfig{MinBackoff: 1 * time.Second, MaxBackoff: 3 * time.Second, MaxDoublings: 16},
+			retry:         RetryConfig{MinBackoff: maybe.Some(1 * time.Second), MaxBackoff: maybe.Some(3 * time.Second), MaxDoublings: maybe.Some[int32](16)},
 			dispatchCount: 10, // would be huge, capped at 3s
 			wantBackoff:   3 * time.Second,
 		},
@@ -236,10 +241,10 @@ func TestBackoffReschedule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			task := &Task{
 				queue: &Queue{state: QueueState{RetryConfig: tc.retry}},
-				state: TaskState{ScheduleTime: baseSchedule, DispatchCount: tc.dispatchCount},
+				state: TaskState{ScheduleTime: maybe.Some(baseSchedule), DispatchCount: tc.dispatchCount},
 			}
 			updateStateForReschedule(task)
-			assert.Equal(t, baseSchedule.Add(tc.wantBackoff), task.state.ScheduleTime)
+			assert.Equal(t, baseSchedule.Add(tc.wantBackoff), task.state.ScheduleTime.OrZero())
 		})
 	}
 }
@@ -441,7 +446,7 @@ func TestTaskRetriesUntilSuccess(t *testing.T) {
 	// Short backoff so the retries land quickly.
 	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{
 		Name:        testParent,
-		RetryConfig: RetryConfig{MinBackoff: time.Millisecond, MaxBackoff: 10 * time.Millisecond, MaxAttempts: 100, MaxDoublings: 1},
+		RetryConfig: RetryConfig{MinBackoff: maybe.Some(time.Millisecond), MaxBackoff: maybe.Some(10 * time.Millisecond), MaxAttempts: maybe.Some[int32](100), MaxDoublings: maybe.Some[int32](1)},
 	})
 	require.NoError(t, err)
 
@@ -470,7 +475,7 @@ func TestTaskStopsAfterMaxAttempts(t *testing.T) {
 
 	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{
 		Name:        testParent,
-		RetryConfig: RetryConfig{MinBackoff: time.Millisecond, MaxBackoff: 5 * time.Millisecond, MaxAttempts: 3, MaxDoublings: 1},
+		RetryConfig: RetryConfig{MinBackoff: maybe.Some(time.Millisecond), MaxBackoff: maybe.Some(5 * time.Millisecond), MaxAttempts: maybe.Some[int32](3), MaxDoublings: maybe.Some[int32](1)},
 	})
 	require.NoError(t, err)
 

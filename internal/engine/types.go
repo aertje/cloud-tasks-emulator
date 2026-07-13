@@ -1,6 +1,16 @@
 package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
+)
+
+// Optionality convention for the state types below: a field that may be
+// genuinely absent - an unset input still awaiting a server default, or state a
+// task has not reached yet - is a maybe.M[T]. Everything else is always
+// present and stays plain: counters, resource names, the queue-run enum, an
+// attempt's status code/message, and a token's service-account email.
 
 // QueueRunState mirrors tasks.Queue_State but lives in the engine layer.
 type QueueRunState int
@@ -12,19 +22,21 @@ const (
 	QueueRunStateDisabled
 )
 
-// RateLimits holds the per-queue dispatch rate configuration.
+// RateLimits holds the per-queue dispatch rate configuration. Each field is a
+// maybe.M: absent means "apply the server default" (see setInitialQueueState).
 type RateLimits struct {
-	MaxDispatchesPerSecond  float64
-	MaxBurstSize            int32
-	MaxConcurrentDispatches int32
+	MaxDispatchesPerSecond  maybe.M[float64]
+	MaxBurstSize            maybe.M[int32]
+	MaxConcurrentDispatches maybe.M[int32]
 }
 
-// RetryConfig holds the per-queue retry/backoff configuration.
+// RetryConfig holds the per-queue retry/backoff configuration. Each field is a
+// maybe.M: absent means "apply the server default" (see setInitialQueueState).
 type RetryConfig struct {
-	MaxAttempts  int32
-	MaxDoublings int32
-	MinBackoff   time.Duration
-	MaxBackoff   time.Duration
+	MaxAttempts  maybe.M[int32]
+	MaxDoublings maybe.M[int32]
+	MinBackoff   maybe.M[time.Duration]
+	MaxBackoff   maybe.M[time.Duration]
 }
 
 // QueueState is the engine's view of a queue. Proto<->QueueState mapping
@@ -37,12 +49,15 @@ type QueueState struct {
 }
 
 // TaskState is the engine's view of a task. Exactly one of HTTPRequest /
-// AppEngineHTTPRequest is non-nil for any live task.
+// AppEngineHTTPRequest is present for any live task.
 type TaskState struct {
-	Name             string
-	CreateTime       time.Time
-	ScheduleTime     time.Time
-	DispatchDeadline time.Duration
+	Name string
+	// CreateTime, ScheduleTime and DispatchDeadline are absent on a task-creation
+	// input and filled with server-assigned values by setInitialTaskState, after
+	// which they are always present on a live task.
+	CreateTime       maybe.M[time.Time]
+	ScheduleTime     maybe.M[time.Time]
+	DispatchDeadline maybe.M[time.Duration]
 
 	DispatchCount int32
 	// ResponseCount counts attempts that received an HTTP response - a transport
@@ -56,29 +71,32 @@ type TaskState struct {
 	ExecutionCount int32
 
 	// PreviousResponseCode is the raw HTTP status of the previous attempt. It is
-	// populated only on the snapshot returned by updateStateForDispatch (0 on the
-	// first attempt, or when the previous attempt received no HTTP response) and
-	// feeds the retry-only X-*-TaskPreviousResponse dispatch header.
-	PreviousResponseCode int
+	// populated only on the snapshot returned by updateStateForDispatch (absent on
+	// the first attempt, or when the previous attempt received no HTTP response)
+	// and feeds the retry-only X-*-TaskPreviousResponse dispatch header.
+	PreviousResponseCode maybe.M[int]
 
-	FirstAttempt *Attempt
-	LastAttempt  *Attempt
+	FirstAttempt maybe.M[Attempt]
+	LastAttempt  maybe.M[Attempt]
 
-	HTTPRequest          *HTTPRequest
-	AppEngineHTTPRequest *AppEngineHTTPRequest
+	HTTPRequest          maybe.M[HTTPRequest]
+	AppEngineHTTPRequest maybe.M[AppEngineHTTPRequest]
 }
 
-// Attempt records a single dispatch attempt against a task target.
+// Attempt records a single dispatch attempt against a task target. The response
+// fields (ResponseTime, ResponseStatus, ResponseCode) are absent until the
+// attempt has completed.
 type Attempt struct {
-	ScheduleTime   time.Time
-	DispatchTime   time.Time
-	ResponseTime   time.Time
-	ResponseStatus *AttemptStatus
+	ScheduleTime   maybe.M[time.Time]
+	DispatchTime   maybe.M[time.Time]
+	ResponseTime   maybe.M[time.Time]
+	ResponseStatus maybe.M[AttemptStatus]
 	// ResponseCode is the raw HTTP status the target returned for this attempt
-	// (e.g. 503), or 0 when no HTTP response was received (transport failure). It
-	// is kept alongside the RPC-coded ResponseStatus so the next dispatch can
-	// report it via X-*-TaskPreviousResponse.
-	ResponseCode int
+	// (e.g. 503), or a negative marker when no HTTP response was received
+	// (transport failure). It is absent until the attempt completes. It is kept
+	// alongside the RPC-coded ResponseStatus so the next dispatch can report it
+	// via X-*-TaskPreviousResponse.
+	ResponseCode maybe.M[int]
 }
 
 // AttemptStatus is the gRPC-style status of a dispatch attempt.
@@ -88,35 +106,42 @@ type AttemptStatus struct {
 	Message string
 }
 
-// HTTPRequest is the engine view of a Cloud Tasks HTTP target.
-// Method is the uppercase HTTP verb (e.g. "POST"); empty means unspecified.
+// HTTPRequest is the engine view of a Cloud Tasks HTTP target. Method is the
+// uppercase HTTP verb (e.g. "POST"); absent means unspecified and is defaulted
+// to POST at creation. URL is absent only on an unvalidated creation input; a
+// live task always carries one.
 type HTTPRequest struct {
-	URL       string
-	Method    string
-	Headers   map[string]string
-	Body      []byte
-	OIDCToken *OIDCToken
+	URL       maybe.M[string]
+	Method    maybe.M[string]
+	Headers   maybe.M[map[string]string]
+	Body      maybe.M[[]byte]
+	OIDCToken maybe.M[OIDCToken]
 }
 
-// OIDCToken describes the OIDC credentials to mint for the HTTP target.
+// OIDCToken describes the OIDC credentials to mint for the HTTP target. Audience
+// is absent when the caller left it to default to the target URL.
 type OIDCToken struct {
 	ServiceAccountEmail string
-	Audience            string
+	Audience            maybe.M[string]
 }
 
-// AppEngineHTTPRequest is the engine view of an App Engine target.
+// AppEngineHTTPRequest is the engine view of an App Engine target. Method
+// (absent defaults to POST) and RelativeURI (absent defaults to "/") are filled
+// in at creation.
 type AppEngineHTTPRequest struct {
-	Method           string
-	AppEngineRouting *AppEngineRouting
-	RelativeURI      string
-	Headers          map[string]string
-	Body             []byte
+	Method           maybe.M[string]
+	AppEngineRouting maybe.M[AppEngineRouting]
+	RelativeURI      maybe.M[string]
+	Headers          maybe.M[map[string]string]
+	Body             maybe.M[[]byte]
 }
 
-// AppEngineRouting describes the App Engine service routing for a request.
+// AppEngineRouting describes the App Engine service routing for a request. Each
+// field is absent when the caller left it to the App Engine default; Host is
+// absent on input and filled in at creation.
 type AppEngineRouting struct {
-	Service  string
-	Version  string
-	Instance string
-	Host     string
+	Service  maybe.M[string]
+	Version  maybe.M[string]
+	Instance maybe.M[string]
+	Host     maybe.M[string]
 }

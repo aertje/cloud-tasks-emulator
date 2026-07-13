@@ -66,10 +66,10 @@ type Queue struct {
 	// unset). Never nil for a live queue.
 	logger *slog.Logger
 
-	// appEngineHost is the base URL App Engine target tasks on this queue route
+	// appEngineEmulatorHost is the base URL App Engine target tasks on this queue route
 	// to instead of appspot.com. Threaded down from the engine; empty keeps the
 	// production appspot.com routing.
-	appEngineHost string
+	appEngineEmulatorHost string
 
 	// appEngineRegionID is the App Engine region ID used in the default
 	// appspot.com routing for tasks on this queue. Threaded down from the
@@ -85,7 +85,7 @@ type Queue struct {
 }
 
 // newQueue creates a new task queue
-func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, appEngineHost string, appEngineRegionID string, onTaskDone func(task *Task)) *Queue {
+func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logger *slog.Logger, appEngineEmulatorHost string, appEngineRegionID string, onTaskDone func(task *Task)) *Queue {
 	setInitialQueueState(&state)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -100,7 +100,7 @@ func newQueue(state QueueState, oidcCfg oidc.Config, dispatcher Dispatcher, logg
 		oidcCfg:                oidcCfg,
 		dispatcher:             dispatcher,
 		logger:                 logger,
-		appEngineHost:          appEngineHost,
+		appEngineEmulatorHost:  appEngineEmulatorHost,
 		appEngineRegionID:      appEngineRegionID,
 		tokenBucket:            make(chan bool, state.RateLimits.MaxBurstSize.OrZero()),
 		maxDispatchesPerSecond: state.RateLimits.MaxDispatchesPerSecond.OrZero(),

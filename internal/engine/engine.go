@@ -42,18 +42,18 @@ type Options struct {
 	// responsible for its own transport).
 	InsecureSkipTLSVerify bool
 
-	// AppEngineHost is the base URL that App Engine target tasks route to
+	// AppEngineEmulatorHost is the base URL that App Engine target tasks route to
 	// instead of the production https://<project>.appspot.com. It exists for
 	// local development against an App Engine emulator and has no equivalent in
 	// production Cloud Tasks; leave it empty to keep the appspot.com routing.
 	// New captures it once and threads it to each queue's tasks.
-	AppEngineHost string
+	AppEngineEmulatorHost string
 
 	// AppEngineRegionID selects the App Engine region ID (e.g. "uc" for
 	// us-central1) used in the default appspot.com routing, producing the
 	// regional host format <project>.<region>.r.appspot.com that production
 	// Cloud Tasks emits. Leave it empty to keep the legacy
-	// <project>.appspot.com format. Ignored when AppEngineHost is set. New
+	// <project>.appspot.com format. Ignored when AppEngineEmulatorHost is set. New
 	// captures it once and threads it to each queue's tasks.
 	AppEngineRegionID string
 
@@ -112,10 +112,10 @@ type Engine struct {
 	// hardResetOnPurge mirrors Options.HardResetOnPurgeQueue.
 	hardResetOnPurge bool
 
-	// appEngineHost mirrors Options.AppEngineHost: the base URL App Engine
+	// appEngineEmulatorHost mirrors Options.AppEngineEmulatorHost: the base URL App Engine
 	// target tasks route to instead of appspot.com. Empty keeps the production
 	// routing. Threaded to each queue at CreateQueue.
-	appEngineHost string
+	appEngineEmulatorHost string
 
 	// appEngineRegionID mirrors Options.AppEngineRegionID: the App Engine
 	// region ID used in the default appspot.com routing. Empty keeps the legacy
@@ -174,19 +174,19 @@ func New(opts *Options) *Engine {
 		dispatcher = d
 	}
 	e := &Engine{
-		qs:                make(map[string]*Queue),
-		ts:                make(map[string]*Task),
-		qTombstones:       make(map[string]time.Time),
-		tTombstones:       make(map[string]time.Time),
-		dispatcher:        dispatcher,
-		oidc:              *oidcCfg,
-		hardResetOnPurge:  opts.HardResetOnPurgeQueue,
-		appEngineHost:     opts.AppEngineHost,
-		appEngineRegionID: opts.AppEngineRegionID,
-		now:               now,
-		ttl:               ttl,
-		logger:            logger,
-		stop:              make(chan struct{}),
+		qs:                    make(map[string]*Queue),
+		ts:                    make(map[string]*Task),
+		qTombstones:           make(map[string]time.Time),
+		tTombstones:           make(map[string]time.Time),
+		dispatcher:            dispatcher,
+		oidc:                  *oidcCfg,
+		hardResetOnPurge:      opts.HardResetOnPurgeQueue,
+		appEngineEmulatorHost: opts.AppEngineEmulatorHost,
+		appEngineRegionID:     opts.AppEngineRegionID,
+		now:                   now,
+		ttl:                   ttl,
+		logger:                logger,
+		stop:                  make(chan struct{}),
 	}
 	go e.sweepLoop()
 	return e
@@ -424,7 +424,7 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineHost, e.appEngineRegionID, func(task *Task) {
+	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineEmulatorHost, e.appEngineRegionID, func(task *Task) {
 		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)

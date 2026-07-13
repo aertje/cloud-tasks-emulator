@@ -81,7 +81,7 @@ type Task struct {
 
 // newTask creates a new task for the specified queue
 func newTask(queue *Queue, taskState TaskState, onDone func(task *Task)) *Task {
-	setInitialTaskState(&taskState, queue.name, queue.appEngineHost, queue.appEngineRegionID)
+	setInitialTaskState(&taskState, queue.name, queue.appEngineEmulatorHost, queue.appEngineRegionID)
 
 	return &Task{
 		queue:  queue,
@@ -128,13 +128,13 @@ func hasHeaderFold(headers map[string]string, name string) bool {
 }
 
 // setInitialTaskState fills in the server-assigned defaults on a freshly created
-// task. appEngineHost is the base URL App Engine target tasks route to instead
+// task. appEngineEmulatorHost is the base URL App Engine target tasks route to instead
 // of the production appspot.com host; an empty value keeps the appspot.com
 // routing. appEngineRegionID selects the regional appspot.com host format
 // <project>.<region>.r.appspot.com when set; an empty value keeps the legacy
-// <project>.appspot.com format. appEngineRegionID is ignored when appEngineHost
+// <project>.appspot.com format. appEngineRegionID is ignored when appEngineEmulatorHost
 // is set.
-func setInitialTaskState(s *TaskState, queueName string, appEngineHost string, appEngineRegionID string) {
+func setInitialTaskState(s *TaskState, queueName string, appEngineEmulatorHost string, appEngineRegionID string) {
 	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		s.Name = queueName + "/tasks/" + taskID
@@ -190,7 +190,7 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string, a
 		if routing.Host.OrZero() == "" {
 			var host, domainSeparator string
 
-			if appEngineHost == "" {
+			if appEngineEmulatorHost == "" {
 				// TODO: support custom domains
 				// https://cloud.google.com/appengine/docs/standard/python/how-requests-are-routed
 				parts, _ := parseTaskName(s.Name)
@@ -202,7 +202,7 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineHost string, a
 				}
 				domainSeparator = "-dot-"
 			} else {
-				host = appEngineHost
+				host = appEngineEmulatorHost
 				domainSeparator = "."
 			}
 

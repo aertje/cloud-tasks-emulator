@@ -645,7 +645,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 	t.Parallel()
 
 	target := startTestServer(t)
-	_, client := setUp(t, ServerOptions{AppEngineHost: target.URL})
+	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: target.URL})
 
 	createdQueue := createTestQueue(t, client)
 
@@ -692,7 +692,7 @@ func TestAppEngineContentTypeHeaderIsCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
 	target := startTestServer(t)
-	_, client := setUp(t, ServerOptions{AppEngineHost: target.URL})
+	_, client := setUp(t, ServerOptions{AppEngineEmulatorHost: target.URL})
 
 	createdQueue := createTestQueue(t, client)
 

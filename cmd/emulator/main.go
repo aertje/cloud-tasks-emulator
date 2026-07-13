@@ -74,7 +74,7 @@ func main() {
 	openidSigningKey := fs.String("openid-signing-key", "", "Path to a PEM-encoded RSA private key used to sign OIDC tokens (defaults to a baked-in development key)")
 	hardResetOnPurgeQueue := fs.Bool("hard-reset-on-purge-queue", false, "Set to force the 'Purge Queue' call to perform a hard reset of all state (differs from production)")
 	insecureSkipTLSVerify := fs.Bool("insecure-skip-tls-verify", false, "Skip TLS certificate verification when dispatching to HTTPS targets (development only, e.g. self-signed certs)")
-	appEngineHost := fs.String("app-engine-emulator-host", "", "Base URL that App Engine target tasks route to instead of https://<project>.appspot.com (development only, e.g. a local App Engine emulator)")
+	appEngineEmulatorHost := fs.String("app-engine-emulator-host", "", "Base URL that App Engine target tasks route to instead of https://<project>.appspot.com (development only, e.g. a local App Engine emulator)")
 	appEngineRegionID := fs.String("app-engine-region-id", "", "App Engine region ID (e.g. 'uc' for us-central1) used to emit the regional host format https://<project>.<region>.r.appspot.com that production Cloud Tasks uses; leave empty for the legacy https://<project>.appspot.com format. Ignored when -app-engine-emulator-host is set")
 
 	fs.Var(&initialQueues, "initial-queue", "A queue to create on startup (repeat as required)")
@@ -118,7 +118,7 @@ func main() {
 	emulatorServer := server.NewServer(server.ServerOptions{
 		HardResetOnPurgeQueue: *hardResetOnPurgeQueue,
 		InsecureSkipTLSVerify: *insecureSkipTLSVerify,
-		AppEngineHost:         *appEngineHost,
+		AppEngineEmulatorHost: *appEngineEmulatorHost,
 		AppEngineRegionID:     *appEngineRegionID,
 		OIDC:                  oidcCfg,
 	})

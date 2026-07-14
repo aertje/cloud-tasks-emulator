@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -146,15 +147,94 @@ func (queue *Queue) retireTask(task *Task) {
 	}
 }
 
-func setInitialQueueState(s *QueueState) {
-	s.RateLimits.MaxDispatchesPerSecond = s.RateLimits.MaxDispatchesPerSecond.Or(500.0)
-	s.RateLimits.MaxBurstSize = s.RateLimits.MaxBurstSize.Or(100)
-	s.RateLimits.MaxConcurrentDispatches = s.RateLimits.MaxConcurrentDispatches.Or(1000)
+// Server defaults applied to absent queue-configuration fields, matching the
+// documented Cloud Tasks defaults.
+const (
+	defaultMaxDispatchesPerSecond        = 500.0
+	defaultMaxBurstSize            int32 = 100
+	defaultMaxConcurrentDispatches int32 = 1000
+	defaultMaxAttempts             int32 = 100
+	defaultMaxDoublings            int32 = 16
+	defaultMinBackoff                    = 100 * time.Millisecond
+	defaultMaxBackoff                    = 3600 * time.Second
+)
 
-	s.RetryConfig.MaxAttempts = s.RetryConfig.MaxAttempts.Or(100)
-	s.RetryConfig.MaxDoublings = s.RetryConfig.MaxDoublings.Or(16)
-	s.RetryConfig.MinBackoff = s.RetryConfig.MinBackoff.Or(100 * time.Millisecond)
-	s.RetryConfig.MaxBackoff = s.RetryConfig.MaxBackoff.Or(3600 * time.Second)
+// Upper bounds on client-supplied queue configuration, from the documented
+// Cloud Tasks limits (see the field docs on tasks.RateLimits). The burst-size
+// bound is queue.yaml's bucket_size limit: the v2 API treats max_burst_size as
+// output-only, but the emulator accepts it as input, so it bounds it too.
+const (
+	maxAllowedDispatchesPerSecond        = 500.0
+	maxAllowedBurstSize            int32 = 500
+	maxAllowedConcurrentDispatches int32 = 5000
+)
+
+// validateQueueConfig rejects out-of-range RateLimits/RetryConfig values on a
+// queue-creation input, as real Cloud Tasks does (verified against the
+// queue-invalid-config cases in conformance/golden/errors.json). Beyond
+// fidelity, this guards the emulator's own internals: newQueue sizes channels
+// from MaxBurstSize and MaxConcurrentDispatches (a negative capacity panics
+// make), and runTokenGenerator derives its refill period from
+// MaxDispatchesPerSecond (a non-positive rate breaks that arithmetic). The
+// MaxBurstSize check is engine-only: on the wire the field is output-only and
+// dropped at the proto edge, mirroring real v2, so it can only be set by
+// embedded callers. Absent fields are valid and get server defaults
+// (setInitialQueueState); the backoff-order check therefore compares the
+// effective values, defaults included.
+func validateQueueConfig(s QueueState) error {
+	if v, ok := s.RateLimits.MaxDispatchesPerSecond.Get(); ok {
+		if v > maxAllowedDispatchesPerSecond {
+			return ErrMaxDispatchesPerSecondTooHigh
+		}
+		// Written !(v > 0) rather than v < 0 so zero (unrepresentable on the
+		// wire, where proto3 zero means unset, but possible for embedded
+		// callers) and NaN (which fails every ordered comparison) are rejected
+		// too - the token generator cannot run with either.
+		if !(v > 0) {
+			return ErrMaxDispatchesPerSecondNegative
+		}
+	}
+	if v, ok := s.RateLimits.MaxBurstSize.Get(); ok && (v < 1 || v > maxAllowedBurstSize) {
+		return ErrMaxBurstSizeRange
+	}
+	if v, ok := s.RateLimits.MaxConcurrentDispatches.Get(); ok {
+		if v > maxAllowedConcurrentDispatches {
+			return ErrMaxConcurrentDispatchesTooHigh
+		}
+		// Zero (embedded callers only, see above) would mean a semaphore no
+		// dispatch could ever acquire a slot on.
+		if v < 1 {
+			return ErrMaxConcurrentDispatchesNegative
+		}
+	}
+	// -1 is the documented "unlimited attempts" marker.
+	if v, ok := s.RetryConfig.MaxAttempts.Get(); ok && v < -1 {
+		return ErrMaxAttemptsRange
+	}
+	if v, ok := s.RetryConfig.MaxDoublings.Get(); ok && v < 0 {
+		return ErrMaxDoublingsNegative
+	}
+	if v, ok := s.RetryConfig.MinBackoff.Get(); ok && v < 0 {
+		return ErrMinBackoffNegative
+	}
+	if v, ok := s.RetryConfig.MaxBackoff.Get(); ok && v < 0 {
+		return ErrMaxBackoffNegative
+	}
+	if s.RetryConfig.MinBackoff.OrElse(defaultMinBackoff) > s.RetryConfig.MaxBackoff.OrElse(defaultMaxBackoff) {
+		return ErrBackoffOrder
+	}
+	return nil
+}
+
+func setInitialQueueState(s *QueueState) {
+	s.RateLimits.MaxDispatchesPerSecond = s.RateLimits.MaxDispatchesPerSecond.Or(defaultMaxDispatchesPerSecond)
+	s.RateLimits.MaxBurstSize = s.RateLimits.MaxBurstSize.Or(defaultMaxBurstSize)
+	s.RateLimits.MaxConcurrentDispatches = s.RateLimits.MaxConcurrentDispatches.Or(defaultMaxConcurrentDispatches)
+
+	s.RetryConfig.MaxAttempts = s.RetryConfig.MaxAttempts.Or(defaultMaxAttempts)
+	s.RetryConfig.MaxDoublings = s.RetryConfig.MaxDoublings.Or(defaultMaxDoublings)
+	s.RetryConfig.MinBackoff = s.RetryConfig.MinBackoff.Or(defaultMinBackoff)
+	s.RetryConfig.MaxBackoff = s.RetryConfig.MaxBackoff.Or(defaultMaxBackoff)
 
 	s.State = QueueRunStateRunning
 }
@@ -170,7 +250,14 @@ func (queue *Queue) startDispatch(stop <-chan struct{}) {
 }
 
 func (queue *Queue) runTokenGenerator(stop <-chan struct{}) {
-	period := time.Second / time.Duration(queue.maxDispatchesPerSecond)
+	// The refill period is computed in float64: integer Duration division would
+	// truncate a fractional rate (e.g. 0.5/s, legal in Cloud Tasks) to a zero
+	// divisor. A rate so small the period overflows time.Duration saturates at
+	// the maximum instead.
+	period := time.Duration(math.MaxInt64)
+	if p := float64(time.Second) / queue.maxDispatchesPerSecond; p < math.MaxInt64 {
+		period = time.Duration(p)
+	}
 	// Use Timer with Reset() in place of time.Ticker as the latter was causing high CPU usage in Docker
 	t := time.NewTimer(period)
 

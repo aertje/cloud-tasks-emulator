@@ -29,9 +29,13 @@ func queueFromProto(q *tasks.Queue) engine.QueueState {
 		State: queueRunStateFromProto(q.GetState()),
 	}
 	if rl := q.GetRateLimits(); rl != nil {
+		// max_burst_size is deliberately not mapped: it is output-only in the
+		// v2 API and real Cloud Tasks ignores any client-supplied value (even a
+		// negative one - see conformance case queue/create/burst-negative,
+		// which records OK). The engine applies its default; embedded engine
+		// callers can still set the field directly.
 		s.RateLimits = engine.RateLimits{
 			MaxDispatchesPerSecond:  maybe.OfNonZero(rl.GetMaxDispatchesPerSecond()),
-			MaxBurstSize:            maybe.OfNonZero(rl.GetMaxBurstSize()),
 			MaxConcurrentDispatches: maybe.OfNonZero(rl.GetMaxConcurrentDispatches()),
 		}
 	}
@@ -364,6 +368,34 @@ func mapErr(err error) error {
 		)
 	case engine.ErrInvalidParent:
 		return status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
+	// The queue-configuration messages below are verified against the
+	// queue-invalid-config cases in conformance/golden/errors.json, except
+	// where noted.
+	case engine.ErrMaxDispatchesPerSecondNegative:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxDispatchesPerSecond cannot be negative.")
+	case engine.ErrMaxDispatchesPerSecondTooHigh:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxDispatchesPerSecond must be less than or equal to 500.")
+	case engine.ErrMaxBurstSizeRange:
+		// Unreachable from the wire (queueFromProto drops the output-only
+		// field, matching real v2, which never rejects it); mapped defensively
+		// so a future edge change cannot surface it as Internal.
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxBurstSize must be between 1 and 500.")
+	case engine.ErrMaxConcurrentDispatchesNegative:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxConcurrentDispatches cannot be negative.")
+	case engine.ErrMaxConcurrentDispatchesTooHigh:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxConcurrentDispatches must be less than or equal to 5000.")
+	case engine.ErrMaxAttemptsRange:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxAttempts must be greater or equal to -1.")
+	case engine.ErrMaxDoublingsNegative:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxDoublings cannot be negative.")
+	case engine.ErrMinBackoffNegative:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.minBackoff cannot be negative.")
+	case engine.ErrMaxBackoffNegative:
+		// Extrapolated from the recorded minBackoff/maxDoublings pattern; no
+		// golden case captures a negative max_backoff yet.
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxBackoff cannot be negative.")
+	case engine.ErrBackoffOrder:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.minBackoff must be less than or equal to RetryConfig.maxBackoff.")
 	case engine.ErrTaskNotFound:
 		// GetTask/DeleteTask/RunTask all report a missing task with this generic message.
 		return status.Errorf(codes.NotFound, "Requested entity was not found.")

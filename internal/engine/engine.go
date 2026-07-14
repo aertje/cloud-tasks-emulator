@@ -421,6 +421,9 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	if !parentMatched {
 		return nil, ErrInvalidParent
 	}
+	if err := validateQueueConfig(qs); err != nil {
+		return nil, err
+	}
 	if _, ok := e.fetchQueue(qs.Name); ok {
 		return nil, ErrQueueAlreadyExists
 	}

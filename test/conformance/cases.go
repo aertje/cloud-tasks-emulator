@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"context"
+	"time"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // Client is the official Cloud Tasks client; the same type drives both the real
@@ -72,6 +74,20 @@ func createTaskURL(url string) func(ctx context.Context, c *Client, p Params) er
 					HttpRequest: &taskspb.HttpRequest{Url: url},
 				},
 			},
+		})
+		return err
+	}
+}
+
+// createQueueConfig returns an Invoke that creates a queue carrying the
+// supplied rate limits / retry config, for probing how Cloud Tasks validates
+// queue configuration at create time. The offending values are static inputs,
+// stable across variants.
+func createQueueConfig(rl *taskspb.RateLimits, rc *taskspb.RetryConfig) func(ctx context.Context, c *Client, p Params) error {
+	return func(ctx context.Context, c *Client, p Params) error {
+		_, err := c.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+			Parent: p.Parent(),
+			Queue:  &taskspb.Queue{Name: p.QueuePath(), RateLimits: rl, RetryConfig: rc},
 		})
 		return err
 	}
@@ -165,6 +181,62 @@ func Cases() []Case {
 				})
 				return err
 			},
+		},
+
+		// --- CreateQueue configuration validation ---
+		// Probes how Cloud Tasks rejects out-of-range RateLimits/RetryConfig
+		// values at create time (code and message), pinning down the validation
+		// the emulator enforces before sizing queue internals from these
+		// fields. Teardown deletes best-effort because one case succeeds: real
+		// v2 treats max_burst_size as output-only and ignores the client value,
+		// so burst-negative creates the queue and records OK.
+		{
+			Name: "queue/create/rate-negative", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(&taskspb.RateLimits{MaxDispatchesPerSecond: -1}, nil),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/rate-too-high", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(&taskspb.RateLimits{MaxDispatchesPerSecond: 501}, nil),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/burst-negative", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(&taskspb.RateLimits{MaxBurstSize: -1}, nil),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/concurrent-negative", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(&taskspb.RateLimits{MaxConcurrentDispatches: -1}, nil),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/concurrent-too-high", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(&taskspb.RateLimits{MaxConcurrentDispatches: 5001}, nil),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/max-attempts-below-minus-one", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(nil, &taskspb.RetryConfig{MaxAttempts: -2}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/max-doublings-negative", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(nil, &taskspb.RetryConfig{MaxDoublings: -1}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/min-backoff-negative", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke:   createQueueConfig(nil, &taskspb.RetryConfig{MinBackoff: durationpb.New(-time.Second)}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "queue/create/backoff-order", RPC: "CreateQueue", Category: "queue-invalid-config",
+			Invoke: createQueueConfig(nil, &taskspb.RetryConfig{
+				MinBackoff: durationpb.New(10 * time.Second),
+				MaxBackoff: durationpb.New(5 * time.Second),
+			}),
+			Teardown: deleteQueue,
 		},
 
 		// --- Task lifecycle, inside a real queue ---

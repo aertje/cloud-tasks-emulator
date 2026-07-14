@@ -9,6 +9,22 @@ var (
 	ErrInvalidQueueName     = errors.New("invalid queue name")
 	ErrInvalidParent        = errors.New("invalid parent")
 
+	// Queue-configuration violations, reported by CreateQueue (see
+	// validateQueueConfig). Real Cloud Tasks rejects these with InvalidArgument
+	// and distinguishes a negative value from one above the allowed maximum
+	// (see the queue-invalid-config cases in conformance/golden/errors.json),
+	// so each direction gets its own sentinel.
+	ErrMaxDispatchesPerSecondNegative  = errors.New("max dispatches per second negative")
+	ErrMaxDispatchesPerSecondTooHigh   = errors.New("max dispatches per second too high")
+	ErrMaxBurstSizeRange               = errors.New("max burst size out of range")
+	ErrMaxConcurrentDispatchesNegative = errors.New("max concurrent dispatches negative")
+	ErrMaxConcurrentDispatchesTooHigh  = errors.New("max concurrent dispatches too high")
+	ErrMaxAttemptsRange                = errors.New("max attempts out of range")
+	ErrMaxDoublingsNegative            = errors.New("max doublings negative")
+	ErrMinBackoffNegative              = errors.New("min backoff negative")
+	ErrMaxBackoffNegative              = errors.New("max backoff negative")
+	ErrBackoffOrder                    = errors.New("min backoff greater than max backoff")
+
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrTaskRecentlyDeleted = errors.New("task recently deleted")
 	ErrTaskAlreadyExists   = errors.New("task already exists")

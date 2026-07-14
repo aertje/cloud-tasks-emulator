@@ -154,6 +154,20 @@ func httpTaskState(name string, schedule time.Time) TaskState {
 	}
 }
 
+// appEngineTaskState builds a valid App Engine-target task state, optionally
+// with a fixed name and schedule time (zero schedule leaves it unset).
+func appEngineTaskState(name string, schedule time.Time) TaskState {
+	scheduleTime := maybe.None[time.Time]()
+	if !schedule.IsZero() {
+		scheduleTime = maybe.Some(schedule)
+	}
+	return TaskState{
+		Name:                 name,
+		ScheduleTime:         scheduleTime,
+		AppEngineHTTPRequest: maybe.Some(AppEngineHTTPRequest{}),
+	}
+}
+
 func TestParseTaskName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -405,6 +419,49 @@ func TestCreateTaskValidation(t *testing.T) {
 	}
 }
 
+func TestCreateTaskConfigValidation(t *testing.T) {
+	// Future schedule times keep the accepted tasks from dispatching mid-test.
+	future := time.Now().Add(time.Hour)
+	farFuture := time.Now().Add(31 * 24 * time.Hour)
+	okFuture := time.Now().Add(29 * 24 * time.Hour)
+
+	withDeadline := func(s TaskState, d time.Duration) TaskState {
+		s.DispatchDeadline = maybe.Some(d)
+		return s
+	}
+
+	tests := []struct {
+		name    string
+		state   TaskState
+		wantErr error // nil means the task must be accepted
+	}{
+		{name: "http deadline too short", state: withDeadline(httpTaskState("", future), 14*time.Second), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline negative", state: withDeadline(httpTaskState("", future), -time.Second), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline too long", state: withDeadline(httpTaskState("", future), 31*time.Minute), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline at lower limit ok", state: withDeadline(httpTaskState("", future), 15*time.Second)},
+		{name: "http deadline at upper limit ok", state: withDeadline(httpTaskState("", future), 30*time.Minute)},
+		{name: "app engine deadline too short", state: withDeadline(appEngineTaskState("", future), 14*time.Second), wantErr: ErrDispatchDeadlineAppEngineRange},
+		{name: "app engine deadline too long", state: withDeadline(appEngineTaskState("", future), 25*time.Hour), wantErr: ErrDispatchDeadlineAppEngineRange},
+		// One hour is legal for an App Engine target but out of range for an
+		// HTTP target, pinning the per-family split.
+		{name: "app engine deadline one hour ok", state: withDeadline(appEngineTaskState("", future), time.Hour)},
+		{name: "schedule too far in future", state: httpTaskState("", farFuture), wantErr: ErrScheduleTimeTooFarInFuture},
+		{name: "schedule within horizon ok", state: httpTaskState("", okFuture)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t, newFakeDispatcher(200))
+			createRunningQueue(t, e)
+			_, _, err := e.CreateTask(t.Context(), testParent, tc.state)
+			if tc.wantErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)
@@ -630,7 +687,11 @@ func (e *Engine) countTaskTombstones() int {
 
 func TestTombstoneExpiry(t *testing.T) {
 	const ttl = time.Minute
-	base := time.Unix(1_700_000_000, 0)
+	// The fake clock is anchored to the real current time (only relative
+	// advances matter here) so the real-clock-relative schedule times used
+	// below stay inside CreateTask's 30-day horizon check, which reads the
+	// engine's injected clock.
+	base := time.Now()
 
 	tests := []struct {
 		name string
@@ -711,7 +772,8 @@ func TestTombstoneExpiry(t *testing.T) {
 
 func TestSweepRemovesExpiredTombstones(t *testing.T) {
 	const ttl = time.Minute
-	clock := newFakeClock(time.Unix(1_700_000_000, 0))
+	// Anchored to the real current time for the same reason as TestTombstoneExpiry.
+	clock := newFakeClock(time.Now())
 	e := newClockedTestEngine(t, clock, ttl)
 
 	// Tombstone one task and one queue.

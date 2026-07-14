@@ -180,6 +180,38 @@
     "stable": true
   },
   {
+    "name": "task/create/appengine-deadline-one-hour",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "OK",
+    "template": "",
+    "stable": true
+  },
+  {
+    "name": "task/create/appengine-deadline-too-long",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 24h15s].",
+    "stable": true
+  },
+  {
+    "name": "task/create/deadline-too-long",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 30m].",
+    "stable": true
+  },
+  {
+    "name": "task/create/deadline-too-short",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 30m].",
+    "stable": true
+  },
+  {
     "name": "task/create/invalid-name",
     "rpc": "CreateTask",
     "category": "task-invalid-name",
@@ -247,6 +279,14 @@
     "category": "queue-recently-deleted",
     "code": "NotFound",
     "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/create/schedule-too-far",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "The Task.scheduleTime, 2099-12-31T16:00:00-08:00, is too far in the future. Schedule time must be no more than 720h in the future.",
     "stable": true
   },
   {

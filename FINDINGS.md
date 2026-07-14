@@ -185,6 +185,37 @@ No `With*` option for the App Engine emulator host, region ID, or OIDC config,
 all of which the binary exposes as flags. Embedded test users of App Engine
 targets would plausibly want these.
 
+### 13. Task-level numeric ranges are not validated at CreateTask
+
+- [x] Status: done. `validateTaskConfig` (task.go) enforces the per-family
+  `dispatch_deadline` intervals and the 30-day `schedule_time` horizon at
+  `CreateTask`; messages verified against the re-recorded conformance golden
+  (`task-invalid-config` cases). The schedule message interpolates the
+  offending timestamp rendered in US Pacific (mapped in `mapErrForCreateTask`;
+  tzdata embedded in the binary for the Alpine image). Task size limits remain
+  deferred as described below.
+- Location: `internal/engine/engine.go:601` (CreateTask), `internal/engine/task.go`
+
+Follow-up to finding 1, found while fixing it: `CreateTask` validates names and
+target URLs but none of the numeric ranges real Cloud Tasks enforces with
+InvalidArgument:
+
+- `dispatch_deadline` must be in [15s, 30m] for HTTP-target tasks and
+  [15s, 24h15s] for App Engine-target tasks (documented on `tasks.Task`).
+  The emulator accepts anything, including negative values (which become an
+  immediately-failing `http.Client` timeout).
+- `schedule_time` may be at most 30 days in the future (Cloud Tasks quotas).
+  The emulator accepts any timestamp.
+
+Unlike finding 1 these cannot crash the emulator; the gap is fidelity only (a
+task real Cloud Tasks would reject is silently accepted). Task size limits
+(100KB App Engine / 1MB HTTP) are a further gap in the same family, deferred
+for now because the measured "size" needs probing before it can be enforced.
+
+Fix direction: same recipe as finding 1 - validate at `CreateTask` with
+sentinels mapped at the edge, add conformance probe cases, record the golden,
+align messages.
+
 ## Architecture notes (no action required, context for the fixes)
 
 - The task registry is duplicated between `engine.ts` and each `queue.ts`, with

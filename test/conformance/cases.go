@@ -7,6 +7,7 @@ import (
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Client is the official Cloud Tasks client; the same type drives both the real
@@ -37,6 +38,32 @@ func httpTask(name string) *taskspb.Task {
 		MessageType: &taskspb.Task_HttpRequest{
 			HttpRequest: &taskspb.HttpRequest{Url: "https://example.com/"},
 		},
+	}
+}
+
+// appEngineTask returns a minimal valid App Engine-target task body.
+func appEngineTask(name string) *taskspb.Task {
+	return &taskspb.Task{
+		Name: name,
+		MessageType: &taskspb.Task_AppEngineHttpRequest{
+			AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{},
+		},
+	}
+}
+
+// createTaskMod returns an Invoke that creates the task built by mk for the
+// variant's task path after applying mod, for probing how Cloud Tasks
+// validates task configuration at create time. The offending values are
+// static inputs, stable across variants.
+func createTaskMod(mk func(string) *taskspb.Task, mod func(*taskspb.Task)) func(ctx context.Context, c *Client, p Params) error {
+	return func(ctx context.Context, c *Client, p Params) error {
+		task := mk(p.TaskPath())
+		mod(task)
+		_, err := c.CreateTask(ctx, &taskspb.CreateTaskRequest{
+			Parent: p.QueuePath(),
+			Task:   task,
+		})
+		return err
 	}
 }
 
@@ -321,6 +348,59 @@ func Cases() []Case {
 			Name: "task/create/invalid-url-bad-escape", RPC: "CreateTask", Category: "task-invalid-url",
 			Setup:    createQueue,
 			Invoke:   createTaskURL("http://example.com/%zz"),
+			Teardown: deleteQueue,
+		},
+		// --- CreateTask configuration validation ---
+		// Probes how Cloud Tasks rejects out-of-range task values at create
+		// time (code and message): dispatch_deadline must be in [15s, 30m] for
+		// HTTP targets and [15s, 24h15s] for App Engine targets, and
+		// schedule_time may be at most 30 days in the future. The one-hour
+		// App Engine deadline case is expected to record OK - it is legal
+		// there and illegal for HTTP, pinning the per-family split. Its
+		// schedule time is pushed out an hour so the created task never
+		// actually dispatches during the run.
+		{
+			Name: "task/create/deadline-too-short", RPC: "CreateTask", Category: "task-invalid-config",
+			Setup: createQueue,
+			Invoke: createTaskMod(httpTask, func(t *taskspb.Task) {
+				t.DispatchDeadline = durationpb.New(5 * time.Second)
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/deadline-too-long", RPC: "CreateTask", Category: "task-invalid-config",
+			Setup: createQueue,
+			Invoke: createTaskMod(httpTask, func(t *taskspb.Task) {
+				t.DispatchDeadline = durationpb.New(31 * time.Minute)
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/appengine-deadline-too-long", RPC: "CreateTask", Category: "task-invalid-config",
+			Setup: createQueue,
+			Invoke: createTaskMod(appEngineTask, func(t *taskspb.Task) {
+				t.DispatchDeadline = durationpb.New(25 * time.Hour)
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/appengine-deadline-one-hour", RPC: "CreateTask", Category: "task-invalid-config",
+			Setup: createQueue,
+			Invoke: createTaskMod(appEngineTask, func(t *taskspb.Task) {
+				t.DispatchDeadline = durationpb.New(time.Hour)
+				t.ScheduleTime = timestamppb.New(time.Now().Add(time.Hour))
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			// The timestamp is a fixed far-future instant rather than a
+			// now-relative one so every variant sends the same value and any
+			// interpolation of it into the message stays stable.
+			Name: "task/create/schedule-too-far", RPC: "CreateTask", Category: "task-invalid-config",
+			Setup: createQueue,
+			Invoke: createTaskMod(httpTask, func(t *taskspb.Task) {
+				t.ScheduleTime = timestamppb.New(time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC))
+			}),
 			Teardown: deleteQueue,
 		},
 		{

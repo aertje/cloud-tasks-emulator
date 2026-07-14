@@ -127,6 +127,39 @@ func hasHeaderFold(headers map[string]string, name string) bool {
 	return false
 }
 
+// Documented Cloud Tasks bounds on task configuration: the dispatch-deadline
+// intervals from the tasks.Task field docs (per target family), the schedule
+// horizon from the Cloud Tasks quotas page.
+const (
+	minDispatchDeadline          = 15 * time.Second
+	maxHTTPDispatchDeadline      = 30 * time.Minute
+	maxAppEngineDispatchDeadline = 24*time.Hour + 15*time.Second
+	maxScheduleAhead             = 30 * 24 * time.Hour
+)
+
+// validateTaskConfig rejects out-of-range numeric values on a task-creation
+// input, as real Cloud Tasks does. Unlike queue configuration these cannot
+// crash the emulator (a bad deadline just makes an http.Client timeout), so
+// this is purely fidelity: a task real Cloud Tasks would reject must not be
+// accepted. Absent fields are valid and get server defaults
+// (setInitialTaskState). now anchors the schedule-horizon check and comes from
+// the engine's injectable clock.
+func validateTaskConfig(s TaskState, now time.Time) error {
+	if d, ok := s.DispatchDeadline.Get(); ok {
+		if s.AppEngineHTTPRequest.IsPresent() {
+			if d < minDispatchDeadline || d > maxAppEngineDispatchDeadline {
+				return ErrDispatchDeadlineAppEngineRange
+			}
+		} else if d < minDispatchDeadline || d > maxHTTPDispatchDeadline {
+			return ErrDispatchDeadlineHTTPRange
+		}
+	}
+	if st, ok := s.ScheduleTime.Get(); ok && st.After(now.Add(maxScheduleAhead)) {
+		return ErrScheduleTimeTooFarInFuture
+	}
+	return nil
+}
+
 // setInitialTaskState fills in the server-assigned defaults on a freshly created
 // task. appEngineEmulatorHost is the base URL App Engine target tasks route to instead
 // of the production appspot.com host; an empty value keeps the appspot.com

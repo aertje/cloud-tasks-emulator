@@ -405,6 +405,14 @@ func mapErr(err error) error {
 		return status.Errorf(codes.AlreadyExists, "Requested entity already exists")
 	case engine.ErrInvalidTaskName:
 		return status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+	// The dispatch-deadline messages are verified against the
+	// task-invalid-config cases in conformance/golden/errors.json. The
+	// schedule-horizon sentinel is mapped in mapErrForCreateTask: its message
+	// interpolates the offending schedule time from the request.
+	case engine.ErrDispatchDeadlineHTTPRange:
+		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 30m].")
+	case engine.ErrDispatchDeadlineAppEngineRange:
+		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 24h15s].")
 	case engine.ErrHTTPRequestURLRequired:
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:
@@ -464,6 +472,15 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 			in.GetParent(),
 			queueNameFromTaskName(in.GetTask().GetName()),
 		)
+	case engine.ErrScheduleTimeTooFarInFuture:
+		// The message names the offending schedule time, rendered in US
+		// Pacific time (the golden was recorded as -08:00 for a December
+		// instant; a DST-affected summer instant is extrapolated to render as
+		// -07:00 via the location, not a fixed offset).
+		return status.Errorf(codes.InvalidArgument,
+			"The Task.scheduleTime, %s, is too far in the future. Schedule time must be no more than 720h in the future.",
+			in.GetTask().GetScheduleTime().AsTime().In(scheduleTimeErrorZone).Format(time.RFC3339),
+		)
 	case engine.ErrInvalidTaskID:
 		// The message names the offending task ID; real Cloud Tasks also
 		// attaches a Help detail pointing at the task-name field definition.
@@ -478,6 +495,17 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 	}
 	return mapErr(err)
 }
+
+// scheduleTimeErrorZone is the zone real Cloud Tasks renders the offending
+// schedule time in inside the too-far-in-the-future message (US Pacific).
+// Falls back to a fixed -08:00 offset on hosts without tzdata, matching the
+// recorded winter golden but losing DST fidelity.
+var scheduleTimeErrorZone = func() *time.Location {
+	if loc, err := time.LoadLocation("America/Los_Angeles"); err == nil {
+		return loc
+	}
+	return time.FixedZone("-08:00", -8*60*60)
+}()
 
 // queueNameFromTaskName strips the "/tasks/<id>" suffix off a task resource
 // name, yielding the queue it belongs to. Returns the input unchanged if it has

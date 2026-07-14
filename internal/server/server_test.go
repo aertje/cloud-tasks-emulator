@@ -289,6 +289,26 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 	assertIsGrpcError(t, "^The queue name from request", grpcCodes.InvalidArgument, err)
 }
 
+// Out-of-range task configuration must come back as InvalidArgument; the
+// engine-level table test covers the full matrix, this pins the gRPC mapping.
+func TestCreateTaskRejectsOutOfRangeDispatchDeadline(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	createdQueue := createTestQueue(t, client)
+
+	_, err := client.CreateTask(context.Background(), &taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			DispatchDeadline: durationpb.New(31 * time.Minute),
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: "http://www.google.com"},
+			},
+		},
+	})
+	assertIsGrpcError(t, `^Task\.dispatchDeadline must be between \[15s, 30m\]\.$`, grpcCodes.InvalidArgument, err)
+}
+
 func TestCreateTaskRejectsMissingURL(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})

@@ -32,6 +32,14 @@ var (
 	ErrInvalidTaskID       = errors.New("invalid task id")
 	ErrTaskQueueMismatch   = errors.New("task name does not belong to queue")
 
+	// Task-configuration violations, reported by CreateTask (see
+	// validateTaskConfig). Real Cloud Tasks rejects these with InvalidArgument.
+	// The dispatch-deadline interval depends on the target family, so each
+	// family gets its own sentinel.
+	ErrDispatchDeadlineHTTPRange      = errors.New("http dispatch deadline out of range")
+	ErrDispatchDeadlineAppEngineRange = errors.New("app engine dispatch deadline out of range")
+	ErrScheduleTimeTooFarInFuture     = errors.New("schedule time too far in the future")
+
 	// ErrHTTPRequestURLRequired and ErrHTTPRequestURLScheme report the two
 	// create-time URL validations Cloud Tasks performs on an HTTP-target task:
 	// the URL must be present and must start with http:// or https://. Cloud

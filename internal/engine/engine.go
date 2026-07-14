@@ -651,6 +651,10 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		}
 	}
 
+	if err := validateTaskConfig(ts, e.now()); err != nil {
+		return nil, TaskState{}, err
+	}
+
 	task, frozen := queue.NewTask(ts)
 	e.setTask(frozen.Name, task)
 	queue.logger.Debug("task received", "task", frozen.Name, "queue", parent)

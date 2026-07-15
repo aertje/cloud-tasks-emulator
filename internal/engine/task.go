@@ -64,6 +64,16 @@ type Task struct {
 
 	cancel chan bool
 
+	// armInterrupt identifies the task's single pending fire, guarded by
+	// stateMutex. Schedule installs a fresh channel when it arms the next fire;
+	// whoever dispatches the task (the scheduled goroutine or a forced Run)
+	// consumes the arming by clearing this field, so the task dispatches at most
+	// once per arming. Run additionally closes the consumed channel to wake a
+	// scheduled goroutine still waiting on its timer. A nil value means there is
+	// no unclaimed pending fire (the task is dispatching, terminal, or between
+	// armings).
+	armInterrupt chan struct{}
+
 	onDone func(*Task)
 
 	// done is closed exactly once, after onDone has finished running, when the
@@ -273,11 +283,54 @@ func (task *Task) Attempt() {
 // Run runs the task outside of the normal queueing mechanism.
 // This method is called directly by request.
 func (task *Task) Run() TaskState {
+	// Take over the task's pending fire so it does not also dispatch at its
+	// original schedule time (a double dispatch). If the scheduled fire has
+	// already been consumed - the task is dispatching through the normal path
+	// right now - Run does not dispatch a second time and just returns a current
+	// snapshot, matching Cloud Tasks running the task once.
+	interrupt, ok := task.disarm()
+	if !ok {
+		return task.State()
+	}
+	// Wake the scheduled goroutine so it stands down promptly rather than
+	// lingering until its (now-superseded) schedule time.
+	close(interrupt)
+
 	frozen := updateStateForDispatch(task)
 
 	go task.doDispatch(false, frozen)
 
 	return frozen
+}
+
+// disarm consumes the task's current pending fire, returning its interrupt
+// channel, or (nil, false) if there is no unclaimed pending fire. It is how Run
+// takes a scheduled task over: the caller owns the resulting dispatch and closes
+// the returned channel to release the scheduled goroutine.
+func (task *Task) disarm() (chan struct{}, bool) {
+	task.stateMutex.Lock()
+	defer task.stateMutex.Unlock()
+	if task.armInterrupt == nil {
+		return nil, false
+	}
+	interrupt := task.armInterrupt
+	task.armInterrupt = nil
+	return interrupt, true
+}
+
+// claimScheduledFire lets a scheduled goroutine consume the pending fire it was
+// armed with. It succeeds only while that arming is still current: a later
+// arming (a retry or dispatcher re-arm) or a Run takeover clears or replaces
+// armInterrupt, so a stale goroutine stands down instead of dispatching a
+// superseded fire.
+func (task *Task) claimScheduledFire(interrupt chan struct{}) bool {
+	task.stateMutex.Lock()
+	defer task.stateMutex.Unlock()
+	if task.armInterrupt != interrupt {
+		return false
+	}
+	task.armInterrupt = nil
+	return true
 }
 
 // Delete cancels the task if it is queued for execution.
@@ -293,6 +346,10 @@ func (task *Task) Delete() {
 func (task *Task) Schedule() {
 	task.stateMutex.Lock()
 	scheduleTime := task.state.ScheduleTime.OrZero()
+	// Arm a fresh pending fire. The interrupt channel identifies this arming so a
+	// concurrent Run can take the task over (see disarm/claimScheduledFire).
+	interrupt := make(chan struct{})
+	task.armInterrupt = interrupt
 	task.stateMutex.Unlock()
 
 	fromNow := time.Until(scheduleTime)
@@ -300,6 +357,12 @@ func (task *Task) Schedule() {
 	go func() {
 		select {
 		case <-time.After(fromNow):
+			// Consume this arming before handing the task to the dispatcher. A
+			// forced Run may have taken it over in the meantime, in which case the
+			// task is already dispatching and this fire must stand down.
+			if !task.claimScheduledFire(interrupt) {
+				return
+			}
 			// The queue may be paused (nothing draining fire) between the timer
 			// firing and this send; keep listening on cancel so Delete still
 			// takes effect instead of leaking this goroutine or dispatching a
@@ -311,6 +374,10 @@ func (task *Task) Schedule() {
 			}
 		case <-task.cancel:
 			task.markDone()
+		case <-interrupt:
+			// A forced Run took the task over before the timer fired; it
+			// dispatches the task directly, so this arming stands down.
+			return
 		}
 	}()
 }

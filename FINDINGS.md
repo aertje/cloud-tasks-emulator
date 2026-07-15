@@ -5,23 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Major findings
 
-### 1. RunTask double-dispatches
-
-- [ ] Status: open
-- Severity: high (behavioral: forced task runs twice)
-- Locations: `internal/engine/task.go:242`, `internal/engine/engine.go:683`
-
-`Task.Run` dispatches immediately but never disarms the pending `Schedule`
-goroutine. A task scheduled for the future runs now via `RunTask` and again at
-its original schedule time. On a successful forced run, `markDone` fires, yet
-the armed goroutine still pushes the completed task into `queue.fire` later,
-and the dispatcher attempts it again; `reschedule(retry=true)` can then keep
-retrying it. Real Cloud Tasks resets the schedule so the task runs once.
-
-Fix direction: `Run` must take over the task's single pending schedule (disarm
-the goroutine, e.g. via the cancel channel plus re-arm bookkeeping, or by
-restructuring scheduling so there is one owner of "next fire").
-
 ### 2. Retry backoff is anchored to the previous schedule time
 
 - [ ] Status: open

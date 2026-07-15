@@ -477,6 +477,32 @@ func TestCreateTaskRejectsDuplicateName(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTaskAlreadyExists)
 }
 
+// TestRunTaskDispatchesOnce verifies that forcing a future-scheduled task to run
+// now dispatches it exactly once: Run must take over the pending schedule so the
+// task does not also fire at its original schedule time (a double dispatch).
+func TestRunTaskDispatchesOnce(t *testing.T) {
+	d := newFakeDispatcher(200)
+	e := newTestEngine(t, d)
+	createRunningQueue(t, e)
+	ctx := t.Context()
+
+	// Schedule the task a second out, then force it to run immediately.
+	name := testParent + "/tasks/forced"
+	_, _, err := e.CreateTask(ctx, testParent, httpTaskState(name, time.Now().Add(time.Second)))
+	require.NoError(t, err)
+
+	_, _, err = e.RunTask(ctx, name)
+	require.NoError(t, err)
+
+	// Run dispatches now, well before the original schedule time...
+	d.awaitDispatches(t, 1, 500*time.Millisecond)
+
+	// ...and the superseded schedule must not fire a second dispatch once its
+	// original time (1s) passes.
+	require.Never(t, func() bool { return d.count() > 1 }, 1500*time.Millisecond, 10*time.Millisecond)
+	assert.Equal(t, 1, d.count())
+}
+
 func TestDeleteTaskTombstonesName(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)

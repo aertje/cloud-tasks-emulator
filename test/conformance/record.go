@@ -120,7 +120,10 @@ func invoke(ctx context.Context, c *Client, cs Case, p Params) Result {
 		if !ok {
 			continue
 		}
-		text := prototext.MarshalOptions{}.Format(msg)
+		// prototext's field separator is deliberately unstable (one or two
+		// spaces at random), so canonicalise here to keep the recorded golden
+		// from churning cosmetically between runs. See canonicalSpace.
+		text := canonicalSpace(prototext.MarshalOptions{}.Format(msg))
 		r.Details = append(r.Details, DetailRecord{
 			Type:     fmt.Sprintf("%T", d),
 			Template: Normalize(text, p),

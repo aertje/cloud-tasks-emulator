@@ -421,6 +421,9 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	if !parentMatched {
 		return nil, ErrInvalidParent
 	}
+	if err := validateQueueConfig(qs); err != nil {
+		return nil, err
+	}
 	if _, ok := e.fetchQueue(qs.Name); ok {
 		return nil, ErrQueueAlreadyExists
 	}
@@ -646,6 +649,10 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 			return nil, TaskState{}, ErrHTTPRequestURLScheme
 		}
+	}
+
+	if err := validateTaskConfig(ts, e.now()); err != nil {
+		return nil, TaskState{}, err
 	}
 
 	task, frozen := queue.NewTask(ts)

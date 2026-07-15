@@ -9,12 +9,36 @@ var (
 	ErrInvalidQueueName     = errors.New("invalid queue name")
 	ErrInvalidParent        = errors.New("invalid parent")
 
+	// Queue-configuration violations, reported by CreateQueue (see
+	// validateQueueConfig). Real Cloud Tasks rejects these with InvalidArgument
+	// and distinguishes a negative value from one above the allowed maximum
+	// (see the queue-invalid-config cases in conformance/golden/errors.json),
+	// so each direction gets its own sentinel.
+	ErrMaxDispatchesPerSecondNegative  = errors.New("max dispatches per second negative")
+	ErrMaxDispatchesPerSecondTooHigh   = errors.New("max dispatches per second too high")
+	ErrMaxBurstSizeRange               = errors.New("max burst size out of range")
+	ErrMaxConcurrentDispatchesNegative = errors.New("max concurrent dispatches negative")
+	ErrMaxConcurrentDispatchesTooHigh  = errors.New("max concurrent dispatches too high")
+	ErrMaxAttemptsRange                = errors.New("max attempts out of range")
+	ErrMaxDoublingsNegative            = errors.New("max doublings negative")
+	ErrMinBackoffNegative              = errors.New("min backoff negative")
+	ErrMaxBackoffNegative              = errors.New("max backoff negative")
+	ErrBackoffOrder                    = errors.New("min backoff greater than max backoff")
+
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrTaskRecentlyDeleted = errors.New("task recently deleted")
 	ErrTaskAlreadyExists   = errors.New("task already exists")
 	ErrInvalidTaskName     = errors.New("invalid task name")
 	ErrInvalidTaskID       = errors.New("invalid task id")
 	ErrTaskQueueMismatch   = errors.New("task name does not belong to queue")
+
+	// Task-configuration violations, reported by CreateTask (see
+	// validateTaskConfig). Real Cloud Tasks rejects these with InvalidArgument.
+	// The dispatch-deadline interval depends on the target family, so each
+	// family gets its own sentinel.
+	ErrDispatchDeadlineHTTPRange      = errors.New("http dispatch deadline out of range")
+	ErrDispatchDeadlineAppEngineRange = errors.New("app engine dispatch deadline out of range")
+	ErrScheduleTimeTooFarInFuture     = errors.New("schedule time too far in the future")
 
 	// ErrHTTPRequestURLRequired and ErrHTTPRequestURLScheme report the two
 	// create-time URL validations Cloud Tasks performs on an HTTP-target task:

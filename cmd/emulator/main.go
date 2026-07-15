@@ -14,6 +14,11 @@ import (
 	"strings"
 	"syscall"
 
+	// Embed the timezone database: the Docker image is bare Alpine with no
+	// tzdata package, and the server renders a schedule time in US Pacific
+	// inside one CreateTask error message (see scheduleTimeErrorZone).
+	_ "time/tzdata"
+
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"

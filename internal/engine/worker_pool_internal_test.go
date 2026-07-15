@@ -69,9 +69,10 @@ func TestDispatchConcurrencyIsBounded(t *testing.T) {
 
 	_, err := e.CreateQueue(t.Context(), "projects/p/locations/l", QueueState{
 		Name: testParent,
-		// A generous rate limit so the token bucket, a separate axis, does not
-		// throttle the backlog and mask the concurrency bound under test.
-		RateLimits: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](maxConcurrent), MaxBurstSize: maybe.Some[int32](100), MaxDispatchesPerSecond: maybe.Some[float64](1000)},
+		// A generous rate limit (the allowed maximum) so the token bucket, a
+		// separate axis, does not throttle the backlog and mask the concurrency
+		// bound under test.
+		RateLimits: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](maxConcurrent), MaxBurstSize: maybe.Some[int32](100), MaxDispatchesPerSecond: maybe.Some[float64](500)},
 	})
 	require.NoError(t, err)
 

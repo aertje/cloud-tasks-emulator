@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -77,7 +78,14 @@ func updateStateForReschedule(task *Task) {
 	retryConfig := task.queue.state.RetryConfig
 
 	doubling := min(task.state.DispatchCount-1, retryConfig.MaxDoublings.OrZero())
-	backoff := min(retryConfig.MinBackoff.OrZero()*time.Duration(1<<uint32(doubling)), retryConfig.MaxBackoff.OrZero())
+	maxBackoff := retryConfig.MaxBackoff.OrZero()
+	// The exponential term is computed in float64 so a large doubling count
+	// saturates (towards +Inf) and clamps to maxBackoff, instead of overflowing
+	// time.Duration into a negative - i.e. immediate - backoff.
+	backoff := maxBackoff
+	if scaled := float64(retryConfig.MinBackoff.OrZero()) * math.Pow(2, float64(doubling)); scaled < float64(maxBackoff) {
+		backoff = time.Duration(scaled)
+	}
 
 	task.state.ScheduleTime = maybe.Some(task.state.ScheduleTime.OrZero().Add(backoff))
 }
@@ -169,7 +177,8 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 	maxAttempts := task.queue.state.RetryConfig.MaxAttempts.OrZero()
 	task.stateMutex.Unlock()
 
-	if dispatchCount >= maxAttempts {
+	// -1 is the documented "unlimited attempts" marker (see validateQueueConfig).
+	if maxAttempts != -1 && dispatchCount >= maxAttempts {
 		logger.Warn("task exhausted retries", "task", task.state.Name, "attempts", dispatchCount)
 		task.markDone()
 		return

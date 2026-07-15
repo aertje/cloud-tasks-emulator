@@ -81,6 +81,61 @@ func TestCloudTasksCreateQueue(t *testing.T) {
 	assert.Equal(t, taskspb.Queue_RUNNING, resp.State)
 }
 
+// Out-of-range queue configuration must come back as InvalidArgument. The
+// negative-capacity case used to panic inside the handler goroutine (channel
+// sizes were taken straight from client input), killing the whole process.
+func TestCreateQueueRejectsInvalidConfig(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	queue := newQueue(formattedParent, t.Name())
+	queue.RateLimits = &taskspb.RateLimits{MaxConcurrentDispatches: -1}
+
+	_, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	})
+	assertIsGrpcError(t, `^RateLimits\.maxConcurrentDispatches cannot be negative\.$`, grpcCodes.InvalidArgument, err)
+}
+
+// max_burst_size is output-only in the v2 API: real Cloud Tasks ignores any
+// client-supplied value rather than rejecting it (conformance case
+// queue/create/burst-negative records OK), so even a negative one - which
+// would have panicked the channel allocation - must be dropped and the
+// server-picked default returned.
+func TestCreateQueueIgnoresClientBurstSize(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	queue := newQueue(formattedParent, t.Name())
+	queue.RateLimits = &taskspb.RateLimits{MaxBurstSize: -1}
+
+	resp, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(100), resp.GetRateLimits().GetMaxBurstSize())
+}
+
+// A fractional dispatch rate is legal in Cloud Tasks; it used to truncate to a
+// zero divisor and panic in the token-generator goroutine after a successful
+// CreateQueue response.
+func TestCreateQueueAcceptsFractionalRate(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	queue := newQueue(formattedParent, t.Name())
+	queue.RateLimits = &taskspb.RateLimits{MaxDispatchesPerSecond: 0.5}
+
+	resp, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  queue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0.5, resp.GetRateLimits().GetMaxDispatchesPerSecond())
+}
+
 func TestCreateTask(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
@@ -232,6 +287,26 @@ func TestCreateTaskRejectsNameForOtherQueue(t *testing.T) {
 
 	assert.Nil(t, createdTask)
 	assertIsGrpcError(t, "^The queue name from request", grpcCodes.InvalidArgument, err)
+}
+
+// Out-of-range task configuration must come back as InvalidArgument; the
+// engine-level table test covers the full matrix, this pins the gRPC mapping.
+func TestCreateTaskRejectsOutOfRangeDispatchDeadline(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	createdQueue := createTestQueue(t, client)
+
+	_, err := client.CreateTask(context.Background(), &taskspb.CreateTaskRequest{
+		Parent: createdQueue.GetName(),
+		Task: &taskspb.Task{
+			DispatchDeadline: durationpb.New(31 * time.Minute),
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{Url: "http://www.google.com"},
+			},
+		},
+	})
+	assertIsGrpcError(t, `^Task\.dispatchDeadline must be between \[15s, 30m\]\.$`, grpcCodes.InvalidArgument, err)
 }
 
 func TestCreateTaskRejectsMissingURL(t *testing.T) {

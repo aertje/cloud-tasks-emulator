@@ -8,6 +8,38 @@
     "stable": true
   },
   {
+    "name": "queue/create/backoff-order",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RetryConfig.minBackoff must be less than or equal to RetryConfig.maxBackoff.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/burst-negative",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "OK",
+    "template": "",
+    "stable": true
+  },
+  {
+    "name": "queue/create/concurrent-negative",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RateLimits.maxConcurrentDispatches cannot be negative.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/concurrent-too-high",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RateLimits.maxConcurrentDispatches must be less than or equal to 5000.",
+    "stable": true
+  },
+  {
     "name": "queue/create/invalid-name",
     "rpc": "CreateQueue",
     "category": "queue-invalid-name",
@@ -16,7 +48,7 @@
     "details": [
       {
         "type": "*errdetails.Help",
-        "template": "links:{description:\"Definition of queue name\" url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues#Queue.FIELDS.name\"}"
+        "template": "links:{description:\"Definition of queue name\"  url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues#Queue.FIELDS.name\"}"
       }
     ],
     "stable": true
@@ -30,17 +62,57 @@
     "details": [
       {
         "type": "*errdetails.ErrorInfo",
-        "template": "reason:\"CONSUMER_INVALID\" domain:\"googleapis.com\" metadata:{key:\"consumer\" value:\"projects/not-a-valid-parent\"} metadata:{key:\"containerInfo\" value:\"not-a-valid-parent\"} metadata:{key:\"service\" value:\"cloudtasks.googleapis.com\"}"
+        "template": "reason:\"CONSUMER_INVALID\"  domain:\"googleapis.com\"  metadata:{key:\"consumer\"  value:\"projects/not-a-valid-parent\"}  metadata:{key:\"containerInfo\"  value:\"not-a-valid-parent\"}  metadata:{key:\"service\"  value:\"cloudtasks.googleapis.com\"}"
       },
       {
         "type": "*errdetails.LocalizedMessage",
-        "template": "locale:\"en-US\" message:\"Permission denied on resource project not-a-valid-parent.\""
+        "template": "locale:\"en-US\"  message:\"Permission denied on resource project not-a-valid-parent.\""
       },
       {
         "type": "*errdetails.Help",
-        "template": "links:{description:\"Google developers console\" url:\"https://console.developers.google.com\"}"
+        "template": "links:{description:\"Google developers console\"  url:\"https://console.developers.google.com\"}"
       }
     ],
+    "stable": true
+  },
+  {
+    "name": "queue/create/max-attempts-below-minus-one",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RetryConfig.maxAttempts must be greater or equal to -1.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/max-doublings-negative",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RetryConfig.maxDoublings cannot be negative.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/min-backoff-negative",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RetryConfig.minBackoff cannot be negative.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/rate-negative",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RateLimits.maxDispatchesPerSecond cannot be negative.",
+    "stable": true
+  },
+  {
+    "name": "queue/create/rate-too-high",
+    "rpc": "CreateQueue",
+    "category": "queue-invalid-config",
+    "code": "InvalidArgument",
+    "template": "RateLimits.maxDispatchesPerSecond must be less than or equal to 500.",
     "stable": true
   },
   {
@@ -108,6 +180,38 @@
     "stable": true
   },
   {
+    "name": "task/create/appengine-deadline-one-hour",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "OK",
+    "template": "",
+    "stable": true
+  },
+  {
+    "name": "task/create/appengine-deadline-too-long",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 24h15s].",
+    "stable": true
+  },
+  {
+    "name": "task/create/deadline-too-long",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 30m].",
+    "stable": true
+  },
+  {
+    "name": "task/create/deadline-too-short",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "Task.dispatchDeadline must be between [15s, 30m].",
+    "stable": true
+  },
+  {
     "name": "task/create/invalid-name",
     "rpc": "CreateTask",
     "category": "task-invalid-name",
@@ -116,7 +220,7 @@
     "details": [
       {
         "type": "*errdetails.Help",
-        "template": "links:{description:\"Definition of task ID\" url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name\"}"
+        "template": "links:{description:\"Definition of task ID\"  url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name\"}"
       }
     ],
     "stable": true
@@ -175,6 +279,14 @@
     "category": "queue-recently-deleted",
     "code": "NotFound",
     "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/create/schedule-too-far",
+    "rpc": "CreateTask",
+    "category": "task-invalid-config",
+    "code": "InvalidArgument",
+    "template": "The Task.scheduleTime, 2099-12-31T16:00:00-08:00, is too far in the future. Schedule time must be no more than 720h in the future.",
     "stable": true
   },
   {

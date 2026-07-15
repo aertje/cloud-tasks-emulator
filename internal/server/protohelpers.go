@@ -29,9 +29,13 @@ func queueFromProto(q *tasks.Queue) engine.QueueState {
 		State: queueRunStateFromProto(q.GetState()),
 	}
 	if rl := q.GetRateLimits(); rl != nil {
+		// max_burst_size is deliberately not mapped: it is output-only in the
+		// v2 API and real Cloud Tasks ignores any client-supplied value (even a
+		// negative one - see conformance case queue/create/burst-negative,
+		// which records OK). The engine applies its default; embedded engine
+		// callers can still set the field directly.
 		s.RateLimits = engine.RateLimits{
 			MaxDispatchesPerSecond:  maybe.OfNonZero(rl.GetMaxDispatchesPerSecond()),
-			MaxBurstSize:            maybe.OfNonZero(rl.GetMaxBurstSize()),
 			MaxConcurrentDispatches: maybe.OfNonZero(rl.GetMaxConcurrentDispatches()),
 		}
 	}
@@ -364,6 +368,34 @@ func mapErr(err error) error {
 		)
 	case engine.ErrInvalidParent:
 		return status.Errorf(codes.InvalidArgument, "Invalid resource field value in the request.")
+	// The queue-configuration messages below are verified against the
+	// queue-invalid-config cases in conformance/golden/errors.json, except
+	// where noted.
+	case engine.ErrMaxDispatchesPerSecondNegative:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxDispatchesPerSecond cannot be negative.")
+	case engine.ErrMaxDispatchesPerSecondTooHigh:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxDispatchesPerSecond must be less than or equal to 500.")
+	case engine.ErrMaxBurstSizeRange:
+		// Unreachable from the wire (queueFromProto drops the output-only
+		// field, matching real v2, which never rejects it); mapped defensively
+		// so a future edge change cannot surface it as Internal.
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxBurstSize must be between 1 and 500.")
+	case engine.ErrMaxConcurrentDispatchesNegative:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxConcurrentDispatches cannot be negative.")
+	case engine.ErrMaxConcurrentDispatchesTooHigh:
+		return status.Errorf(codes.InvalidArgument, "RateLimits.maxConcurrentDispatches must be less than or equal to 5000.")
+	case engine.ErrMaxAttemptsRange:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxAttempts must be greater or equal to -1.")
+	case engine.ErrMaxDoublingsNegative:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxDoublings cannot be negative.")
+	case engine.ErrMinBackoffNegative:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.minBackoff cannot be negative.")
+	case engine.ErrMaxBackoffNegative:
+		// Extrapolated from the recorded minBackoff/maxDoublings pattern; no
+		// golden case captures a negative max_backoff yet.
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.maxBackoff cannot be negative.")
+	case engine.ErrBackoffOrder:
+		return status.Errorf(codes.InvalidArgument, "RetryConfig.minBackoff must be less than or equal to RetryConfig.maxBackoff.")
 	case engine.ErrTaskNotFound:
 		// GetTask/DeleteTask/RunTask all report a missing task with this generic message.
 		return status.Errorf(codes.NotFound, "Requested entity was not found.")
@@ -373,6 +405,14 @@ func mapErr(err error) error {
 		return status.Errorf(codes.AlreadyExists, "Requested entity already exists")
 	case engine.ErrInvalidTaskName:
 		return status.Errorf(codes.InvalidArgument, `Task name must be formatted: "projects/<PROJECT_ID>/locations/<LOCATION_ID>/queues/<QUEUE_ID>/tasks/<TASK_ID>"`)
+	// The dispatch-deadline messages are verified against the
+	// task-invalid-config cases in conformance/golden/errors.json. The
+	// schedule-horizon sentinel is mapped in mapErrForCreateTask: its message
+	// interpolates the offending schedule time from the request.
+	case engine.ErrDispatchDeadlineHTTPRange:
+		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 30m].")
+	case engine.ErrDispatchDeadlineAppEngineRange:
+		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 24h15s].")
 	case engine.ErrHTTPRequestURLRequired:
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:
@@ -432,6 +472,15 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 			in.GetParent(),
 			queueNameFromTaskName(in.GetTask().GetName()),
 		)
+	case engine.ErrScheduleTimeTooFarInFuture:
+		// The message names the offending schedule time, rendered in US
+		// Pacific time (the golden was recorded as -08:00 for a December
+		// instant; a DST-affected summer instant is extrapolated to render as
+		// -07:00 via the location, not a fixed offset).
+		return status.Errorf(codes.InvalidArgument,
+			"The Task.scheduleTime, %s, is too far in the future. Schedule time must be no more than 720h in the future.",
+			in.GetTask().GetScheduleTime().AsTime().In(scheduleTimeErrorZone).Format(time.RFC3339),
+		)
 	case engine.ErrInvalidTaskID:
 		// The message names the offending task ID; real Cloud Tasks also
 		// attaches a Help detail pointing at the task-name field definition.
@@ -446,6 +495,17 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 	}
 	return mapErr(err)
 }
+
+// scheduleTimeErrorZone is the zone real Cloud Tasks renders the offending
+// schedule time in inside the too-far-in-the-future message (US Pacific).
+// Falls back to a fixed -08:00 offset on hosts without tzdata, matching the
+// recorded winter golden but losing DST fidelity.
+var scheduleTimeErrorZone = func() *time.Location {
+	if loc, err := time.LoadLocation("America/Los_Angeles"); err == nil {
+		return loc
+	}
+	return time.FixedZone("-08:00", -8*60*60)
+}()
 
 // queueNameFromTaskName strips the "/tasks/<id>" suffix off a task resource
 // name, yielding the queue it belongs to. Returns the input unchanged if it has

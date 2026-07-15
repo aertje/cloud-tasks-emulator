@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -153,6 +154,20 @@ func httpTaskState(name string, schedule time.Time) TaskState {
 	}
 }
 
+// appEngineTaskState builds a valid App Engine-target task state, optionally
+// with a fixed name and schedule time (zero schedule leaves it unset).
+func appEngineTaskState(name string, schedule time.Time) TaskState {
+	scheduleTime := maybe.None[time.Time]()
+	if !schedule.IsZero() {
+		scheduleTime = maybe.Some(schedule)
+	}
+	return TaskState{
+		Name:                 name,
+		ScheduleTime:         scheduleTime,
+		AppEngineHTTPRequest: maybe.Some(AppEngineHTTPRequest{}),
+	}
+}
+
 func TestParseTaskName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -236,6 +251,14 @@ func TestBackoffReschedule(t *testing.T) {
 			dispatchCount: 10, // would be huge, capped at 3s
 			wantBackoff:   3 * time.Second,
 		},
+		{
+			// 100ms << 63 overflows time.Duration; the float64 arithmetic must
+			// saturate and clamp to max backoff rather than go negative.
+			name:          "large doubling count saturates at max backoff",
+			retry:         RetryConfig{MinBackoff: maybe.Some(100 * time.Millisecond), MaxBackoff: maybe.Some(time.Hour), MaxDoublings: maybe.Some[int32](63)},
+			dispatchCount: 64,
+			wantBackoff:   time.Hour,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +304,96 @@ func TestQueueLifecycle(t *testing.T) {
 	assert.ErrorIs(t, e.DeleteQueue(ctx, "projects/p/locations/l/queues/absent"), ErrQueueNotFound)
 }
 
+func TestCreateQueueConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		rate    RateLimits
+		retry   RetryConfig
+		wantErr error // nil means the config must be accepted
+	}{
+		{name: "rate negative", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(-1.0)}, wantErr: ErrMaxDispatchesPerSecondNegative},
+		{name: "rate zero", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(0.0)}, wantErr: ErrMaxDispatchesPerSecondNegative},
+		{name: "rate NaN", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(math.NaN())}, wantErr: ErrMaxDispatchesPerSecondNegative},
+		{name: "rate too high", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(500.5)}, wantErr: ErrMaxDispatchesPerSecondTooHigh},
+		{name: "rate fractional ok", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(0.5)}},
+		{name: "rate at limit ok", rate: RateLimits{MaxDispatchesPerSecond: maybe.Some(500.0)}},
+		{name: "burst negative", rate: RateLimits{MaxBurstSize: maybe.Some[int32](-1)}, wantErr: ErrMaxBurstSizeRange},
+		{name: "burst too high", rate: RateLimits{MaxBurstSize: maybe.Some[int32](501)}, wantErr: ErrMaxBurstSizeRange},
+		{name: "burst at limit ok", rate: RateLimits{MaxBurstSize: maybe.Some[int32](500)}},
+		{name: "concurrent negative", rate: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](-1)}, wantErr: ErrMaxConcurrentDispatchesNegative},
+		{name: "concurrent too high", rate: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](5001)}, wantErr: ErrMaxConcurrentDispatchesTooHigh},
+		{name: "concurrent at limit ok", rate: RateLimits{MaxConcurrentDispatches: maybe.Some[int32](5000)}},
+		{name: "max attempts below minus one", retry: RetryConfig{MaxAttempts: maybe.Some[int32](-2)}, wantErr: ErrMaxAttemptsRange},
+		{name: "max attempts unlimited ok", retry: RetryConfig{MaxAttempts: maybe.Some[int32](-1)}},
+		{name: "max doublings negative", retry: RetryConfig{MaxDoublings: maybe.Some[int32](-1)}, wantErr: ErrMaxDoublingsNegative},
+		{name: "max doublings zero ok", retry: RetryConfig{MaxDoublings: maybe.Some[int32](0)}},
+		{name: "min backoff negative", retry: RetryConfig{MinBackoff: maybe.Some(-time.Second)}, wantErr: ErrMinBackoffNegative},
+		{name: "max backoff negative", retry: RetryConfig{MaxBackoff: maybe.Some(-time.Second)}, wantErr: ErrMaxBackoffNegative},
+		{name: "min backoff above max backoff", retry: RetryConfig{MinBackoff: maybe.Some(10 * time.Second), MaxBackoff: maybe.Some(5 * time.Second)}, wantErr: ErrBackoffOrder},
+		{name: "min backoff above default max backoff", retry: RetryConfig{MinBackoff: maybe.Some(2 * time.Hour)}, wantErr: ErrBackoffOrder},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t, newFakeDispatcher(200))
+			_, err := e.CreateQueue(t.Context(), "projects/p/locations/l", QueueState{
+				Name:        testParent,
+				RateLimits:  tc.rate,
+				RetryConfig: tc.retry,
+			})
+			if tc.wantErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// A fractional dispatch rate is legal in Cloud Tasks. The token generator
+// derives its refill period from the rate by float division; the previous
+// integer arithmetic truncated 0.5 to a zero divisor and panicked in a
+// background goroutine, killing the process.
+func TestFractionalRateQueueDispatches(t *testing.T) {
+	d := newFakeDispatcher(200)
+	e := newTestEngine(t, d)
+
+	_, err := e.CreateQueue(t.Context(), "projects/p/locations/l", QueueState{
+		Name:       testParent,
+		RateLimits: RateLimits{MaxDispatchesPerSecond: maybe.Some(0.5)},
+	})
+	require.NoError(t, err)
+
+	// The initial token-bucket fill covers the first dispatch, so the task runs
+	// immediately despite the slow refill rate.
+	_, _, err = e.CreateTask(t.Context(), testParent, httpTaskState("", time.Time{}))
+	require.NoError(t, err)
+	d.awaitDispatches(t, 1, 2*time.Second)
+}
+
+// MaxAttempts -1 is the documented "unlimited attempts" marker. Before it was
+// honored, dispatchCount >= -1 held on the first attempt and the task was
+// dropped as exhausted; several retries prove the marker works.
+func TestUnlimitedAttemptsKeepRetrying(t *testing.T) {
+	d := newFakeDispatcher(500) // always fails
+	e := newTestEngine(t, d)
+
+	_, err := e.CreateQueue(t.Context(), "projects/p/locations/l", QueueState{
+		Name: testParent,
+		RetryConfig: RetryConfig{
+			MaxAttempts:  maybe.Some[int32](-1),
+			MinBackoff:   maybe.Some(time.Millisecond),
+			MaxBackoff:   maybe.Some(2 * time.Millisecond),
+			MaxDoublings: maybe.Some[int32](1),
+		},
+	})
+	require.NoError(t, err)
+
+	_, _, err = e.CreateTask(t.Context(), testParent, httpTaskState(testParent+"/tasks/undying", time.Time{}))
+	require.NoError(t, err)
+
+	d.awaitDispatches(t, 5, 2*time.Second)
+}
+
 func TestCreateTaskValidation(t *testing.T) {
 	e := newTestEngine(t, newFakeDispatcher(200))
 	createRunningQueue(t, e)
@@ -302,6 +415,49 @@ func TestCreateTaskValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := e.CreateTask(t.Context(), tc.parent, tc.state)
 			assert.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestCreateTaskConfigValidation(t *testing.T) {
+	// Future schedule times keep the accepted tasks from dispatching mid-test.
+	future := time.Now().Add(time.Hour)
+	farFuture := time.Now().Add(31 * 24 * time.Hour)
+	okFuture := time.Now().Add(29 * 24 * time.Hour)
+
+	withDeadline := func(s TaskState, d time.Duration) TaskState {
+		s.DispatchDeadline = maybe.Some(d)
+		return s
+	}
+
+	tests := []struct {
+		name    string
+		state   TaskState
+		wantErr error // nil means the task must be accepted
+	}{
+		{name: "http deadline too short", state: withDeadline(httpTaskState("", future), 14*time.Second), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline negative", state: withDeadline(httpTaskState("", future), -time.Second), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline too long", state: withDeadline(httpTaskState("", future), 31*time.Minute), wantErr: ErrDispatchDeadlineHTTPRange},
+		{name: "http deadline at lower limit ok", state: withDeadline(httpTaskState("", future), 15*time.Second)},
+		{name: "http deadline at upper limit ok", state: withDeadline(httpTaskState("", future), 30*time.Minute)},
+		{name: "app engine deadline too short", state: withDeadline(appEngineTaskState("", future), 14*time.Second), wantErr: ErrDispatchDeadlineAppEngineRange},
+		{name: "app engine deadline too long", state: withDeadline(appEngineTaskState("", future), 25*time.Hour), wantErr: ErrDispatchDeadlineAppEngineRange},
+		// One hour is legal for an App Engine target but out of range for an
+		// HTTP target, pinning the per-family split.
+		{name: "app engine deadline one hour ok", state: withDeadline(appEngineTaskState("", future), time.Hour)},
+		{name: "schedule too far in future", state: httpTaskState("", farFuture), wantErr: ErrScheduleTimeTooFarInFuture},
+		{name: "schedule within horizon ok", state: httpTaskState("", okFuture)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t, newFakeDispatcher(200))
+			createRunningQueue(t, e)
+			_, _, err := e.CreateTask(t.Context(), testParent, tc.state)
+			if tc.wantErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tc.wantErr)
+			}
 		})
 	}
 }
@@ -531,7 +687,11 @@ func (e *Engine) countTaskTombstones() int {
 
 func TestTombstoneExpiry(t *testing.T) {
 	const ttl = time.Minute
-	base := time.Unix(1_700_000_000, 0)
+	// The fake clock is anchored to the real current time (only relative
+	// advances matter here) so the real-clock-relative schedule times used
+	// below stay inside CreateTask's 30-day horizon check, which reads the
+	// engine's injected clock.
+	base := time.Now()
 
 	tests := []struct {
 		name string
@@ -612,7 +772,8 @@ func TestTombstoneExpiry(t *testing.T) {
 
 func TestSweepRemovesExpiredTombstones(t *testing.T) {
 	const ttl = time.Minute
-	clock := newFakeClock(time.Unix(1_700_000_000, 0))
+	// Anchored to the real current time for the same reason as TestTombstoneExpiry.
+	clock := newFakeClock(time.Now())
 	e := newClockedTestEngine(t, clock, ttl)
 
 	// Tombstone one task and one queue.

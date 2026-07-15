@@ -300,11 +300,17 @@ func (task *Task) Schedule() {
 	go func() {
 		select {
 		case <-time.After(fromNow):
-			task.queue.fire <- task
-			return
+			// The queue may be paused (nothing draining fire) between the timer
+			// firing and this send; keep listening on cancel so Delete still
+			// takes effect instead of leaking this goroutine or dispatching a
+			// deleted task once the queue resumes.
+			select {
+			case task.queue.fire <- task:
+			case <-task.cancel:
+				task.markDone()
+			}
 		case <-task.cancel:
 			task.markDone()
-			return
 		}
 	}()
 }

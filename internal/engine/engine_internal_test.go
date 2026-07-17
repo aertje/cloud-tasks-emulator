@@ -220,7 +220,12 @@ func TestParseTaskName(t *testing.T) {
 }
 
 func TestBackoffReschedule(t *testing.T) {
-	baseSchedule := time.Unix(1_700_000_000, 0)
+	// The previous ScheduleTime is deliberately in the past relative to the
+	// failure time, mimicking a slow attempt (e.g. a dispatch-deadline timeout):
+	// the new schedule must be anchored to the failure time, not this stale
+	// value, otherwise the retry would fire immediately.
+	failureTime := time.Unix(1_700_000_000, 0)
+	staleSchedule := failureTime.Add(-10 * time.Minute)
 	tests := []struct {
 		name          string
 		retry         RetryConfig
@@ -263,11 +268,14 @@ func TestBackoffReschedule(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			task := &Task{
-				queue: &Queue{state: QueueState{RetryConfig: tc.retry}},
-				state: TaskState{ScheduleTime: maybe.Some(baseSchedule), DispatchCount: tc.dispatchCount},
+				queue: &Queue{
+					state: QueueState{RetryConfig: tc.retry},
+					now:   func() time.Time { return failureTime },
+				},
+				state: TaskState{ScheduleTime: maybe.Some(staleSchedule), DispatchCount: tc.dispatchCount},
 			}
 			updateStateForReschedule(task)
-			assert.Equal(t, baseSchedule.Add(tc.wantBackoff), task.state.ScheduleTime.OrZero())
+			assert.Equal(t, failureTime.Add(tc.wantBackoff), task.state.ScheduleTime.OrZero())
 		})
 	}
 }

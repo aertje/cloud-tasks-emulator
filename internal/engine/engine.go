@@ -431,7 +431,7 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 		return nil, ErrQueueRecentlyDeleted
 	}
 
-	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineEmulatorHost, e.appEngineRegionID, func(task *Task) {
+	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineEmulatorHost, e.appEngineRegionID, e.now, func(task *Task) {
 		e.retireTask(task)
 	})
 	e.setQueue(qs.Name, queue)

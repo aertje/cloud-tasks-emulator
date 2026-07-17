@@ -87,14 +87,21 @@ func updateStateForReschedule(task *Task) {
 		backoff = time.Duration(scaled)
 	}
 
-	task.state.ScheduleTime = maybe.Some(task.state.ScheduleTime.OrZero().Add(backoff))
+	// Backoff is measured from the failure time (this attempt's completion, i.e.
+	// now), not the previous ScheduleTime. Anchoring to ScheduleTime would let a
+	// slow attempt - worst case a dispatch-deadline timeout, 600s by default -
+	// push the computed retry time into the past, so the next attempt fires
+	// immediately and hammers a slow/timing-out target with effectively zero
+	// backoff until the doubling catches up. Real Cloud Tasks measures from the
+	// failure time.
+	task.state.ScheduleTime = maybe.Some(task.queue.now().Add(backoff))
 }
 
 func updateStateForDispatch(task *Task) TaskState {
 	task.stateMutex.Lock()
 	defer task.stateMutex.Unlock()
 
-	dispatchTime := time.Now()
+	dispatchTime := task.queue.now()
 
 	// Capture the previous attempt's response code before its Attempt is
 	// overwritten below, so this dispatch can report it via
@@ -137,7 +144,7 @@ func updateStateAfterDispatch(task *Task, statusCode int) {
 	// Attempt; storing the completed value here cannot mutate a snapshot the gRPC
 	// edge is reading (unlocked) via taskToProto.
 	attempt := task.state.LastAttempt.OrZero()
-	attempt.ResponseTime = maybe.Some(time.Now())
+	attempt.ResponseTime = maybe.Some(task.queue.now())
 	attempt.ResponseCode = maybe.Some(statusCode)
 	attempt.ResponseStatus = maybe.Some(AttemptStatus{
 		Code:    rpcCode,

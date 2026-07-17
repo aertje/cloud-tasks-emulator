@@ -5,19 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Major findings
 
-### 2. Retry backoff is anchored to the previous schedule time
-
-- [ ] Status: open
-- Severity: medium (hot retry loop against slow/timing-out targets)
-- Location: `internal/engine/dispatch.go:82`
-
-`updateStateForReschedule` sets the next `ScheduleTime` to the old
-`ScheduleTime` plus backoff. When attempts take long (worst case a
-dispatch-deadline timeout, 600s by default), the computed time is already in
-the past, so `time.After` fires immediately and the target gets hammered with
-effectively zero backoff until doubling catches up. Backoff should be measured
-from the failure time (attempt completion), matching real Cloud Tasks.
-
 ### 3. Check-then-insert races in CreateQueue and CreateTask
 
 - [ ] Status: open
@@ -60,13 +47,15 @@ in `main` (and at `engine.New` for embedded use).
 
 ### 6. Inconsistent clock injection
 
-- [ ] Status: open
-- Locations: `internal/engine/task.go:144,146`, `internal/engine/dispatch.go:89,132`, `internal/oidc/token.go:94`
+- [ ] Status: partially done (dispatch path fixed with finding 2)
+- Locations: `internal/engine/task.go:144,146`, `internal/oidc/token.go:94`
 
-The engine has an injectable `now` for tombstones, but `setInitialTaskState`,
-`updateStateForDispatch`, `updateStateAfterDispatch`, and `oidc.CreateToken`
-call `time.Now` directly, so task/attempt timing is untestable with a fake
-clock.
+The engine has an injectable `now` for tombstones. The dispatch-path callers
+(`updateStateForDispatch`, `updateStateForReschedule`, `updateStateAfterDispatch`)
+now use the queue's threaded `now` clock (done alongside finding 2). Still
+outstanding: `setInitialTaskState` and `oidc.CreateToken` call `time.Now`
+directly, so task creation timing and OIDC token `iat`/`exp` remain untestable
+with a fake clock.
 
 ### 7. Stale Purge comment and dead return value
 

@@ -5,21 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Major findings
 
-### 3. Check-then-insert races in CreateQueue and CreateTask
-
-- [ ] Status: open
-- Severity: medium (duplicate names under concurrency, leaked queue goroutines)
-- Locations: `internal/engine/engine.go:424` vs `:434`, `:625` vs `:652`
-
-Both creates do an existence check and a later insert under separate lock
-acquisitions. Two concurrent creates with the same name both succeed. For
-queues, the loser's token-generator and dispatcher goroutines run forever with
-no `Delete` path (permanent leak). For tasks, both copies get scheduled and
-dispatch.
-
-Fix direction: make the uniqueness check and insert one atomic operation under
-`qsMux`/`tsMux` (a set-if-absent that also consults the tombstone map).
-
 ### 4. Queue-name validation is loose
 
 - [ ] Status: open
@@ -66,17 +51,6 @@ with a fake clock.
 wait", but `hardResetQueue` does not use `Purge` and no caller consumes the
 return value.
 
-### 8. Auto-generated task IDs skip uniqueness/tombstone checks
-
-- [ ] Status: open
-- Location: `internal/engine/task.go:139`
-
-Names generated from `rand.Uint64` bypass the exists/recently-deleted checks
-that client-named tasks get; a collision would silently clobber the existing
-task. Astronomically unlikely, but routing both cases through the same
-reservation logic removes the gap for free (and composes with finding 3's
-set-if-absent).
-
 ### 9. Unlocked reads of queue.state.RetryConfig from the task path
 
 - [ ] Status: open
@@ -113,9 +87,10 @@ against real Cloud Tasks before it can be enforced correctly.
   two different tombstone conventions (timestamp map at the engine, nil entries
   in the queue map). It works, but it is the most intricate part of the design;
   a single registry keyed by name with an entry state would remove a class of
-  "who owns this entry" reasoning. Findings 1, 3 and 8 all touch this
-  machinery; if fixing them gets awkward, consolidating the registry first may
-  be the cheaper path.
+  "who owns this entry" reasoning. The now-resolved create-race and
+  auto-generated-name findings touched this machinery; the engine map is now the
+  atomic reservation authority (insertQueueIfAbsent/insertTaskIfAbsent), but the
+  duplication between the engine and queue maps remains.
 - Strengths to preserve while fixing: the engine/server layering with sentinel
   errors mapped at the edge, the `maybe.M` optionality convention, the
   channel-generation pause/resume design with the queue-level semaphore shared

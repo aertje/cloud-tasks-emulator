@@ -336,21 +336,25 @@ func (queue *Queue) Run() {
 	queue.startDispatch(stopDispatch)
 }
 
-// NewTask creates a new task on the queue. Returns the live *Task and a snapshot
-// of its state immediately after creation.
-func (queue *Queue) NewTask(taskState TaskState) (*Task, TaskState) {
-	task := newTask(queue, taskState, func(task *Task) {
+// buildTask constructs a task for the queue, applying its server-side defaults
+// (including an auto-generated name when none was supplied). It neither inserts
+// the task into the queue's task map nor schedules it: the engine reserves the
+// task's name in its registry first (see insertTaskIfAbsent) and only then
+// admits the task via admitTask, so a name collision cannot leave a scheduled
+// task behind.
+func (queue *Queue) buildTask(taskState TaskState) *Task {
+	return newTask(queue, taskState, func(task *Task) {
 		queue.retireTask(task)
 		queue.onTaskDone(task)
 	})
+}
 
-	frozen := task.state
-
-	queue.setTask(frozen.Name, task)
-
+// admitTask inserts an already-constructed task into the queue's task map and
+// schedules its first dispatch. It must be called only after the task's name
+// has been reserved in the engine registry.
+func (queue *Queue) admitTask(task *Task) {
+	queue.setTask(task.state.Name, task)
 	task.Schedule()
-
-	return task, frozen
 }
 
 // closeDispatchLocked closes the current stopDispatch channel unless it is

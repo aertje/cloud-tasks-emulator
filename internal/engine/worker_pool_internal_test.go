@@ -149,6 +149,96 @@ func TestPausedTaskDispatchesAfterResume(t *testing.T) {
 	assert.GreaterOrEqual(t, d.count(), 1)
 }
 
+// TestConcurrentCreateQueueSameName verifies that when many goroutines race to
+// create a queue with the same name, exactly one wins and the losers are
+// rejected as already-existing. Crucially, the losers' queues must never start
+// their goroutines: the pre-fix check-then-insert let multiple creates win and
+// leak the losers' token-generator and dispatcher goroutines forever (they have
+// no Delete path).
+func TestConcurrentCreateQueueSameName(t *testing.T) {
+	e := newTestEngine(t, newFakeDispatcher(200))
+
+	before := runtime.NumGoroutine()
+
+	const goroutines = 20
+	var (
+		start     = make(chan struct{})
+		wg        sync.WaitGroup
+		successes atomic.Int32
+	)
+	errs := make([]error, goroutines)
+	for i := range goroutines {
+		wg.Go(func() {
+			<-start
+			_, err := e.CreateQueue(context.Background(), "projects/p/locations/l", QueueState{Name: testParent})
+			if err == nil {
+				successes.Add(1)
+			}
+			errs[i] = err
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one create must win the name")
+	for _, err := range errs {
+		if err != nil {
+			assert.ErrorIs(t, err, ErrQueueAlreadyExists)
+		}
+	}
+
+	// Only the winning queue may run its goroutines; the losers must have been
+	// discarded. A per-loser leak would add roughly goroutines' worth on top of
+	// the single winner's small constant.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine()-before < goroutines
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestConcurrentCreateTaskSameName verifies that racing creates of a task with
+// the same explicit name yield exactly one winner and that the task is
+// scheduled (and dispatched) only once: the pre-fix check-then-insert let
+// multiple creates win and each schedule its own copy, double-dispatching.
+func TestConcurrentCreateTaskSameName(t *testing.T) {
+	d := newFakeDispatcher(200)
+	e := newTestEngine(t, d)
+	createRunningQueue(t, e)
+
+	name := testParent + "/tasks/racy"
+
+	const goroutines = 20
+	var (
+		start     = make(chan struct{})
+		wg        sync.WaitGroup
+		successes atomic.Int32
+	)
+	errs := make([]error, goroutines)
+	for i := range goroutines {
+		wg.Go(func() {
+			<-start
+			_, _, err := e.CreateTask(context.Background(), testParent, httpTaskState(name, time.Time{}))
+			if err == nil {
+				successes.Add(1)
+			}
+			errs[i] = err
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(), "exactly one create must win the name")
+	for _, err := range errs {
+		if err != nil {
+			assert.ErrorIs(t, err, ErrTaskAlreadyExists)
+		}
+	}
+
+	// The single winning task dispatches exactly once. A second scheduled copy
+	// (the pre-fix double-dispatch) would push the count past one.
+	d.awaitDispatches(t, 1, 2*time.Second)
+	require.Never(t, func() bool { return d.count() > 1 }, 200*time.Millisecond, 10*time.Millisecond)
+}
+
 // TestDeleteAfterPauseDoesNotHang verifies that deleting an already-paused queue
 // does not deadlock the caller.
 func TestDeleteAfterPauseDoesNotHang(t *testing.T) {

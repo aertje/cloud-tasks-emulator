@@ -261,14 +261,6 @@ func (e *Engine) Stop() {
 	}
 }
 
-func (e *Engine) setQueue(queueName string, queue *Queue) {
-	e.qsMux.Lock()
-	defer e.qsMux.Unlock()
-	e.qs[queueName] = queue
-	// A (re)created name is no longer tombstoned.
-	delete(e.qTombstones, queueName)
-}
-
 func (e *Engine) fetchQueue(queueName string) (*Queue, bool) {
 	e.qsMux.Lock()
 	defer e.qsMux.Unlock()
@@ -304,14 +296,6 @@ func (e *Engine) queueRecentlyDeleted(queueName string) bool {
 	}
 	delete(e.qTombstones, queueName)
 	return false
-}
-
-func (e *Engine) setTask(taskName string, task *Task) {
-	e.tsMux.Lock()
-	defer e.tsMux.Unlock()
-	e.ts[taskName] = task
-	// A (re)created name is no longer tombstoned.
-	delete(e.tTombstones, taskName)
 }
 
 func (e *Engine) fetchTask(taskName string) (*Task, bool) {
@@ -424,20 +408,44 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	if err := validateQueueConfig(qs); err != nil {
 		return nil, err
 	}
-	if _, ok := e.fetchQueue(qs.Name); ok {
-		return nil, ErrQueueAlreadyExists
-	}
-	if e.queueRecentlyDeleted(qs.Name) {
-		return nil, ErrQueueRecentlyDeleted
-	}
 
+	// Construct the queue before reserving its name. newQueue starts no
+	// goroutines (only queue.Run does), so a queue we fail to insert can be
+	// discarded without a leak once its context is cancelled.
 	queue := newQueue(qs, e.oidc, e.dispatcher, e.logger, e.appEngineEmulatorHost, e.appEngineRegionID, e.now, func(task *Task) {
 		e.retireTask(task)
 	})
-	e.setQueue(qs.Name, queue)
+	if err := e.insertQueueIfAbsent(queue); err != nil {
+		queue.cancel()
+		return nil, err
+	}
 	queue.Run()
 
 	return queue, nil
+}
+
+// insertQueueIfAbsent atomically reserves queue.name in the live queue map: it
+// fails with ErrQueueAlreadyExists if a live queue already holds the name, or
+// ErrQueueRecentlyDeleted if the name carries a still-active tombstone,
+// otherwise it inserts the queue and clears any (now expired) tombstone.
+// Combining the uniqueness check and the insert under a single qsMux
+// acquisition stops two concurrent CreateQueue calls from both succeeding,
+// which would leak the loser's token-generator and dispatcher goroutines (a
+// queue that lost the map slot has no Delete path and would run forever).
+func (e *Engine) insertQueueIfAbsent(queue *Queue) error {
+	e.qsMux.Lock()
+	defer e.qsMux.Unlock()
+	if _, ok := e.qs[queue.name]; ok {
+		return ErrQueueAlreadyExists
+	}
+	if deletedAt, ok := e.qTombstones[queue.name]; ok {
+		if e.tombstoneActive(deletedAt) {
+			return ErrQueueRecentlyDeleted
+		}
+		delete(e.qTombstones, queue.name)
+	}
+	e.qs[queue.name] = queue
+	return nil
 }
 
 // DeleteQueue removes the named queue.
@@ -625,16 +633,9 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		if !strings.HasPrefix(ts.Name, parent+"/tasks/") {
 			return nil, TaskState{}, ErrTaskQueueMismatch
 		}
-		if _, exists := e.fetchTask(ts.Name); exists {
-			return nil, TaskState{}, ErrTaskAlreadyExists
-		}
-		// A recently-deleted name stays reserved for the cooldown; Cloud reports a
-		// recreate against a still-reserved name as AlreadyExists. Once the
-		// cooldown elapses taskRecentlyDeleted prunes the tombstone and the name
-		// becomes reusable.
-		if e.taskRecentlyDeleted(ts.Name) {
-			return nil, TaskState{}, ErrTaskAlreadyExists
-		}
+		// Uniqueness and the recently-deleted cooldown are enforced atomically at
+		// insertTaskIfAbsent below, together with the insert, so two concurrent
+		// creates cannot both reserve the same name.
 	}
 
 	// Cloud Tasks validates an HTTP-target task's URL at create time, but only
@@ -655,10 +656,46 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 		return nil, TaskState{}, err
 	}
 
-	task, frozen := queue.NewTask(ts)
-	e.setTask(frozen.Name, task)
+	// Construct the task (assigning its server defaults, including an
+	// auto-generated name when none was supplied) before reserving its name.
+	// buildTask neither inserts the task into the queue map nor schedules it, so
+	// a task we fail to reserve is simply discarded. Reserving before admitTask
+	// means the name check also covers auto-generated names, which the old
+	// pre-check skipped, and stops two concurrent creates from both scheduling
+	// and dispatching a task under the same name.
+	task := queue.buildTask(ts)
+	frozen := task.state
+	if err := e.insertTaskIfAbsent(task); err != nil {
+		return nil, TaskState{}, err
+	}
+	queue.admitTask(task)
 	queue.logger.Debug("task received", "task", frozen.Name, "queue", parent)
 	return task, frozen, nil
+}
+
+// insertTaskIfAbsent atomically reserves task's name in the live task registry:
+// it fails with ErrTaskAlreadyExists if a live task already holds the name or
+// the name carries a still-active tombstone (a recently-deleted name stays
+// reserved for the cooldown; Cloud reports a recreate against it as
+// AlreadyExists), otherwise it inserts the task and clears any expired
+// tombstone. Combining the uniqueness check and the insert under a single tsMux
+// acquisition stops two concurrent CreateTask calls - or a collision on an
+// auto-generated name - from both scheduling and dispatching a task.
+func (e *Engine) insertTaskIfAbsent(task *Task) error {
+	e.tsMux.Lock()
+	defer e.tsMux.Unlock()
+	name := task.state.Name
+	if _, ok := e.ts[name]; ok {
+		return ErrTaskAlreadyExists
+	}
+	if deletedAt, ok := e.tTombstones[name]; ok {
+		if e.tombstoneActive(deletedAt) {
+			return ErrTaskAlreadyExists
+		}
+		delete(e.tTombstones, name)
+	}
+	e.ts[name] = task
+	return nil
 }
 
 // DeleteTask removes the named task.

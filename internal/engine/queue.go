@@ -389,12 +389,12 @@ func (queue *Queue) Delete() {
 	queue.Purge()
 }
 
-// Purge purges all tasks from the queue
-// - Normally this is a fire-and-forget operation, but it returns a WaitGroup to allow HardReset to wait for completion
-func (queue *Queue) Purge() *sync.WaitGroup {
-	waitGroup := &sync.WaitGroup{}
-
-	waitGroup.Go(func() {
+// Purge asynchronously deletes all tasks from the queue. It is a
+// fire-and-forget operation; callers that need to wait for in-flight tasks to
+// reach their terminal state (such as the hard-reset path) drive the deletion
+// themselves rather than going through Purge.
+func (queue *Queue) Purge() {
+	go func() {
 		queue.tsMux.Lock()
 		defer queue.tsMux.Unlock()
 
@@ -404,9 +404,7 @@ func (queue *Queue) Purge() *sync.WaitGroup {
 				task.Delete()
 			}
 		}
-	})
-
-	return waitGroup
+	}()
 }
 
 // Pause pauses the queue

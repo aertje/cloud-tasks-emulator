@@ -5,15 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Minor findings
 
-### 7. Stale Purge comment and dead return value
-
-- [ ] Status: open
-- Location: `internal/engine/queue.go:296`
-
-`Queue.Purge`'s comment says it returns a `WaitGroup` "to allow HardReset to
-wait", but `hardResetQueue` does not use `Purge` and no caller consumes the
-return value.
-
 ### 9. Unlocked reads of queue.state.RetryConfig from the task path
 
 - [ ] Status: open

@@ -95,6 +95,36 @@ func newTestEngineOpts(t *testing.T, opts Options) *Engine {
 	return e
 }
 
+func TestNewValidatesAppEngineEmulatorHost(t *testing.T) {
+	valid := []string{"http://localhost:8080", "https://nginx", "http://127.0.0.1:1234"}
+	for _, host := range valid {
+		t.Run("valid/"+host, func(t *testing.T) {
+			e := New(&Options{AppEngineEmulatorHost: maybe.Some(host)})
+			t.Cleanup(e.Stop)
+			assert.NotNil(t, e)
+		})
+	}
+
+	invalid := []string{
+		"://missing-scheme", // parse error
+		"localhost:8080",    // no scheme+host: parses as opaque
+		"appspot.com",       // bare host, no scheme
+		"http://foo\x00bar", // control char, parse error
+	}
+	for _, host := range invalid {
+		t.Run("invalid/"+host, func(t *testing.T) {
+			assert.Panics(t, func() { New(&Options{AppEngineEmulatorHost: maybe.Some(host)}) })
+		})
+	}
+
+	// An absent host keeps the production appspot.com routing and must not panic.
+	t.Run("absent", func(t *testing.T) {
+		e := New(&Options{})
+		t.Cleanup(e.Stop)
+		assert.NotNil(t, e)
+	})
+}
+
 // fakeClock is a manually advanced clock, letting the tombstone-expiry tests
 // jump past the cooldown without real sleeps. Its Now method is safe to call
 // concurrently with Advance (e.g. from the background sweep goroutine).

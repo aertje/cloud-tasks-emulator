@@ -5,16 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Minor findings
 
-### 5. AppEngineEmulatorHost parse panic in the request path
-
-- [ ] Status: open
-- Location: `internal/engine/task.go:211`
-
-`setInitialTaskState` panics on an unparseable `AppEngineEmulatorHost`. That is
-an operator flag, but the panic happens at first App Engine task creation
-inside a request handler and crashes the server. Validate the flag at startup
-in `main` (and at `engine.New` for embedded use).
-
 ### 6. Inconsistent clock injection
 
 - [ ] Status: partially done (dispatch path fixed with finding 2)

@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -165,6 +167,16 @@ func New(opts *Options) *Engine {
 	if opts == nil {
 		opts = &Options{}
 	}
+	// Validate the operator-supplied App Engine emulator host once, at
+	// construction. setInitialTaskState parses this same value on every App
+	// Engine task creation inside a request handler; validating it here turns a
+	// malformed host into a deterministic startup failure instead of a panic
+	// that would crash the server on the first such task.
+	if host, ok := opts.AppEngineEmulatorHost.Get(); ok {
+		if err := validateAppEngineEmulatorHost(host); err != nil {
+			panic(fmt.Errorf("engine.New: invalid AppEngineEmulatorHost %q: %w", host, err))
+		}
+	}
 	oidcCfg := opts.OIDC.Ptr()
 	if oidcCfg == nil {
 		oidcCfg = oidc.DefaultConfig()
@@ -210,6 +222,22 @@ func New(opts *Options) *Engine {
 	}
 	go e.sweepLoop()
 	return e
+}
+
+// validateAppEngineEmulatorHost reports whether an operator-supplied App Engine
+// emulator host is a usable base URL. It must parse and carry both a scheme and
+// a host, since setInitialTaskState prefixes service/version/instance labels
+// onto its host and re-emits it as the task's routing host; a value without a
+// host would parse but produce broken routing.
+func validateAppEngineEmulatorHost(host string) error {
+	u, err := url.Parse(host)
+	if err != nil {
+		return fmt.Errorf("must be a valid URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("must be an absolute base URL with a scheme and host, e.g. http://localhost:8080")
+	}
+	return nil
 }
 
 // tombstoneActive reports whether a tombstone recorded at deletedAt is still

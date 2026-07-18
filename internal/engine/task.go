@@ -249,6 +249,9 @@ func setInitialTaskState(s *TaskState, queueName string, appEngineEmulatorHost s
 				domainSeparator = "."
 			}
 
+			// An operator-supplied emulator host is validated at engine.New, and
+			// the appspot fallback is built from an already-validated task name, so
+			// this parse cannot fail here; the guard is a defensive invariant.
 			hostURL, err := url.Parse(host)
 			if err != nil {
 				panic(err)

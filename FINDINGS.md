@@ -5,15 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Minor findings
 
-### 9. Unlocked reads of queue.state.RetryConfig from the task path
-
-- [ ] Status: open
-- Location: `internal/engine/dispatch.go:77,169`
-
-Safe today only because `UpdateQueue` is unimplemented and those fields are
-never written after construction. If `UpdateQueue` is ever implemented this
-becomes a data race. Add a comment or a snapshot accessor now.
-
 ### 10. Embedded emulator option surface is thinner than the binary's
 
 - [ ] Status: open

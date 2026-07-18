@@ -131,6 +131,17 @@ func (q *Queue) State() QueueState {
 	return q.state
 }
 
+// retryConfig returns a snapshot of the queue's retry configuration, taken under
+// stateMutex so the dispatch path (updateStateForReschedule, reschedule) can read
+// it without racing a future UpdateQueue that rewrites state. RetryConfig is a
+// value type - its maybe.M fields are values too - so the returned copy is fully
+// independent of the live state.
+func (q *Queue) retryConfig() RetryConfig {
+	q.stateMutex.Lock()
+	defer q.stateMutex.Unlock()
+	return q.state.RetryConfig
+}
+
 func (queue *Queue) setTask(taskName string, task *Task) {
 	queue.tsMux.Lock()
 	defer queue.tsMux.Unlock()

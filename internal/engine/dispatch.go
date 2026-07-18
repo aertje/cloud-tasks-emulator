@@ -72,10 +72,13 @@ func addOptionalRetryHeaders(injected map[string]string, p retryHeaderPolicy, pr
 }
 
 func updateStateForReschedule(task *Task) {
+	// Snapshot the queue's retry config under its own lock before taking the task
+	// lock, rather than reading task.queue.state directly here (which stateMutex
+	// does not guard).
+	retryConfig := task.queue.retryConfig()
+
 	task.stateMutex.Lock()
 	defer task.stateMutex.Unlock()
-
-	retryConfig := task.queue.state.RetryConfig
 
 	doubling := min(task.state.DispatchCount-1, retryConfig.MaxDoublings.OrZero())
 	maxBackoff := retryConfig.MaxBackoff.OrZero()
@@ -179,9 +182,10 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 		return
 	}
 
+	maxAttempts := task.queue.retryConfig().MaxAttempts.OrZero()
+
 	task.stateMutex.Lock()
 	dispatchCount := task.state.DispatchCount
-	maxAttempts := task.queue.state.RetryConfig.MaxAttempts.OrZero()
 	task.stateMutex.Unlock()
 
 	// -1 is the documented "unlimited attempts" marker (see validateQueueConfig).

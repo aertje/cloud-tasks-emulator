@@ -1,6 +1,9 @@
 package conformance
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Normalize replaces request-specific substrings in a message with stable
 // placeholders, so messages captured with different inputs compare equal. The
@@ -17,6 +20,11 @@ func Normalize(msg string, p Params) string {
 		{p.TaskPath(), "{task_path}"},
 		{p.QueuePath(), "{queue_path}"},
 		{p.Parent(), "{parent}"},
+		// The location the queue/create/parent-mismatch case points its
+		// (well-formed but out-of-parent) queue name at. Placeholdered so that
+		// if Cloud Tasks echoes the mismatched name, the real project id it
+		// carries does not leak into the committed golden template.
+		{fmt.Sprintf("projects/%s/locations/%s", p.Project, otherLocation(p.Location)), "{mismatch_parent}"},
 		{p.TaskID, "{task_id}"},
 		{p.QueueID, "{queue_id}"},
 	}

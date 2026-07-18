@@ -8,6 +8,7 @@ var (
 	ErrQueueAlreadyExists   = errors.New("queue already exists")
 	ErrInvalidQueueName     = errors.New("invalid queue name")
 	ErrInvalidParent        = errors.New("invalid parent")
+	ErrQueueParentMismatch  = errors.New("queue name does not begin with parent")
 
 	// Queue-configuration violations, reported by CreateQueue (see
 	// validateQueueConfig). Real Cloud Tasks rejects these with InvalidArgument

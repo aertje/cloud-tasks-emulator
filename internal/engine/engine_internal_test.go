@@ -287,8 +287,21 @@ func TestQueueLifecycle(t *testing.T) {
 	// Invalid name / parent.
 	_, err := e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: "not a queue"})
 	assert.ErrorIs(t, err, ErrInvalidQueueName)
+	// Leading/trailing junk around an otherwise-valid name is rejected: the
+	// name pattern is anchored end to end (an unanchored match used to accept
+	// this).
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: "junk/" + testParent + "/junk"})
+	assert.ErrorIs(t, err, ErrInvalidQueueName)
 	_, err = e.CreateQueue(ctx, "bad-parent", QueueState{Name: testParent})
 	assert.ErrorIs(t, err, ErrInvalidParent)
+	// The parent pattern is anchored too, so trailing junk after a valid
+	// location is rejected.
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l/junk", QueueState{Name: testParent})
+	assert.ErrorIs(t, err, ErrInvalidParent)
+	// A well-formed name under a different location than the (well-formed)
+	// parent is rejected: the name must begin with parent.
+	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: "projects/p/locations/other/queues/q"})
+	assert.ErrorIs(t, err, ErrQueueParentMismatch)
 
 	// Create then duplicate.
 	_, err = e.CreateQueue(ctx, "projects/p/locations/l", QueueState{Name: testParent})

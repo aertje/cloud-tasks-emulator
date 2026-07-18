@@ -18,6 +18,22 @@ import (
 // few minutes.
 const defaultTombstoneTTL = time.Minute
 
+var (
+	// queueNameRE matches the resource-name shape of a queue. Its project,
+	// location and queue-ID segments use the same character classes as the
+	// first three segments of taskNameRE, so a queue name and the queue prefix
+	// of a task name agree on what they accept. Anchored end to end: unlike the
+	// former unanchored MatchString, a name carrying leading or trailing junk
+	// (e.g. "junk/projects/p/locations/l/queues/q/junk") is rejected, matching
+	// real Cloud Tasks.
+	// Format: https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues#Queue.FIELDS.name
+	queueNameRE = regexp.MustCompile(`^projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)/queues/([a-zA-Z0-9-]+)$`)
+
+	// queueParentRE matches the location resource name that parents a queue,
+	// i.e. a queue name with its "/queues/<id>" suffix removed.
+	queueParentRE = regexp.MustCompile(`^projects/([a-zA-Z0-9:.-]+)/locations/([a-zA-Z0-9-]+)$`)
+)
+
 // Options tunes runtime behaviour of the engine.
 type Options struct {
 	// HardResetOnPurgeQueue makes PurgeQueue synchronously delete tasks and
@@ -397,13 +413,20 @@ func (e *Engine) CreateQueue(ctx context.Context, parent string, qs QueueState) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	nameMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/queues/[A-Za-z0-9-]+", qs.Name)
-	if !nameMatched {
+	if !queueNameRE.MatchString(qs.Name) {
 		return nil, ErrInvalidQueueName
 	}
-	parentMatched, _ := regexp.MatchString("projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+", parent)
-	if !parentMatched {
+	if !queueParentRE.MatchString(parent) {
 		return nil, ErrInvalidParent
+	}
+	// The queue name must fall under the request parent, mirroring the
+	// name-belongs-to-queue check CreateTask performs. Both the name and the
+	// parent are individually well-formed here, so only their relationship can
+	// be wrong (e.g. a name under a different location than parent). Real Cloud
+	// Tasks reports this as "<name> must begin with <parent>." (recorded as
+	// conformance case queue/create/parent-mismatch).
+	if !strings.HasPrefix(qs.Name, parent+"/queues/") {
+		return nil, ErrQueueParentMismatch
 	}
 	if err := validateQueueConfig(qs); err != nil {
 		return nil, err

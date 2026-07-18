@@ -100,6 +100,14 @@
     "stable": true
   },
   {
+    "name": "queue/create/parent-mismatch",
+    "rpc": "CreateQueue",
+    "category": "queue-parent-mismatch",
+    "code": "InvalidArgument",
+    "template": "{mismatch_parent}/queues/{queue_id} must begin with {parent}.",
+    "stable": true
+  },
+  {
     "name": "queue/create/rate-negative",
     "rpc": "CreateQueue",
     "category": "queue-invalid-config",

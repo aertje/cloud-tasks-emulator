@@ -451,10 +451,17 @@ func mapErrForDeleteQueue(err error) error {
 // CreateQueue is the one RPC that distinguishes a recently-deleted queue from a
 // missing one: re-creating a name still under its post-deletion cooldown fails
 // with FailedPrecondition rather than the generic not-found. Every other queue
-// RPC (and CreateTask) collapses recently-deleted into plain not-found.
-func mapErrForCreateQueue(err error) error {
-	if err == engine.ErrQueueRecentlyDeleted {
+// RPC (and CreateTask) collapses recently-deleted into plain not-found. It also
+// needs the request to interpolate the queue-name/parent mismatch message
+// (which names the offending queue name and the parent it must begin with).
+func mapErrForCreateQueue(err error, in *tasks.CreateQueueRequest) error {
+	switch err {
+	case engine.ErrQueueRecentlyDeleted:
 		return status.Errorf(codes.FailedPrecondition, "The queue cannot be created because a queue with this name existed too recently.")
+	case engine.ErrQueueParentMismatch:
+		// The message names the offending queue name and the request parent it
+		// must fall under.
+		return status.Errorf(codes.InvalidArgument, "%s must begin with %s.", in.GetQueue().GetName(), in.GetParent())
 	}
 	return mapErr(err)
 }

@@ -69,7 +69,7 @@ func setUp(t *testing.T, options ServerOptions) (*Server, *Client) {
 func TestCloudTasksCreateQueue(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 	request := taskspb.CreateQueueRequest{
 		Parent: formattedParent,
 		Queue:  queue,
@@ -88,7 +88,7 @@ func TestCreateQueueRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 	queue.RateLimits = &taskspb.RateLimits{MaxConcurrentDispatches: -1}
 
 	_, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
@@ -107,7 +107,7 @@ func TestCreateQueueIgnoresClientBurstSize(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 	queue.RateLimits = &taskspb.RateLimits{MaxBurstSize: -1}
 
 	resp, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
@@ -125,7 +125,7 @@ func TestCreateQueueAcceptsFractionalRate(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 	queue.RateLimits = &taskspb.RateLimits{MaxDispatchesPerSecond: 0.5}
 
 	resp, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
@@ -134,6 +134,21 @@ func TestCreateQueueAcceptsFractionalRate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 0.5, resp.GetRateLimits().GetMaxDispatchesPerSecond())
+}
+
+// A queue name that is well-formed but does not fall under the request parent
+// (here, a different location) is rejected with the "must begin with" message
+// real Cloud Tasks returns (conformance case queue/create/parent-mismatch).
+func TestCreateQueueRejectsNameNotUnderParent(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+
+	name := formatQueueName(formatParent("TestProject", "OtherLocation"), queueIDForTest(t))
+	_, err := client.CreateQueue(context.Background(), &taskspb.CreateQueueRequest{
+		Parent: formattedParent,
+		Queue:  &taskspb.Queue{Name: name},
+	})
+	assertIsGrpcError(t, "^"+name+" must begin with "+formattedParent+`\.$`, grpcCodes.InvalidArgument, err)
 }
 
 func TestCreateTask(t *testing.T) {
@@ -710,7 +725,7 @@ func TestSuccessTaskExecution(t *testing.T) {
 			"X-CloudTasks-TaskExecutionCount": "0",
 			"X-CloudTasks-TaskRetryCount":     "0",
 			"X-CloudTasks-TaskName":           "my-test-task",
-			"X-CloudTasks-QueueName":          t.Name(),
+			"X-CloudTasks-QueueName":          queueIDForTest(t),
 		},
 		receivedRequest,
 	)
@@ -752,7 +767,7 @@ func TestSuccessAppEngineTaskExecution(t *testing.T) {
 			"X-AppEngine-TaskExecutionCount": "0",
 			"X-AppEngine-TaskRetryCount":     "0",
 			"X-AppEngine-TaskName":           "my-test-task",
-			"X-AppEngine-QueueName":          t.Name(),
+			"X-AppEngine-QueueName":          queueIDForTest(t),
 		},
 		receivedRequest,
 	)
@@ -1037,6 +1052,23 @@ func formatQueueName(formattedParent, name string) string {
 	return fmt.Sprintf("%s/queues/%s", formattedParent, name)
 }
 
+// queueIDForTest folds a test name into a valid Cloud Tasks queue ID
+// ([A-Za-z0-9-]). Subtest names carry '/' separators and, from spaces, '_' -
+// neither legal in a queue ID - so a raw t.Name() is not a usable ID. The
+// emulator now rejects such names (its queue-name validation is anchored and
+// charset-constrained), so tests derive a legal ID here. It is a no-op for a
+// top-level test name that is already charset-valid.
+func queueIDForTest(t *testing.T) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, t.Name())
+}
+
 func formatParent(project, location string) string {
 	return fmt.Sprintf("projects/%s/locations/%s", project, location)
 }
@@ -1140,7 +1172,7 @@ func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
 	t.Helper()
 	// The queue name is derived from the test name so every test gets a unique
 	// queue and tests can run in parallel without colliding.
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 
 	createQueueRequest := taskspb.CreateQueueRequest{
 		Parent: formattedParent,
@@ -1159,7 +1191,7 @@ func createTestQueue(t *testing.T, client *Client) *taskspb.Queue {
 // retry, without racing the default 100ms backoff.
 func createTestQueueWithSlowRetry(t *testing.T, client *Client) *taskspb.Queue {
 	t.Helper()
-	queue := newQueue(formattedParent, t.Name())
+	queue := newQueue(formattedParent, queueIDForTest(t))
 	queue.RetryConfig = &taskspb.RetryConfig{
 		MinBackoff: durationpb.New(time.Hour),
 		MaxBackoff: durationpb.New(time.Hour),

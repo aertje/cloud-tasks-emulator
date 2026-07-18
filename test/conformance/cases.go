@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
@@ -73,6 +74,25 @@ func createQueue(ctx context.Context, c *Client, p Params) error {
 		Queue:  &taskspb.Queue{Name: p.QueuePath()},
 	})
 	return err
+}
+
+// otherLocation returns a valid Cloud Tasks location that differs from loc, for
+// building a queue name that is well-formed but does not fall under the request
+// parent's location. Both returned values are real locations, so the name and
+// the parent each pass their own shape/existence checks and only their
+// relationship is wrong.
+func otherLocation(loc string) string {
+	if loc == "us-central1" {
+		return "us-east1"
+	}
+	return "us-central1"
+}
+
+// mismatchedQueueName is the well-formed queue name used by the parent-mismatch
+// case: same project as the request parent, but a different (still valid)
+// location, so it structurally cannot fall under parent.
+func mismatchedQueueName(p Params) string {
+	return fmt.Sprintf("projects/%s/locations/%s/queues/%s", p.Project, otherLocation(p.Location), p.QueueID)
 }
 
 func deleteQueue(ctx context.Context, c *Client, p Params) error {
@@ -207,6 +227,27 @@ func Cases() []Case {
 					Queue:  &taskspb.Queue{Name: p.QueuePath()},
 				})
 				return err
+			},
+		},
+		{
+			// Queue name is well-formed and the parent is well-formed, but the
+			// name sits under a different (valid) location than the request
+			// parent, so only their relationship is wrong. Probes whether Cloud
+			// Tasks requires the queue name to fall under parent (as CreateTask
+			// requires the task name to) and with what code/message - the
+			// emulator currently performs no such check. Teardown is best-effort
+			// and targets the name's own location, in case the create is
+			// accepted rather than rejected.
+			Name: "queue/create/parent-mismatch", RPC: "CreateQueue", Category: "queue-parent-mismatch",
+			Invoke: func(ctx context.Context, c *Client, p Params) error {
+				_, err := c.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+					Parent: p.Parent(),
+					Queue:  &taskspb.Queue{Name: mismatchedQueueName(p)},
+				})
+				return err
+			},
+			Teardown: func(ctx context.Context, c *Client, p Params) error {
+				return c.DeleteQueue(ctx, &taskspb.DeleteQueueRequest{Name: mismatchedQueueName(p)})
 			},
 		},
 

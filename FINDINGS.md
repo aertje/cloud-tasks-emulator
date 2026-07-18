@@ -3,21 +3,6 @@
 Review of the main codebase (engine, server, emulator, oidc, maybe, cmd), 2026-07-14.
 Tests and CI were out of scope. Work through these one by one; check items off as they land.
 
-## Major findings
-
-### 4. Queue-name validation is loose
-
-- [ ] Status: open
-- Severity: medium (accepts invalid names real Cloud Tasks rejects)
-- Location: `internal/engine/engine.go:416,420`
-
-- The `CreateQueue` regexes are unanchored, so
-  `junk/projects/a/locations/b/queues/c/junk` passes.
-- There is no check that the queue name falls under `parent` (unlike
-  `CreateTask`, which does the prefix check).
-- The regexes are recompiled on every call; `task.go` correctly uses
-  package-level compiled patterns.
-
 ## Minor findings
 
 ### 5. AppEngineEmulatorHost parse panic in the request path

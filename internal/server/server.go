@@ -67,7 +67,7 @@ func (s *Server) GetQueue(ctx context.Context, in *tasks.GetQueueRequest) (*task
 func (s *Server) CreateQueue(ctx context.Context, in *tasks.CreateQueueRequest) (*tasks.Queue, error) {
 	q, err := s.engine.CreateQueue(ctx, in.GetParent(), queueFromProto(in.GetQueue()))
 	if err != nil {
-		return nil, mapErrForCreateQueue(err)
+		return nil, mapErrForCreateQueue(err, in)
 	}
 	return queueToProto(q.State()), nil
 }

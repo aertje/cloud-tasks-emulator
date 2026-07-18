@@ -91,7 +91,7 @@ type Task struct {
 
 // newTask creates a new task for the specified queue
 func newTask(queue *Queue, taskState TaskState, onDone func(task *Task)) *Task {
-	setInitialTaskState(&taskState, queue.name, queue.appEngineEmulatorHost, queue.appEngineRegionID)
+	setInitialTaskState(&taskState, queue.now(), queue.name, queue.appEngineEmulatorHost, queue.appEngineRegionID)
 
 	return &Task{
 		queue:  queue,
@@ -176,17 +176,19 @@ func validateTaskConfig(s TaskState, now time.Time) error {
 // routing. appEngineRegionID selects the regional appspot.com host format
 // <project>.<region>.r.appspot.com when set; an empty value keeps the legacy
 // <project>.appspot.com format. appEngineRegionID is ignored when appEngineEmulatorHost
-// is set.
-func setInitialTaskState(s *TaskState, queueName string, appEngineEmulatorHost string, appEngineRegionID string) {
+// is set. now supplies the server-assigned CreateTime and the default
+// ScheduleTime; it comes from the engine's injectable clock so task-creation
+// timing is testable with a fake clock.
+func setInitialTaskState(s *TaskState, now time.Time, queueName string, appEngineEmulatorHost string, appEngineRegionID string) {
 	if s.Name == "" {
 		taskID := strconv.FormatUint(uint64(rand.Uint64()), 10)
 		s.Name = queueName + "/tasks/" + taskID
 	}
 
 	// Cloud only sets whole-second precision on CreateTime.
-	s.CreateTime = maybe.Some(time.Unix(time.Now().Unix(), 0))
+	s.CreateTime = maybe.Some(time.Unix(now.Unix(), 0))
 
-	s.ScheduleTime = s.ScheduleTime.Or(time.Now())
+	s.ScheduleTime = s.ScheduleTime.Or(now)
 	s.DispatchDeadline = s.DispatchDeadline.Or(600 * time.Second)
 
 	// HTTPRequest / AppEngineHTTPRequest are value-typed Maybes, so their

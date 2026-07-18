@@ -15,7 +15,7 @@ import (
 
 func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 	config := DefaultConfig()
-	tokenStr, err := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "")
+	tokenStr, err := config.CreateToken(time.Now(), "foobar@service.com", "http://my.service/foo?bar=v", "")
 	require.NoError(t, err)
 	parser := new(jwt.Parser)
 	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
@@ -37,7 +37,7 @@ func TestCreateOIDCTokenSetsCorrectData(t *testing.T) {
 
 func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
 	config := DefaultConfig()
-	tokenStr, err := config.CreateToken("foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
+	tokenStr, err := config.CreateToken(time.Now(), "foobar@service.com", "http://my.service/foo?bar=v", "http://my.api")
 	require.NoError(t, err)
 	parser := new(jwt.Parser)
 	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
@@ -59,7 +59,7 @@ func TestCreateOIDCTokenWithCustomAudienceSetsCorrectData(t *testing.T) {
 func TestCreateOIDCTokenSignatureIsValidAgainstKey(t *testing.T) {
 	// Sanity check that the token is valid if we have the private key in go format
 	config := DefaultConfig()
-	tokenStr, err := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
+	tokenStr, err := config.CreateToken(time.Now(), "foobar@service.com", "http://any.service/foo", "")
 	require.NoError(t, err)
 	_, err = new(jwt.Parser).ParseWithClaims(
 		tokenStr,
@@ -87,7 +87,7 @@ func TestNewConfigSignsWithSuppliedKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, key.Equal(config.PrivateKey), "uses the supplied key, not the baked-in one")
 
-	tokenStr, err := config.CreateToken("foobar@service.com", "http://any.service/foo", "")
+	tokenStr, err := config.CreateToken(time.Now(), "foobar@service.com", "http://any.service/foo", "")
 	require.NoError(t, err)
 	_, err = new(jwt.Parser).ParseWithClaims(
 		tokenStr,

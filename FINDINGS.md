@@ -5,18 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Minor findings
 
-### 6. Inconsistent clock injection
-
-- [ ] Status: partially done (dispatch path fixed with finding 2)
-- Locations: `internal/engine/task.go:144,146`, `internal/oidc/token.go:94`
-
-The engine has an injectable `now` for tombstones. The dispatch-path callers
-(`updateStateForDispatch`, `updateStateForReschedule`, `updateStateAfterDispatch`)
-now use the queue's threaded `now` clock (done alongside finding 2). Still
-outstanding: `setInitialTaskState` and `oidc.CreateToken` call `time.Now`
-directly, so task creation timing and OIDC token `iat`/`exp` remain untestable
-with a fake clock.
-
 ### 7. Stale Purge comment and dead return value
 
 - [ ] Status: open

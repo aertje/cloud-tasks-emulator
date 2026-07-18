@@ -84,14 +84,16 @@ func DefaultConfig() *Config {
 }
 
 // CreateToken issues an RS256-signed OIDC token for the given service account.
-// audience defaults to handlerUrl if not provided. It returns an error rather
-// than terminating the process so callers (e.g. dispatch) can fail a single
-// delivery attempt instead of taking the whole emulator down.
-func (c Config) CreateToken(serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
+// audience defaults to handlerUrl if not provided. now anchors the token's
+// iat/nbf/exp claims and is supplied by the caller (dispatch threads the
+// engine's injectable clock) so token timing is testable with a fake clock. It
+// returns an error rather than terminating the process so callers (e.g.
+// dispatch) can fail a single delivery attempt instead of taking the whole
+// emulator down.
+func (c Config) CreateToken(now time.Time, serviceAccountEmail string, handlerUrl string, audience string) (string, error) {
 	if audience == "" {
 		audience = handlerUrl
 	}
-	now := time.Now()
 	claims := Claims{
 		Email:         serviceAccountEmail,
 		EmailVerified: true,

@@ -201,9 +201,11 @@ func (task *Task) reschedule(retry bool, statusCode int) {
 // it is not the gRPC request that created the task, which is long gone by
 // dispatch time. The default implementation (HTTPDispatcher) delivers over
 // HTTP; tests inject a fake to exercise queue/task lifecycle and retry
-// behaviour without real network I/O.
+// behaviour without real network I/O. now is the dispatch-moment clock reading
+// (the queue's injectable clock); it anchors any minted OIDC token so token
+// timing is testable with a fake clock.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config) int
+	Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, now time.Time) int
 }
 
 // HTTPDispatcher is the production Dispatcher; it delivers tasks over HTTP.
@@ -220,12 +222,12 @@ type HTTPDispatcher struct {
 }
 
 // Dispatch delivers the task over HTTP.
-func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config) int {
+func (h HTTPDispatcher) Dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, now time.Time) int {
 	logger := h.logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return dispatch(ctx, state, oidcCfg, logger, h.transport)
+	return dispatch(ctx, state, oidcCfg, logger, h.transport, now)
 }
 
 // insecureTransport clones the default transport and disables TLS certificate
@@ -246,7 +248,7 @@ func insecureTransport() *http.Transport {
 // are merged into a fresh request header map, because the task's live header map
 // is read concurrently by gRPC handlers. ctx bounds the request's lifetime (see
 // Queue.ctx); DispatchDeadline is still enforced via the http.Client timeout.
-func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger *slog.Logger, transport http.RoundTripper) int {
+func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger *slog.Logger, transport http.RoundTripper, now time.Time) int {
 	client := &http.Client{Timeout: state.DispatchDeadline.OrZero(), Transport: transport}
 
 	nameParts, ok := parseTaskName(state.Name)
@@ -293,7 +295,7 @@ func dispatch(ctx context.Context, state TaskState, oidcCfg oidc.Config, logger 
 		addOptionalRetryHeaders(injected, httpRetryPolicy, state.PreviousResponseCode)
 
 		if auth, ok := hr.OIDCToken.Get(); ok {
-			tokenStr, err := oidcCfg.CreateToken(auth.ServiceAccountEmail, url, auth.Audience.OrZero())
+			tokenStr, err := oidcCfg.CreateToken(now, auth.ServiceAccountEmail, url, auth.Audience.OrZero())
 			if err != nil {
 				logger.Error("dispatch: create OIDC token", "task", state.Name, "err", err)
 				return -1
@@ -370,7 +372,7 @@ func (task *Task) doDispatch(retry bool, state TaskState) {
 	task.queue.logger.Debug("dispatching task attempt",
 		"task", state.Name, "attempt", state.DispatchCount)
 
-	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg)
+	respCode := task.queue.dispatcher.Dispatch(task.queue.ctx, state, task.queue.oidcCfg, task.queue.now())
 
 	task.queue.logger.Debug("task attempt completed",
 		"task", state.Name, "attempt", state.DispatchCount, "code", respCode)

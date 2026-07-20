@@ -8,10 +8,12 @@ package emulator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
+	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
@@ -54,6 +56,42 @@ func WithHardResetOnPurgeQueue(v bool) Option {
 // production equivalent; leave it off unless you need it.
 func WithInsecureSkipTLSVerify(v bool) Option {
 	return func(o *server.ServerOptions) { o.InsecureSkipTLSVerify = maybe.Some(v) }
+}
+
+// WithAppEngineEmulatorHost mirrors the binary's -app-engine-emulator-host flag:
+// App Engine target tasks route to the given base URL instead of the production
+// https://<project>.appspot.com. It is intended for local development against an
+// App Engine emulator and has no production equivalent. New and NewUnstarted
+// panic if host is not a valid base URL, matching the binary's fail-fast
+// behaviour at construction.
+func WithAppEngineEmulatorHost(host string) Option {
+	return func(o *server.ServerOptions) { o.AppEngineEmulatorHost = maybe.OfNonZero(host) }
+}
+
+// WithAppEngineRegionID mirrors the binary's -app-engine-region-id flag: it
+// selects the App Engine region ID (e.g. "uc" for us-central1) used in the
+// default appspot.com routing, producing the regional host format
+// https://<project>.<region>.r.appspot.com that production Cloud Tasks emits.
+// Leave it unset for the legacy https://<project>.appspot.com format. It is
+// ignored when WithAppEngineEmulatorHost is also set.
+func WithAppEngineRegionID(regionID string) Option {
+	return func(o *server.ServerOptions) { o.AppEngineRegionID = maybe.OfNonZero(regionID) }
+}
+
+// WithOIDCSigningKey mirrors the binary's -openid-signing-key flag: tasks
+// dispatched with an OIDC token are signed with the given PEM-encoded RSA private
+// key instead of the baked-in development key. Supplying a known key lets tests
+// validate dispatched tokens against its public half. The embedded emulator does
+// not serve the OpenID discovery/JWKS HTTP endpoints (the binary's -openid-issuer
+// flag has no embedded equivalent). WithOIDCSigningKey panics if privateKeyPEM
+// does not parse as an RSA private key, matching the binary's fail-fast behaviour
+// at construction.
+func WithOIDCSigningKey(privateKeyPEM []byte) Option {
+	cfg, err := oidc.NewConfig(privateKeyPEM)
+	if err != nil {
+		panic(fmt.Errorf("emulator.WithOIDCSigningKey: %w", err))
+	}
+	return func(o *server.ServerOptions) { o.OIDC = maybe.Some(*cfg) }
 }
 
 // WithLogger routes the emulator's queue-lifecycle and dispatch diagnostics to

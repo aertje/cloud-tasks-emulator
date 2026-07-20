@@ -5,15 +5,6 @@ Tests and CI were out of scope. Work through these one by one; check items off a
 
 ## Minor findings
 
-### 10. Embedded emulator option surface is thinner than the binary's
-
-- [ ] Status: open
-- Location: `emulator/emulator.go`
-
-No `With*` option for the App Engine emulator host, region ID, or OIDC config,
-all of which the binary exposes as flags. Embedded test users of App Engine
-targets would plausibly want these.
-
 ### 11. Task size limits are not validated at CreateTask
 
 - [ ] Status: open

@@ -4,18 +4,30 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
 
   - package-ecosystem: "gomod"
     directory: "/test/conformance"
     schedule:
       interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
 
   - package-ecosystem: "gomod"
     directory: "/test/smoketest"
     schedule:
       interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]

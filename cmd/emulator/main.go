@@ -66,7 +66,7 @@ func main() {
 	// The emulator is a development tool run in a terminal, so default to
 	// tint's colored, human-readable handler on stderr. Library consumers that
 	// import the emulator package configure their own logger instead.
-	slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+	slog.SetDefault(slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
 		TimeFormat: "2006-01-02 15:04:05.000",
 	})))
 

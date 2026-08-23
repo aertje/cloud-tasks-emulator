@@ -716,6 +716,13 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 	// and dispatching a task under the same name.
 	task := queue.buildTask(ts)
 	frozen := task.state
+	// The size limit is defined over the canonicalized stored task (defaults
+	// applied, name assigned - see tasksize.go), so it is checked on the built
+	// state rather than in validateTaskConfig. Nothing is reserved or admitted
+	// yet, so a rejected task is simply discarded.
+	if err := validateTaskSize(frozen, ts.DispatchDeadline.IsPresent()); err != nil {
+		return nil, TaskState{}, err
+	}
 	if err := e.insertTaskIfAbsent(task); err != nil {
 		return nil, TaskState{}, err
 	}

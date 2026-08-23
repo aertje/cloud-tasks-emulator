@@ -413,6 +413,10 @@ func mapErr(err error) error {
 		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 30m].")
 	case engine.ErrDispatchDeadlineAppEngineRange:
 		return status.Errorf(codes.InvalidArgument, "Task.dispatchDeadline must be between [15s, 24h15s].")
+	case engine.ErrTaskTooLarge:
+		// Static message - no interpolation, no details - captured from real
+		// Cloud Tasks by the size probe (see engine/tasksize.go).
+		return status.Errorf(codes.InvalidArgument, "Task size too large")
 	case engine.ErrHTTPRequestURLRequired:
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:

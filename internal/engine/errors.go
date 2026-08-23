@@ -41,6 +41,11 @@ var (
 	ErrDispatchDeadlineAppEngineRange = errors.New("app engine dispatch deadline out of range")
 	ErrScheduleTimeTooFarInFuture     = errors.New("schedule time too far in the future")
 
+	// ErrTaskTooLarge reports a task whose canonicalized stored form exceeds
+	// the size limit real Cloud Tasks enforces at CreateTask (see tasksize.go
+	// for the measured law). Reported as InvalidArgument.
+	ErrTaskTooLarge = errors.New("task size too large")
+
 	// ErrHTTPRequestURLRequired and ErrHTTPRequestURLScheme report the two
 	// create-time URL validations Cloud Tasks performs on an HTTP-target task:
 	// the URL must be present and must start with http:// or https://. Cloud

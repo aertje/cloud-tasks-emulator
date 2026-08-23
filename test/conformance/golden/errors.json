@@ -204,6 +204,14 @@
     "stable": true
   },
   {
+    "name": "task/create/appengine-too-large",
+    "rpc": "CreateTask",
+    "category": "task-too-large",
+    "code": "InvalidArgument",
+    "template": "Task size too large",
+    "stable": true
+  },
+  {
     "name": "task/create/deadline-too-long",
     "rpc": "CreateTask",
     "category": "task-invalid-config",
@@ -217,6 +225,14 @@
     "category": "task-invalid-config",
     "code": "InvalidArgument",
     "template": "Task.dispatchDeadline must be between [15s, 30m].",
+    "stable": true
+  },
+  {
+    "name": "task/create/http-too-large",
+    "rpc": "CreateTask",
+    "category": "task-too-large",
+    "code": "InvalidArgument",
+    "template": "Task size too large",
     "stable": true
   },
   {

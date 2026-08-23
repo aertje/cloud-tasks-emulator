@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -441,6 +442,27 @@ func Cases() []Case {
 			Setup: createQueue,
 			Invoke: createTaskMod(httpTask, func(t *taskspb.Task) {
 				t.ScheduleTime = timestamppb.New(time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC))
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			// The task-size limit applies to the canonicalized stored task and
+			// sits just under 1MiB for both target families (see
+			// internal/engine/tasksize.go). A 1MiB+4KiB body is comfortably over for any
+			// run-scoped name length, making the case robust while the exact
+			// boundary is pinned by the engine's tasksize unit tests.
+			Name: "task/create/http-too-large", RPC: "CreateTask", Category: "task-too-large",
+			Setup: createQueue,
+			Invoke: createTaskMod(httpTask, func(t *taskspb.Task) {
+				t.GetHttpRequest().Body = bytes.Repeat([]byte("a"), 1<<20+4096)
+			}),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/create/appengine-too-large", RPC: "CreateTask", Category: "task-too-large",
+			Setup: createQueue,
+			Invoke: createTaskMod(appEngineTask, func(t *taskspb.Task) {
+				t.GetAppEngineHttpRequest().Body = bytes.Repeat([]byte("a"), 1<<20+4096)
 			}),
 			Teardown: deleteQueue,
 		},

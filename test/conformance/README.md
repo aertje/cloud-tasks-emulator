@@ -235,7 +235,65 @@ as a local server, points emulator HTTP tasks straight at it and sets
 observed headers against `golden/dispatch.json` (skipping if it's absent). No GCP
 is involved in validation - only the golden was recorded from real.
 
+## Task-size probe
+
+`cmd/probe` is a discovery tool, not a golden battery: it answers how real
+Cloud Tasks measures the task size limit (which fields count, and how) by
+*adaptive* search, which a fixed case list can't do - the interesting inputs
+("exactly at the limit", "one byte over") depend on the answer.
+
+Per target type (HTTP, App Engine) it binary-searches the largest accepted body
+on a minimal task, records the serialized proto sizes at that boundary and the
+exact rejection error, then weighs each other field (headers, URL, task ID,
+explicit method, dispatch deadline, OIDC token, App Engine routing) by testing
+whether shrinking the body by the field's exact proto-encoding delta puts the
+task back on the boundary. A consistent verdict across perturbations means the
+limit tracks the serialized proto; an inconsistent one triggers a fallback
+search that measures the field's actual weight.
+
+Control-plane only: the probe queue is paused and every task carries a
+far-future schedule time, so nothing dispatches. Roughly 40 `CreateTask` calls
+per target; the queue (and all its tasks) is deleted on the way out.
+
+```sh
+gcloud auth application-default login
+cd test/conformance
+go run ./cmd/probe -project=$PROJECT -location=us-central1 -out=/tmp/sizeprobe.json
+```
+
+Reading the report: `maxBody` and the `*ProtoSizeAtMax` numbers identify what
+quantity the limit is defined over (compare against 102400/1048576 vs
+100000/1000000); `rejectCode`/`rejectMessage`/`rejectDetails` are what the
+emulator's error mapping must reproduce; each perturbation is either consistent
+with its proto encoding, inconsistent (with its measured actual boundary), or
+inconclusive because a non-size rejection intervened - the `oidc-token` case
+needs `iam.serviceAccounts.actAs` on the named service account to be
+conclusive, and App Engine-target creation may require the project to have an
+App Engine app (it does if the dispatch battery's receiver was deployed).
+
+The 2026-08-23 run's findings are enforced in `internal/engine/tasksize.go`,
+whose header documents the measured law in full. To re-validate the emulator
+end-to-end, re-run the probe against it with the real run's resource names
+pinned (task size depends on name length) and diff the reports - they match
+field-for-field except the `oidc-token` case, where real fails on
+service-account existence (it validates the account exists at create time;
+the emulator accepts any email) and the emulator instead measures the weight:
+
+```sh
+go run ./cmd/emulator -port 8123 -app-engine-region-id uc &   # from repo root
+cd test/conformance
+go run ./cmd/probe -target=emulator -addr=localhost:8123 \
+  -project=cloudtasksemu -prefix=cte-probe-1234567890 -out=/tmp/sizeprobe-emu.json
+```
+
+The durable regressions live as robustly-over `task/create/*-too-large` cases
+in the errors battery (golden re-record required when adding them) plus
+byte-exact boundary unit tests in the engine (the errors battery only
+captures failures).
+
 ## Scope
 
-Error states, the happy-path battery and the dispatch-headers battery above. Other
+Error states, the happy-path battery and the dispatch-headers battery above,
+plus the task-size probe (a discovery tool - its findings land as engine
+validation and new error-battery cases, not as a golden). Other
 success-response shapes remain out of scope.

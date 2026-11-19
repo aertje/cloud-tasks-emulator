@@ -134,7 +134,7 @@ func recordHappyPath(ctx context.Context, client *conformance.Client, opts confo
 func recordBatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
 	snaps := conformance.RunBatch(ctx, client, opts)
 
-	withErrors := 0
+	failed := 0
 	for _, s := range snaps {
 		replayErr := ""
 		if s.Replay != nil {
@@ -142,13 +142,14 @@ func recordBatch(ctx context.Context, client *conformance.Client, opts conforman
 		}
 		if s.Err != "" || s.WaitErr != "" || replayErr != "" {
 			// Errors are data here: several observations probe failures on purpose.
-			withErrors++
-			fmt.Fprintf(os.Stderr, "  %s: err=%q waitErr=%q replayErr=%q listed=%d\n", s.Name, s.Err, s.WaitErr, replayErr, s.Listed)
+			failed++
+			fmt.Fprintf(os.Stderr, "  ERRORS %s: err=%q waitErr=%q replayErr=%q listed=%d\n",
+				s.Name, s.Err, s.WaitErr, replayErr, s.Listed)
 		}
 	}
 
 	writeJSON(out, func(path string) error { return conformance.SaveBatch(path, snaps) })
-	fmt.Fprintf(os.Stderr, "done: %d observations, %d recorded an error\n", len(snaps), withErrors)
+	fmt.Fprintf(os.Stderr, "done: %d observations, %d with errors\n", len(snaps), failed)
 }
 
 func recordDispatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, receiverURL, out string) {

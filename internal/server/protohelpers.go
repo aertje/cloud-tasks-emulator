@@ -501,13 +501,15 @@ func mapErr(err error) error {
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:
 		return status.Errorf(codes.InvalidArgument, "HttpTarget.url must start with 'http://' or 'https://'.")
-	// Verified against the batch/create/empty case in
+	// Verified against the task/batch-create/empty case in
 	// conformance/golden/errors.json. The other batch sentinels are mapped in
 	// mapErrForBatchCreateTasks: their messages interpolate the request.
 	case engine.ErrBatchEmpty:
 		return status.Errorf(codes.InvalidArgument, "Request must contain at least one task.")
 	case errOperationNotFound:
 		// The server's operation registry, not the engine, reports this one.
+		// Borrowed from the recorded task/get/not-found message; no golden case
+		// captures GetOperation yet.
 		return status.Errorf(codes.NotFound, "Requested entity was not found.")
 	case engine.ErrUnimplemented:
 		return status.Errorf(codes.Unimplemented, "Not yet implemented")
@@ -596,10 +598,12 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 }
 
 // BatchCreateTasks needs the request to interpolate most of its messages,
-// which are verified against the batch/create/* cases in
-// conformance/golden/errors.json. A *engine.BatchTaskError names the task that
-// made the batch invalid: a queue mismatch or duplicate name interpolates that
-// task's request, and any other task error maps as CreateTask would for it.
+// which are verified against the task/batch-create/* cases in
+// conformance/golden/errors.json, and the duplicate request ID message against
+// the batch/request-id-replay observation in conformance/golden/batch.json.
+// A *engine.BatchTaskError names the task that made the batch invalid: a queue
+// mismatch or duplicate name interpolates that task's request, and any other
+// task error maps as CreateTask would for it.
 func mapErrForBatchCreateTasks(err error, in *tasks.BatchCreateTasksRequest) error {
 	var taskErr *engine.BatchTaskError
 	if errors.As(err, &taskErr) {

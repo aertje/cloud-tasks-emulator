@@ -686,9 +686,10 @@ func (e *Engine) fetchQueueForTasks(parent string) (*Queue, error) {
 // which must be the live queue named parent. It holds the CreateTask logic
 // shared with BatchCreateTasks, which looks its queue up once for the batch.
 func (e *Engine) createTaskInQueue(queue *Queue, parent string, ts TaskState) (*Task, TaskState, error) {
-	// Uniqueness and the recently-deleted cooldown are enforced atomically at
-	// insertTaskIfAbsent below, together with the insert, so two concurrent
-	// creates cannot both reserve the same name.
+	// Only the name's shape is checked here. Its uniqueness and the
+	// recently-deleted cooldown are enforced atomically at insertTaskIfAbsent
+	// below, together with the insert, so two concurrent creates cannot both
+	// reserve the same name.
 	if err := validateTaskName(parent, ts.Name); err != nil {
 		return nil, TaskState{}, err
 	}

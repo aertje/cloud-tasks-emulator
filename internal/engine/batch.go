@@ -50,7 +50,8 @@ func (e *BatchTaskError) Unwrap() error {
 
 // BatchCreateTasks creates every task of batch on the queue identified by
 // parent, in order, matching how real Cloud Tasks splits a batch's failures
-// (see the batch/* cases in test/conformance):
+// (see the task/batch-create/* cases and the batch battery in
+// test/conformance):
 //
 //   - The batch is rejected, creating nothing, when it is empty or holds more
 //     than MaxBatchCreateTasks tasks, or when a task's request names another

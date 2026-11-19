@@ -61,7 +61,7 @@ var (
 	// *BatchTaskError naming the offending task.
 	ErrBatchEmpty             = errors.New("batch has no tasks")
 	ErrBatchTooLarge          = errors.New("batch has too many tasks")
-	ErrBatchQueueMismatch     = errors.New("batch task names another queue")
+	ErrBatchQueueMismatch     = errors.New("batch request targets another queue")
 	ErrBatchDuplicateTaskName = errors.New("batch repeats a task name")
 
 	ErrUnimplemented = errors.New("not yet implemented")

@@ -62,7 +62,7 @@ type BatchSnapshot struct {
 }
 
 // BatchReplay is what resending a batch with the same request_id returned.
-// Request IDs are run-scoped, so one echoed in Err is templated as
+// Request IDs are run-scoped, so Normalize templates one echoed in Err as
 // {request_id}.
 type BatchReplay struct {
 	Err           string `json:"err,omitempty"`
@@ -71,9 +71,9 @@ type BatchReplay struct {
 	Listed        int    `json:"listed"`
 }
 
-// batchObservation names an observation, how to prepare its queue, the batch
-// it sends, and whether it resends that batch with the same request_id.
-type batchObservation struct {
+// batchCase names an observation, how to prepare its queue, the batch it
+// sends, and whether it resends that batch with the same request_id.
+type batchCase struct {
 	name string
 	// noQueue skips creating the queue, so the batch targets a queue that
 	// never existed.
@@ -83,12 +83,44 @@ type batchObservation struct {
 	replay  bool
 }
 
+// The batch builders below are shared with the task/batch-create/* cases of
+// the error battery (see batchCreate in cases.go).
+
+// batchTaskRequest is one CreateTaskRequest of a batch for the variant's queue:
+// an HTTP task with the given name (empty lets Cloud Tasks generate one),
+// scheduled far out so it never dispatches during the capture window.
+func batchTaskRequest(p Params, name string) *taskspb.CreateTaskRequest {
+	task := httpTask(name)
+	task.ScheduleTime = scheduleFarOut()
+	return &taskspb.CreateTaskRequest{Parent: p.QueuePath(), Task: task}
+}
+
+// batchOf returns a batch builder whose requests carry the given task names,
+// each resolved against the variant's params.
+func batchOf(names ...func(p Params) string) func(p Params) []*taskspb.CreateTaskRequest {
+	return func(p Params) []*taskspb.CreateTaskRequest {
+		requests := make([]*taskspb.CreateTaskRequest, len(names))
+		for i, name := range names {
+			requests[i] = batchTaskRequest(p, name(p))
+		}
+		return requests
+	}
+}
+
+// generatedName leaves a batch task unnamed, so Cloud Tasks generates its name.
+func generatedName(Params) string { return "" }
+
+// variantTaskName names a batch task with the variant's task path.
+func variantTaskName(p Params) string { return p.TaskPath() }
+
 // suffixedTaskName names a batch task with the variant's task path plus a
 // suffix, so one observation can create several distinct named tasks.
 func suffixedTaskName(suffix string) func(p Params) string {
 	return func(p Params) string { return p.TaskPath() + suffix }
 }
 
+// invalidTaskName names a batch task in the variant's queue with an illegal
+// task ID.
 func invalidTaskName(p Params) string { return p.QueuePath() + "/tasks/not a valid id" }
 
 // otherQueueTaskName names a task in a queue other than the batch's.
@@ -125,8 +157,8 @@ func withSecondTask(mod func(*taskspb.Task)) func(p Params) []*taskspb.CreateTas
 
 // batchObservations is the full BatchCreateTasks battery. Names are stable
 // golden keys - do not rename casually.
-func batchObservations() []batchObservation {
-	return []batchObservation{
+func batchObservations() []batchCase {
+	return []batchCase{
 		{
 			// The named tasks are deliberately out of lexical order, so a
 			// response sorted by name is distinguishable from request order.
@@ -207,7 +239,7 @@ func RunBatch(ctx context.Context, c *Client, opts RunOptions) []BatchSnapshot {
 	return out
 }
 
-func observeBatch(ctx context.Context, c *Client, p Params, obs batchObservation) BatchSnapshot {
+func observeBatch(ctx context.Context, c *Client, p Params, obs batchCase) BatchSnapshot {
 	snap := BatchSnapshot{Name: obs.name}
 
 	if !obs.noQueue {
@@ -224,10 +256,10 @@ func observeBatch(ctx context.Context, c *Client, p Params, obs batchObservation
 		}
 	}
 
-	req := &taskspb.BatchCreateTasksRequest{Parent: p.QueuePath(), Requests: obs.build(p)}
 	if obs.replay {
-		req.RequestId = newRequestID()
+		p.RequestID = newRequestID()
 	}
+	req := &taskspb.BatchCreateTasksRequest{Parent: p.QueuePath(), Requests: obs.build(p), RequestId: p.RequestID}
 
 	first, err := sendBatch(ctx, c, req)
 	if err != nil {
@@ -248,7 +280,7 @@ func observeBatch(ctx context.Context, c *Client, p Params, obs batchObservation
 		snap.Replay = &BatchReplay{}
 		replayed, err := sendBatch(ctx, c, req)
 		if err != nil {
-			snap.Replay.Err = strings.ReplaceAll(errTemplate(err, p), req.GetRequestId(), "{request_id}")
+			snap.Replay.Err = errTemplate(err, p)
 		} else {
 			snap.Replay.SameOperation = replayed.operationName == first.operationName
 			snap.Replay.SameTasks = sameTaskNames(replayed.response.GetTasks(), first.response.GetTasks())

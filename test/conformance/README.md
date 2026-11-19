@@ -85,13 +85,15 @@ category, and an `Invoke`; use `Setup`/`Teardown` for preconditions (e.g.
 create-then-delete to reach a "recently deleted" state). Names are golden keys —
 don't rename casually.
 
-`BatchCreateTasks` cases (`batch/create/*`) use `batchCreate`, which waits for
-the returned long-running operation. A batch that Cloud Tasks rejects as a whole
-records the RPC's (or operation's) error, as usual. A task that fails inside an
-accepted batch is reported in the operation's `failed_requests` rather than as
-an RPC error, so for those cases `batchCreate` returns that task's status as the
-case's error. A case that records `OK` means the batch was accepted and the task
-at the probed index was created.
+`BatchCreateTasks` cases (`task/batch-create/*`) use `batchCreate`, which waits
+for the returned long-running operation. A batch that Cloud Tasks rejects as a
+whole records the RPC's (or operation's) error, as usual. A task that fails
+inside an accepted batch is reported in the operation's `failed_requests` rather
+than as an RPC error, so for those cases `batchCreate` returns that task's
+status as the case's error. That includes a batch for a missing queue, whose
+operation carries no result and which the client fails to wait on. A case that
+records `OK` means the batch was accepted and the task at the probed index was
+created.
 
 ## Known divergences
 
@@ -184,7 +186,7 @@ it's absent).
 
 ## Dispatch-headers battery
 
-A third battery captures what Cloud Tasks puts on the wire when it dispatches -
+A fourth battery captures what Cloud Tasks puts on the wire when it dispatches -
 and *re-dispatches* - a task, rather than what it stores. Its purpose is the two
 *optional* retry headers whose value format is documented nowhere:
 `X-CloudTasks-TaskPreviousResponse` / `X-CloudTasks-TaskRetryReason` and their

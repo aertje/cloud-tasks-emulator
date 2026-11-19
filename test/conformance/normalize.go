@@ -20,13 +20,15 @@ func Normalize(msg string, p Params) string {
 		{p.TaskPath(), "{task_path}"},
 		{p.QueuePath(), "{queue_path}"},
 		{p.Parent(), "{parent}"},
-		// The location the queue/create/parent-mismatch case points its
+		// The location the queue/create/parent-mismatch and
+		// task/batch-create/request-queue-mismatch cases point their
 		// (well-formed but out-of-parent) queue name at. Placeholdered so that
 		// if Cloud Tasks echoes the mismatched name, the real project id it
 		// carries does not leak into the committed golden template.
 		{fmt.Sprintf("projects/%s/locations/%s", p.Project, otherLocation(p.Location)), "{mismatch_parent}"},
 		{p.TaskID, "{task_id}"},
 		{p.QueueID, "{queue_id}"},
+		{p.RequestID, "{request_id}"},
 	}
 	for _, r := range replacements {
 		if r.from == "" {

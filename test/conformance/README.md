@@ -164,7 +164,9 @@ leave open:
 - **Response order** - do the created tasks come back in request order? Callers
   map each created task back to its request by position.
 - **Request-ID replay** - what does resending a batch with the same
-  `request_id` return?
+  `request_id` return? And when Cloud Tasks rejects a batch, either while
+  validating it or after every task failed, can a valid batch then reuse its
+  `request_id`?
 
 Task and operation names are run-scoped, so they are stored as templates: a
 named task as `{task_path}-a`, a generated one as

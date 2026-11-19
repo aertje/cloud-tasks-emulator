@@ -41,9 +41,32 @@
     "listed": -1
   },
   {
+    "name": "batch/request-id-after-all-failed",
+    "err": "AlreadyExists: Requested entity already exists",
+    "doneOnReturn": false,
+    "listed": 2,
+    "replay": {
+      "err": "InvalidArgument: Duplicate operation id in the batch request: {request_id}",
+      "sameOperation": false,
+      "sameTasks": false,
+      "listed": 2
+    }
+  },
+  {
+    "name": "batch/request-id-after-invalid-batch",
+    "err": "InvalidArgument: Task ID \"not a valid id\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+    "doneOnReturn": false,
+    "listed": 0,
+    "replay": {
+      "sameOperation": false,
+      "sameTasks": false,
+      "listed": 2
+    }
+  },
+  {
     "name": "batch/request-id-replay",
     "doneOnReturn": true,
-    "operationName": "{parent}/operations/{hex}",
+    "operationName": "{parent}/operations/{id}",
     "state": "SUCCEEDED",
     "tasks": [
       "{queue_path}/tasks/{generated}",

@@ -44,8 +44,15 @@ func newOperationRegistry() *operationRegistry {
 
 // reserveRequestID claims requestID, or reports errDuplicateRequestID if an
 // earlier request claimed it. An empty requestID is never claimed. The claim
-// is made before the request runs, so of several concurrent requests with the
-// same ID exactly one proceeds.
+// is made before the batch's tasks are created, so of several concurrent
+// requests with the same ID exactly one proceeds.
+//
+// BatchCreateTasks claims the ID once the batch passes validation and keeps it
+// even if every task then fails, as real Cloud Tasks does (see conformance
+// cases batch/request-id-after-invalid-batch and
+// batch/request-id-after-all-failed). Which error real Cloud Tasks reports for
+// an invalid batch that also reuses an ID is not recorded; the emulator reports
+// the validation error.
 func (r *operationRegistry) reserveRequestID(requestID string) error {
 	if requestID == "" {
 		return nil
@@ -59,20 +66,6 @@ func (r *operationRegistry) reserveRequestID(requestID string) error {
 	}
 	r.requestIDs[requestID] = true
 	return nil
-}
-
-// releaseRequestID frees a request ID whose request was rejected, so a retry
-// with the same ID can run. Whether real Cloud Tasks keeps the ID of a
-// rejected request is not recorded.
-func (r *operationRegistry) releaseRequestID(requestID string) {
-	if requestID == "" {
-		return
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	delete(r.requestIDs, requestID)
 }
 
 // add stores an operation so GetOperation can serve it by name.
@@ -97,14 +90,20 @@ func (r *operationRegistry) get(name string) (*longrunningpb.Operation, error) {
 
 // newOperationName builds an operation resource name under the location of
 // the given queue: projects/<P>/locations/<L>/operations/<ID>. Real Cloud
-// Tasks' operation IDs are hexadecimal (see the batch/* observations in
-// conformance/golden/batch.json); the emulator's is a random 64-bit value.
-func newOperationName(queueName string) string {
+// Tasks puts the request's request_id in the operation name (see
+// batch/request-id-replay in conformance/golden/batch.json), so the emulator
+// uses it as the ID. Without one, real Cloud Tasks' IDs are hexadecimal (see
+// the other batch/* observations), and the emulator's is a random 64-bit value.
+func newOperationName(queueName, requestID string) string {
 	location := queueName
 	if i := strings.LastIndex(queueName, "/queues/"); i >= 0 {
 		location = queueName[:i]
 	}
-	return location + "/operations/" + strconv.FormatUint(rand.Uint64(), 16)
+	id := requestID
+	if id == "" {
+		id = strconv.FormatUint(rand.Uint64(), 16)
+	}
+	return location + "/operations/" + id
 }
 
 // operationsServer is the gRPC google.longrunning.Operations implementation. It

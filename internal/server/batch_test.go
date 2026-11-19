@@ -209,6 +209,7 @@ func TestBatchCreateTasksRejectsRepeatedRequestID(t *testing.T) {
 	require.NoError(t, err)
 	_, err = first.Wait(context.Background())
 	require.NoError(t, err)
+	assert.Equal(t, formattedParent+"/operations/"+request.RequestId, first.Name())
 
 	_, err = client.BatchCreateTasks(context.Background(), request)
 	assertIsGrpcError(t, "^Duplicate operation id in the batch request: "+request.RequestId+"$", grpcCodes.InvalidArgument, err)
@@ -252,7 +253,7 @@ func TestBatchCreateTasksRunsConcurrentRequestIDOnce(t *testing.T) {
 	assert.Len(t, listTaskNames(t, client, queue.GetName()), 2)
 }
 
-func TestBatchCreateTasksReleasesRequestIDOfRejectedBatch(t *testing.T) {
+func TestBatchCreateTasksAcceptsRequestIDOfInvalidBatch(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 	queue := createTestQueue(t, client)
@@ -269,6 +270,30 @@ func TestBatchCreateTasksReleasesRequestIDOfRejectedBatch(t *testing.T) {
 	resp, err := op.Wait(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, resp.GetTasks(), 1)
+}
+
+func TestBatchCreateTasksKeepsRequestIDWhenEveryTaskFails(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+	queue := createTestQueue(t, client)
+	existingTask := queue.GetName() + "/tasks/existing-task"
+
+	_, err := client.CreateTask(context.Background(), &taskspb.CreateTaskRequest{
+		Parent: queue.GetName(),
+		Task:   futureTask(existingTask),
+	})
+	require.NoError(t, err)
+
+	request := batchCreateRequest(queue.GetName(), futureTask(existingTask))
+	request.RequestId = "7e1c3a9b-5d2f-4b8e-a6c4-1f9d3e7b2a05"
+
+	_, err = client.BatchCreateTasks(context.Background(), request)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
+
+	request.Requests = batchCreateRequest(queue.GetName(), futureTask("")).GetRequests()
+	_, err = client.BatchCreateTasks(context.Background(), request)
+	assertIsGrpcError(t, "^Duplicate operation id in the batch request: "+request.RequestId+"$", grpcCodes.InvalidArgument, err)
+	assert.Len(t, listTaskNames(t, client, queue.GetName()), 1)
 }
 
 func TestGetBatchCreateTasksOperation(t *testing.T) {

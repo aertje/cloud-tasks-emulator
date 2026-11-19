@@ -57,7 +57,8 @@ func (e *BatchTaskError) Unwrap() error {
 //     than MaxBatchCreateTasks tasks, or when a task's request names another
 //     queue (an empty one included), names the task invalidly or for another
 //     queue, or repeats a name earlier in the batch. A task-specific rejection
-//     is a *BatchTaskError naming the first offending task.
+//     is a *BatchTaskError naming the first offending task. These are the
+//     checks of ValidateBatch.
 //   - A batch for a missing queue is accepted, and every task fails with the
 //     queue's not-found or recently-deleted error.
 //   - Otherwise each task is created as CreateTask would, and a task that fails
@@ -71,7 +72,7 @@ func (e *Engine) BatchCreateTasks(ctx context.Context, parent string, batch []Ba
 	if err := ctx.Err(); err != nil {
 		return BatchCreateTasksResult{}, err
 	}
-	if err := validateBatch(parent, batch); err != nil {
+	if err := ValidateBatch(parent, batch); err != nil {
 		return BatchCreateTasksResult{}, err
 	}
 
@@ -107,9 +108,11 @@ func (e *Engine) BatchCreateTasks(ctx context.Context, parent string, batch []Ba
 	return result, nil
 }
 
-// validateBatch reports why a batch must be rejected as a whole before any of
-// its tasks are created, or nil if it may run.
-func validateBatch(parent string, batch []BatchCreateTask) error {
+// ValidateBatch reports why a batch must be rejected as a whole before any of
+// its tasks are created, or nil if it may run. BatchCreateTasks runs it first;
+// callers run it on its own to act between validating a batch and creating its
+// tasks.
+func ValidateBatch(parent string, batch []BatchCreateTask) error {
 	if len(batch) == 0 {
 		return ErrBatchEmpty
 	}

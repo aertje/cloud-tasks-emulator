@@ -29,7 +29,8 @@ import (
 //     all of them fail.
 //   - Whether the created tasks come back in request order. Callers map each
 //     created task back to its request by position, so this is load-bearing.
-//   - What resending a batch with the same request_id does.
+//   - What resending a batch with the same request_id does, and whether Cloud
+//     Tasks keeps the request_id of a batch it rejected.
 //
 // Task and operation names are run-scoped, so they are captured as templates
 // (see templateTaskName, templateOperationName). One capture per observation is
@@ -56,12 +57,13 @@ type BatchSnapshot struct {
 	// Listed is how many tasks the queue holds after the batch, or -1 when it
 	// cannot be listed (e.g. the queue does not exist).
 	Listed int `json:"listed"`
-	// Replay is set when the observation resends the batch with the same
+	// Replay is set when the observation resends a batch with the same
 	// request_id.
 	Replay *BatchReplay `json:"replay,omitempty"`
 }
 
 // BatchReplay is what resending a batch with the same request_id returned.
+// When the first batch was rejected, SameOperation and SameTasks are false.
 // Request IDs are run-scoped, so Normalize templates one echoed in Err as
 // {request_id}.
 type BatchReplay struct {
@@ -72,7 +74,7 @@ type BatchReplay struct {
 }
 
 // batchCase names an observation, how to prepare its queue, the batch it
-// sends, and whether it resends that batch with the same request_id.
+// sends, and whether it then sends a batch with the same request_id.
 type batchCase struct {
 	name string
 	// noQueue skips creating the queue, so the batch targets a queue that
@@ -80,7 +82,11 @@ type batchCase struct {
 	noQueue bool
 	setup   func(ctx context.Context, c *Client, p Params) error
 	build   func(p Params) []*taskspb.CreateTaskRequest
-	replay  bool
+	// replay sends a second batch with the first one's request_id, whether or
+	// not the first was rejected.
+	replay bool
+	// replayBuild builds the second batch; nil resends the first.
+	replayBuild func(p Params) []*taskspb.CreateTaskRequest
 }
 
 // The batch builders below are shared with the task/batch-create/* cases of
@@ -181,6 +187,21 @@ func batchObservations() []batchCase {
 			replay: true,
 		},
 		{
+			// Rejected while validating the batch, before any task is tried.
+			name:        "batch/request-id-after-invalid-batch",
+			build:       batchOf(generatedName, invalidTaskName),
+			replay:      true,
+			replayBuild: batchOf(generatedName, generatedName),
+		},
+		{
+			// Rejected only after every task was tried and failed.
+			name:        "batch/request-id-after-all-failed",
+			setup:       createFarOutTasks("", "-x"),
+			build:       batchOf(variantTaskName, suffixedTaskName("-x")),
+			replay:      true,
+			replayBuild: batchOf(generatedName, generatedName),
+		},
+		{
 			name:    "batch/queue-not-found",
 			noQueue: true,
 			build:   batchOf(generatedName),
@@ -276,9 +297,13 @@ func observeBatch(ctx context.Context, c *Client, p Params, obs batchCase) Batch
 	}
 	snap.Listed = listTaskCount(ctx, c, p)
 
-	if obs.replay && err == nil {
+	if obs.replay {
 		snap.Replay = &BatchReplay{}
-		replayed, err := sendBatch(ctx, c, req)
+		replayReq := req
+		if obs.replayBuild != nil {
+			replayReq = &taskspb.BatchCreateTasksRequest{Parent: p.QueuePath(), Requests: obs.replayBuild(p), RequestId: p.RequestID}
+		}
+		replayed, err := sendBatch(ctx, c, replayReq)
 		if err != nil {
 			snap.Replay.Err = errTemplate(err, p)
 		} else {

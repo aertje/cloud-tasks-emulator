@@ -17,9 +17,9 @@ var (
 	errOperationNotFound = errors.New("operation not found")
 
 	// errDuplicateRequestID reports a BatchCreateTasks request whose request ID
-	// an earlier request for the same queue already used. Real Cloud Tasks
-	// rejects it with InvalidArgument rather than returning the original
-	// operation (see conformance case batch/request-id-replay); it is mapped in
+	// an earlier request already used. Real Cloud Tasks  rejects it with
+	// InvalidArgument rather than returning the original operation (see
+	// conformance case batch/request-id-replay); it is mapped in
 	// mapErrForBatchCreateTasks, whose message interpolates the ID.
 	errDuplicateRequestID = errors.New("duplicate request id")
 )
@@ -28,35 +28,25 @@ var (
 // GetOperation can serve them by name, and the request IDs those requests
 // used, so a request reusing one is rejected. Long-running operations are an
 // API-level concept the engine does not model, so the registry lives here,
-// holding the operations in their proto form. Nothing is ever evicted; the
-// emulator is short-lived and each entry is small, so the registry stays
-// bounded in practice.
+// holding the operations in their proto form.
 type operationRegistry struct {
 	mu         sync.Mutex
 	byName     map[string]*longrunningpb.Operation
-	requestIDs map[operationRequestKey]bool
-}
-
-// operationRequestKey scopes a client-supplied request ID to the queue it was
-// sent for. Real Cloud Tasks' scope is not recorded; per queue is the narrower
-// assumption.
-type operationRequestKey struct {
-	parent    string
-	requestID string
+	requestIDs map[string]bool
 }
 
 func newOperationRegistry() *operationRegistry {
 	return &operationRegistry{
 		byName:     map[string]*longrunningpb.Operation{},
-		requestIDs: map[operationRequestKey]bool{},
+		requestIDs: map[string]bool{},
 	}
 }
 
-// reserveRequestID claims requestID for parent, or reports
-// errDuplicateRequestID if an earlier request claimed it. An empty requestID is
-// never claimed. The claim is made before the request runs, so of several
-// concurrent requests with the same ID exactly one proceeds.
-func (r *operationRegistry) reserveRequestID(parent, requestID string) error {
+// reserveRequestID claims requestID, or reports errDuplicateRequestID if an
+// earlier request claimed it. An empty requestID is never claimed. The claim
+// is made before the request runs, so of several concurrent requests with the
+// same ID exactly one proceeds.
+func (r *operationRegistry) reserveRequestID(requestID string) error {
 	if requestID == "" {
 		return nil
 	}
@@ -64,18 +54,17 @@ func (r *operationRegistry) reserveRequestID(parent, requestID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := operationRequestKey{parent: parent, requestID: requestID}
-	if r.requestIDs[key] {
+	if r.requestIDs[requestID] {
 		return errDuplicateRequestID
 	}
-	r.requestIDs[key] = true
+	r.requestIDs[requestID] = true
 	return nil
 }
 
 // releaseRequestID frees a request ID whose request was rejected, so a retry
 // with the same ID can run. Whether real Cloud Tasks keeps the ID of a
 // rejected request is not recorded.
-func (r *operationRegistry) releaseRequestID(parent, requestID string) {
+func (r *operationRegistry) releaseRequestID(requestID string) {
 	if requestID == "" {
 		return
 	}
@@ -83,7 +72,7 @@ func (r *operationRegistry) releaseRequestID(parent, requestID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	delete(r.requestIDs, operationRequestKey{parent: parent, requestID: requestID})
+	delete(r.requestIDs, requestID)
 }
 
 // add stores an operation so GetOperation can serve it by name.

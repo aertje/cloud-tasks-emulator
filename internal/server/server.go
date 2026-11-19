@@ -175,19 +175,19 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 
 // BatchCreateTasks creates up to 100 tasks in the same queue
 func (s *Server) BatchCreateTasks(ctx context.Context, in *tasks.BatchCreateTasksRequest) (*longrunningpb.Operation, error) {
-	if err := s.operations.reserveRequestID(in.GetParent(), in.GetRequestId()); err != nil {
+	if err := s.operations.reserveRequestID(in.GetRequestId()); err != nil {
 		return nil, mapErrForBatchCreateTasks(err, in)
 	}
 
 	result, err := s.engine.BatchCreateTasks(ctx, in.GetParent(), batchCreateTasksFromProto(in))
 	if err != nil {
-		s.operations.releaseRequestID(in.GetParent(), in.GetRequestId())
+		s.operations.releaseRequestID(in.GetRequestId())
 		return nil, mapErrForBatchCreateTasks(err, in)
 	}
 
 	op, err := batchCreateOperationToProto(newOperationName(in.GetParent()), in, result)
 	if err != nil {
-		s.operations.releaseRequestID(in.GetParent(), in.GetRequestId())
+		s.operations.releaseRequestID(in.GetRequestId())
 		return nil, err
 	}
 	s.operations.add(op)

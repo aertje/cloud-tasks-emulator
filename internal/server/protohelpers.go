@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -12,10 +13,12 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/maybe"
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -276,6 +279,83 @@ func timestampToProto(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
+// batchCreateTasksFromProto maps the requests of a BatchCreateTasksRequest into
+// an engine batch. Each task keeps the queue its request named, so the engine
+// can reject a batch that spans queues.
+func batchCreateTasksFromProto(in *tasks.BatchCreateTasksRequest) []engine.BatchCreateTask {
+	batch := make([]engine.BatchCreateTask, len(in.GetRequests()))
+	for i, req := range in.GetRequests() {
+		batch[i] = engine.BatchCreateTask{
+			Parent: req.GetParent(),
+			Task:   taskFromProto(req.GetTask()),
+		}
+	}
+	return batch
+}
+
+// batchCreateOperationToProto builds the done long-running operation for a
+// completed batch. Created tasks go into the BatchCreateTasksResponse in
+// request order, each in its own request's response view. A task that failed
+// is reported in the metadata's failed_requests under its index, with the
+// status CreateTask would have returned for it. The metadata state is
+// SUCCEEDED when every task is created, PARTIALLY_SUCCEEDED when some are, and
+// FAILED when none are. Like real Cloud Tasks (see conformance case
+// batch/queue-not-found), an operation that created nothing carries no result
+// at all - neither a response nor an error.
+func batchCreateOperationToProto(name string, in *tasks.BatchCreateTasksRequest, result engine.BatchCreateTasksResult) (*longrunningpb.Operation, error) {
+	response := &tasks.BatchCreateTasksResponse{}
+	failed := map[int32]*rpcstatus.Status{}
+	for i, task := range result.Tasks {
+		req := batchTaskRequest(in, i)
+		if task.Err != nil {
+			// The index is bounded by engine.MaxBatchCreateTasks, so it always fits.
+			failed[int32(i)] = status.Convert(mapErrForCreateTask(task.Err, req)).Proto()
+			continue
+		}
+		response.Tasks = append(response.Tasks, taskToProto(task.Task, req.GetResponseView()))
+	}
+
+	state := tasks.BatchCreateTasksMetadata_SUCCEEDED
+	switch {
+	case len(failed) == len(result.Tasks):
+		state = tasks.BatchCreateTasksMetadata_FAILED
+	case len(failed) > 0:
+		state = tasks.BatchCreateTasksMetadata_PARTIALLY_SUCCEEDED
+	}
+	metadata := &tasks.BatchCreateTasksMetadata{
+		StartTime:      timestampToProto(result.StartTime),
+		EndTime:        timestampToProto(result.EndTime),
+		State:          state,
+		FailedRequests: failed,
+	}
+
+	metadataAny, err := anypb.New(metadata)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "marshal batch create metadata: %v", err)
+	}
+	op := &longrunningpb.Operation{Name: name, Metadata: metadataAny, Done: true}
+	if len(response.Tasks) > 0 {
+		responseAny, err := anypb.New(response)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "marshal batch create response: %v", err)
+		}
+		op.Result = &longrunningpb.Operation_Response{Response: responseAny}
+	}
+	return op, nil
+}
+
+// batchTaskRequest returns the i-th request of a batch as the CreateTaskRequest
+// the engine ran for it. Its parent is the batch's queue, which every request
+// of an accepted batch names, and which CreateTask error messages name.
+func batchTaskRequest(in *tasks.BatchCreateTasksRequest, i int) *tasks.CreateTaskRequest {
+	req := in.GetRequests()[i]
+	return &tasks.CreateTaskRequest{
+		Parent:       in.GetParent(),
+		Task:         req.GetTask(),
+		ResponseView: req.GetResponseView(),
+	}
+}
+
 // someIfNonNil wraps a nilable reference field pulled from a proto: a nil
 // map/slice becomes None, anything else Some. Proto3 cannot distinguish an
 // absent repeated/bytes field from an explicitly empty one (both decode to a
@@ -421,6 +501,16 @@ func mapErr(err error) error {
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:
 		return status.Errorf(codes.InvalidArgument, "HttpTarget.url must start with 'http://' or 'https://'.")
+	// Verified against the task/batch-create/empty case in
+	// conformance/golden/errors.json. The other batch sentinels are mapped in
+	// mapErrForBatchCreateTasks: their messages interpolate the request.
+	case engine.ErrBatchEmpty:
+		return status.Errorf(codes.InvalidArgument, "Request must contain at least one task.")
+	case errOperationNotFound:
+		// The server's operation registry, not the engine, reports this one.
+		// Borrowed from the recorded task/get/not-found message; no golden case
+		// captures GetOperation yet.
+		return status.Errorf(codes.NotFound, "Requested entity was not found.")
 	case engine.ErrUnimplemented:
 		return status.Errorf(codes.Unimplemented, "Not yet implemented")
 	default:
@@ -503,6 +593,43 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 			"Definition of task ID",
 			"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name",
 		)
+	}
+	return mapErr(err)
+}
+
+// BatchCreateTasks needs the request to interpolate most of its messages,
+// which are verified against the task/batch-create/* cases in
+// conformance/golden/errors.json, and the duplicate request ID message against
+// the batch/request-id-replay observation in conformance/golden/batch.json.
+// A *engine.BatchTaskError names the task that made the batch invalid: a queue
+// mismatch or duplicate name interpolates that task's request, and any other
+// task error maps as CreateTask would for it.
+func mapErrForBatchCreateTasks(err error, in *tasks.BatchCreateTasksRequest) error {
+	var taskErr *engine.BatchTaskError
+	if errors.As(err, &taskErr) {
+		req := in.GetRequests()[taskErr.Index]
+		switch taskErr.Err {
+		case engine.ErrBatchQueueMismatch:
+			return status.Errorf(codes.InvalidArgument,
+				"All tasks in a batch request must target the same queue. Found task for queue %s in batch request for queue %s.",
+				req.GetParent(),
+				in.GetParent(),
+			)
+		case engine.ErrBatchDuplicateTaskName:
+			return status.Errorf(codes.InvalidArgument, "Duplicate task name in the batch request: %s", req.GetTask().GetName())
+		}
+		return mapErrForCreateTask(taskErr.Err, batchTaskRequest(in, taskErr.Index))
+	}
+
+	switch err {
+	case engine.ErrBatchTooLarge:
+		return status.Errorf(codes.InvalidArgument,
+			"A maximum of %d tasks can be created in a single batch, but got %d tasks.",
+			engine.MaxBatchCreateTasks,
+			len(in.GetRequests()),
+		)
+	case errDuplicateRequestID:
+		return status.Errorf(codes.InvalidArgument, "Duplicate operation id in the batch request: %s", in.GetRequestId())
 	}
 	return mapErr(err)
 }

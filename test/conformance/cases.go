@@ -8,6 +8,7 @@ import (
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -138,6 +139,41 @@ func createQueueConfig(rl *taskspb.RateLimits, rc *taskspb.RetryConfig) func(ctx
 			Queue:  &taskspb.Queue{Name: p.QueuePath(), RateLimits: rl, RetryConfig: rc},
 		})
 		return err
+	}
+}
+
+// batchCreate returns an Invoke that sends a BatchCreateTasks request for the
+// variant's queue carrying the requests built by build (see batch.go), waits
+// for its long-running operation, and returns the error reported for the task
+// at index: its failed_requests status when it has one, otherwise the RPC's or
+// the operation's own error, or nil when the task was created. Capturing a
+// per-task status as the case's error lets the error battery record failures
+// Cloud Tasks reports inside the operation rather than as an RPC error.
+//
+// The metadata is read even when waiting fails: an operation that created
+// nothing carries no result, which the client reports as an error of its own
+// while each task's status is still in failed_requests.
+func batchCreate(build func(p Params) []*taskspb.CreateTaskRequest, index int32) func(ctx context.Context, c *Client, p Params) error {
+	return func(ctx context.Context, c *Client, p Params) error {
+		op, err := c.BatchCreateTasks(ctx, &taskspb.BatchCreateTasksRequest{
+			Parent:   p.QueuePath(),
+			Requests: build(p),
+		})
+		if err != nil {
+			return err
+		}
+		_, waitErr := op.Wait(ctx)
+		metadata, err := op.Metadata()
+		if err != nil {
+			if waitErr != nil {
+				return waitErr
+			}
+			return err
+		}
+		if st, ok := metadata.GetFailedRequests()[index]; ok {
+			return status.ErrorProto(st)
+		}
+		return waitErr
 	}
 }
 
@@ -507,6 +543,109 @@ func Cases() []Case {
 				_, err := c.GetTask(ctx, &taskspb.GetTaskRequest{Name: p.TaskPath()})
 				return err
 			},
+			Teardown: deleteQueue,
+		},
+
+		// --- BatchCreateTasks: the batch's queue and shape ---
+		// These capture what a batch for a missing queue reports for its first
+		// task, and the BatchCreateTasks RPC's own error for batches that are
+		// invalid as a whole.
+		{
+			Name: "task/batch-create/queue-not-found", RPC: "BatchCreateTasks", Category: "queue-not-found",
+			Invoke: batchCreate(batchOf(generatedName), 0),
+		},
+		{
+			Name: "task/batch-create/queue-recently-deleted", RPC: "BatchCreateTasks", Category: "queue-recently-deleted",
+			Setup: func(ctx context.Context, c *Client, p Params) error {
+				if err := createQueue(ctx, c, p); err != nil {
+					return err
+				}
+				return deleteQueue(ctx, c, p)
+			},
+			Invoke: batchCreate(batchOf(generatedName), 0),
+		},
+		{
+			Name: "task/batch-create/empty", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(), 0),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/batch-create/too-many", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := make([]*taskspb.CreateTaskRequest, 101)
+				for i := range requests {
+					requests[i] = batchTaskRequest(p, "")
+				}
+				return requests
+			}, 0),
+			Teardown: deleteQueue,
+		},
+		{
+			// One request names a well-formed queue outside the batch's location,
+			// so the message (if it echoes that name) normalizes through the
+			// {mismatch_parent} placeholder.
+			Name: "task/batch-create/request-queue-mismatch", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := batchOf(generatedName, generatedName)(p)
+				requests[1].Parent = mismatchedQueueName(p)
+				return requests
+			}, 1),
+			Teardown: deleteQueue,
+		},
+		{
+			// A request with no parent, to record whether Cloud Tasks defaults it
+			// to the batch's queue (OK) or rejects the batch.
+			Name: "task/batch-create/request-parent-empty", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := batchOf(generatedName)(p)
+				requests[0].Parent = ""
+				return requests
+			}, 0),
+			Teardown: deleteQueue,
+		},
+
+		// --- BatchCreateTasks: one task fails inside an accepted batch ---
+		// These capture the failed_requests status Cloud Tasks reports for one
+		// task, or the batch's own error if it rejects the whole batch instead.
+		{
+			Name: "task/batch-create/already-exists", RPC: "BatchCreateTasks", Category: "task-already-exists",
+			Setup: func(ctx context.Context, c *Client, p Params) error {
+				if err := createQueue(ctx, c, p); err != nil {
+					return err
+				}
+				return createTask(ctx, c, p)
+			},
+			Invoke:   batchCreate(batchOf(generatedName, variantTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			// The same name twice in one batch: records whether the second is a
+			// per-task AlreadyExists or the whole batch is rejected.
+			Name: "task/batch-create/duplicate-in-batch", RPC: "BatchCreateTasks", Category: "task-already-exists",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(variantTaskName, variantTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/batch-create/invalid-name", RPC: "BatchCreateTasks", Category: "task-invalid-name",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(generatedName, invalidTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/batch-create/queue-mismatch", RPC: "BatchCreateTasks", Category: "task-queue-mismatch",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(generatedName, otherQueueTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "task/batch-create/invalid-url-empty", RPC: "BatchCreateTasks", Category: "task-invalid-url",
+			Setup:    createQueue,
+			Invoke:   batchCreate(withSecondTask(func(t *taskspb.Task) { t.GetHttpRequest().Url = "" }), 1),
 			Teardown: deleteQueue,
 		},
 	}

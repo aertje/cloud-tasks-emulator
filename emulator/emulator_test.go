@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TestInProcessDispatch exercises the full path a library consumer relies on:
@@ -70,6 +71,51 @@ func TestInProcessDispatch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("emulator did not dispatch the task to the target within 5s")
 	}
+}
+
+// TestInProcessBatchCreateTasks verifies the in-process emulator serves
+// BatchCreateTasks and the google.longrunning.Operations service the client
+// polls, so a consumer can create a batch and look its operation up by name.
+func TestInProcessBatchCreateTasks(t *testing.T) {
+	em := emulator.New()
+	defer em.Close()
+
+	ctx := context.Background()
+	client, err := cloudtasks.NewClient(ctx, em.ClientOptions()...)
+	require.NoError(t, err)
+	defer client.Close()
+
+	const parent = "projects/test-project/locations/test-location"
+
+	queue, err := client.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+		Parent: parent,
+		Queue:  &taskspb.Queue{Name: parent + "/queues/batch-queue"},
+	})
+	require.NoError(t, err)
+
+	task := &taskspb.Task{
+		ScheduleTime: timestamppb.New(time.Now().Add(time.Hour)),
+		MessageType: &taskspb.Task_HttpRequest{
+			HttpRequest: &taskspb.HttpRequest{Url: "http://localhost/task"},
+		},
+	}
+	op, err := client.BatchCreateTasks(ctx, &taskspb.BatchCreateTasksRequest{
+		Parent: queue.GetName(),
+		Requests: []*taskspb.CreateTaskRequest{
+			{Parent: queue.GetName(), Task: task},
+			{Parent: queue.GetName(), Task: task},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := op.Wait(ctx)
+	require.NoError(t, err)
+	require.Len(t, resp.GetTasks(), 2)
+
+	polledResp, err := client.BatchCreateTasksOperation(op.Name()).Poll(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, resp.GetTasks()[0].GetName(), polledResp.GetTasks()[0].GetName())
+	assert.Equal(t, resp.GetTasks()[1].GetName(), polledResp.GetTasks()[1].GetName())
 }
 
 // TestWithHardResetOnPurgeQueue verifies functional options reach the underlying

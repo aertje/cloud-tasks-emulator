@@ -9,9 +9,11 @@ import (
 )
 
 // This file holds the golden plumbing shared by every battery: the Diff type and
-// the generic save/load/compare cores. Each battery (errors, happy-path) wraps
-// these with its own record type and per-case comparison - see SaveErrors /
-// CompareErrors (record.go) and SaveHappyPath / CompareHappyPath (snapshot.go).
+// the generic save/load/compare cores. Each battery (errors, happy-path, batch,
+// dispatch) wraps these with its own record type and per-case comparison - see
+// SaveErrors / CompareErrors (record.go), SaveHappyPath / CompareHappyPath
+// (snapshot.go), SaveBatch / CompareBatch (batch.go) and SaveDispatch /
+// CompareDispatch (dispatch.go).
 
 // Diff describes one mismatch between a recorded result and the golden.
 type Diff struct {

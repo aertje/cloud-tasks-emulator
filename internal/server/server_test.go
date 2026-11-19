@@ -43,7 +43,7 @@ func setUp(t *testing.T, options ServerOptions) (*Server, *Client) {
 
 	serv := grpc.NewServer()
 	emulatorServer := NewServer(options)
-	taskspb.RegisterCloudTasksServer(serv, emulatorServer)
+	emulatorServer.Register(serv)
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)

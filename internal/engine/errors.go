@@ -55,5 +55,14 @@ var (
 	ErrHTTPRequestURLRequired = errors.New("http request url is required")
 	ErrHTTPRequestURLScheme   = errors.New("http request url must be http or https")
 
+	// Batch-shape violations, reported by BatchCreateTasks before any task is
+	// created. Real Cloud Tasks rejects these with InvalidArgument.
+	// The queue-mismatch and duplicate-name sentinels are wrapped in a
+	// *BatchTaskError naming the offending task.
+	ErrBatchEmpty             = errors.New("batch has no tasks")
+	ErrBatchTooLarge          = errors.New("batch has too many tasks")
+	ErrBatchQueueMismatch     = errors.New("batch request targets another queue")
+	ErrBatchDuplicateTaskName = errors.New("batch repeats a task name")
+
 	ErrUnimplemented = errors.New("not yet implemented")
 )

@@ -18,6 +18,7 @@ type Params struct {
 	Location string
 	QueueID  string
 	TaskID   string
+	RequestID string
 }
 
 // Parent is the location resource name (CreateQueue parent, ListQueues parent).

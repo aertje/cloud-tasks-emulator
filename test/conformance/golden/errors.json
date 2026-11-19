@@ -180,6 +180,100 @@
     "stable": true
   },
   {
+    "name": "task/batch-create/already-exists",
+    "rpc": "BatchCreateTasks",
+    "category": "task-already-exists",
+    "code": "AlreadyExists",
+    "template": "Requested entity already exists",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/duplicate-in-batch",
+    "rpc": "BatchCreateTasks",
+    "category": "task-already-exists",
+    "code": "InvalidArgument",
+    "template": "Duplicate task name in the batch request: {task_path}",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/empty",
+    "rpc": "BatchCreateTasks",
+    "category": "batch-invalid",
+    "code": "InvalidArgument",
+    "template": "Request must contain at least one task.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/invalid-name",
+    "rpc": "BatchCreateTasks",
+    "category": "task-invalid-name",
+    "code": "InvalidArgument",
+    "template": "Task ID \"not a valid id\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+    "details": [
+      {
+        "type": "*errdetails.Help",
+        "template": "links:{description:\"Definition of task ID\" url:\"https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task.FIELDS.name\"}"
+      }
+    ],
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/invalid-url-empty",
+    "rpc": "BatchCreateTasks",
+    "category": "task-invalid-url",
+    "code": "InvalidArgument",
+    "template": "HttpRequest.url is required.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/queue-mismatch",
+    "rpc": "BatchCreateTasks",
+    "category": "task-queue-mismatch",
+    "code": "InvalidArgument",
+    "template": "The queue name from request ('{queue_path}') must be the same as the queue name in the named task ('{queue_path}-other').",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/queue-not-found",
+    "rpc": "BatchCreateTasks",
+    "category": "queue-not-found",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/queue-recently-deleted",
+    "rpc": "BatchCreateTasks",
+    "category": "queue-recently-deleted",
+    "code": "NotFound",
+    "template": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/request-parent-empty",
+    "rpc": "BatchCreateTasks",
+    "category": "batch-invalid",
+    "code": "InvalidArgument",
+    "template": "All tasks in a batch request must target the same queue. Found task for queue  in batch request for queue {queue_path}.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/request-queue-mismatch",
+    "rpc": "BatchCreateTasks",
+    "category": "batch-invalid",
+    "code": "InvalidArgument",
+    "template": "All tasks in a batch request must target the same queue. Found task for queue {mismatch_parent}/queues/{queue_id} in batch request for queue {queue_path}.",
+    "stable": true
+  },
+  {
+    "name": "task/batch-create/too-many",
+    "rpc": "BatchCreateTasks",
+    "category": "batch-invalid",
+    "code": "InvalidArgument",
+    "template": "A maximum of 100 tasks can be created in a single batch, but got 101 tasks.",
+    "stable": true
+  },
+  {
     "name": "task/create/already-exists",
     "rpc": "CreateTask",
     "category": "task-already-exists",

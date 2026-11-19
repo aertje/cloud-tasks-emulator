@@ -16,7 +16,6 @@ import (
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/oidc"
 	"github.com/aertje/cloud-tasks-emulator/v2/internal/server"
 
-	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -132,7 +131,7 @@ func NewUnstarted(opts ...Option) *Emulator {
 
 	lis := bufconn.Listen(bufSize)
 	gs := grpc.NewServer()
-	taskspb.RegisterCloudTasksServer(gs, s)
+	s.Register(gs)
 
 	return &Emulator{srv: s, grpc: gs, lis: lis, logger: logger}
 }

@@ -3,8 +3,9 @@ module github.com/aertje/cloud-tasks-emulator/v2
 go 1.26.4
 
 require (
-	cloud.google.com/go/cloudtasks v1.19.0
+	cloud.google.com/go/cloudtasks v1.20.0
 	cloud.google.com/go/iam v1.13.0
+	cloud.google.com/go/longrunning v1.2.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/lmittmann/tint v1.2.0
 	github.com/peterbourgon/ff/v3 v3.4.0
@@ -12,11 +13,12 @@ require (
 	golang.org/x/sync v0.22.0
 	google.golang.org/api v0.293.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 )
 
 require (
+	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.23.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect

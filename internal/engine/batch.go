@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -10,7 +11,7 @@ import (
 const MaxBatchCreateTasks = 100
 
 // BatchCreateTask is one task of a BatchCreateTasks call: the queue its request
-// named, and the task to create on it. An empty Parent means the batch's queue.
+// named, and the task to create on it.
 type BatchCreateTask struct {
 	Parent string
 	Task   TaskState
@@ -32,28 +33,44 @@ type BatchCreateTasksResult struct {
 	EndTime   time.Time
 }
 
+// BatchTaskError reports the task that made BatchCreateTasks reject a whole
+// batch: its index in the batch, and the error it failed with.
+type BatchTaskError struct {
+	Index int
+	Err   error
+}
+
+func (e *BatchTaskError) Error() string {
+	return fmt.Sprintf("batch task %d: %v", e.Index, e.Err)
+}
+
+func (e *BatchTaskError) Unwrap() error {
+	return e.Err
+}
+
 // BatchCreateTasks creates every task of batch on the queue identified by
-// parent, in order. The batch itself is rejected, creating nothing, when it is
-// empty, holds more than MaxBatchCreateTasks tasks, names another queue in any
-// task, or targets a missing queue. Otherwise, each task is validated and
-// created exactly as CreateTask would.
+// parent, in order, matching how real Cloud Tasks splits a batch's failures
+// (see the batch/* cases in test/conformance):
+//
+//   - The batch is rejected, creating nothing, when it is empty or holds more
+//     than MaxBatchCreateTasks tasks, or when a task's request names another
+//     queue (an empty one included), names the task invalidly or for another
+//     queue, or repeats a name earlier in the batch. A task-specific rejection
+//     is a *BatchTaskError naming the first offending task.
+//   - A batch for a missing queue is accepted, and every task fails with the
+//     queue's not-found or recently-deleted error.
+//   - Otherwise each task is created as CreateTask would, and a task that fails
+//     does not stop the rest: its error is reported in its result. When every
+//     task fails, though, the batch is rejected with the first task's error, as
+//     a *BatchTaskError.
+//
+// The queue is looked up once for the whole batch. As with CreateTask, a queue
+// deleted while the batch runs is not re-checked before each task is admitted.
 func (e *Engine) BatchCreateTasks(ctx context.Context, parent string, batch []BatchCreateTask) (BatchCreateTasksResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BatchCreateTasksResult{}, err
 	}
-	if len(batch) == 0 {
-		return BatchCreateTasksResult{}, ErrBatchEmpty
-	}
-	if len(batch) > MaxBatchCreateTasks {
-		return BatchCreateTasksResult{}, ErrBatchTooLarge
-	}
-	for _, task := range batch {
-		if task.Parent != "" && task.Parent != parent {
-			return BatchCreateTasksResult{}, ErrBatchQueueMismatch
-		}
-	}
-	queue, err := e.fetchQueueForTasks(parent)
-	if err != nil {
+	if err := validateBatch(parent, batch); err != nil {
 		return BatchCreateTasksResult{}, err
 	}
 
@@ -61,6 +78,16 @@ func (e *Engine) BatchCreateTasks(ctx context.Context, parent string, batch []Ba
 		Tasks:     make([]BatchCreateTaskResult, len(batch)),
 		StartTime: e.now(),
 	}
+	queue, err := e.fetchQueueForTasks(parent)
+	if err != nil {
+		for i := range result.Tasks {
+			result.Tasks[i] = BatchCreateTaskResult{Err: err}
+		}
+		result.EndTime = e.now()
+		return result, nil
+	}
+
+	created := 0
 	for i, task := range batch {
 		if err := ctx.Err(); err != nil {
 			result.Tasks[i] = BatchCreateTaskResult{Err: err}
@@ -68,7 +95,43 @@ func (e *Engine) BatchCreateTasks(ctx context.Context, parent string, batch []Ba
 		}
 		_, frozen, err := e.createTaskInQueue(queue, parent, task.Task)
 		result.Tasks[i] = BatchCreateTaskResult{Task: frozen, Err: err}
+		if err == nil {
+			created++
+		}
+	}
+	if created == 0 {
+		return BatchCreateTasksResult{}, &BatchTaskError{Index: 0, Err: result.Tasks[0].Err}
 	}
 	result.EndTime = e.now()
 	return result, nil
+}
+
+// validateBatch reports why a batch must be rejected as a whole before any of
+// its tasks are created, or nil if it may run.
+func validateBatch(parent string, batch []BatchCreateTask) error {
+	if len(batch) == 0 {
+		return ErrBatchEmpty
+	}
+	if len(batch) > MaxBatchCreateTasks {
+		return ErrBatchTooLarge
+	}
+	for i, task := range batch {
+		if task.Parent != parent {
+			return &BatchTaskError{Index: i, Err: ErrBatchQueueMismatch}
+		}
+	}
+	names := make(map[string]bool, len(batch))
+	for i, task := range batch {
+		if err := validateTaskName(parent, task.Task.Name); err != nil {
+			return &BatchTaskError{Index: i, Err: err}
+		}
+		if task.Task.Name == "" {
+			continue
+		}
+		if names[task.Task.Name] {
+			return &BatchTaskError{Index: i, Err: ErrBatchDuplicateTaskName}
+		}
+		names[task.Task.Name] = true
+	}
+	return nil
 }

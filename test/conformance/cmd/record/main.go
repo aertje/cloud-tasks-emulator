@@ -21,6 +21,12 @@
 //	  -target=real -kind=happypath -project=$PROJECT -location=us-central1 \
 //	  -out=golden/happypath.json
 //
+// Record the BatchCreateTasks golden:
+//
+//	go run ./cmd/record \
+//	  -target=real -kind=batch -project=$PROJECT -location=us-central1 \
+//	  -out=golden/batch.json
+//
 // Record the dispatch-headers golden (needs a deployed receiver - see test/conformance/receiver):
 //
 //	go run ./cmd/record -target=real -kind=dispatch \
@@ -41,7 +47,7 @@ import (
 
 func main() {
 	target := flag.String("target", "emulator", "real | emulator")
-	kind := flag.String("kind", "errors", "errors | happypath | dispatch (which battery to record)")
+	kind := flag.String("kind", "errors", "errors | happypath | batch | dispatch (which battery to record)")
 	project := flag.String("project", "", "GCP project id (real) or placeholder (emulator)")
 	location := flag.String("location", "us-central1", "location id")
 	addr := flag.String("addr", "localhost:8123", "emulator address (target=emulator)")
@@ -84,10 +90,12 @@ func main() {
 		recordErrors(ctx, client, opts, *out)
 	case "happypath":
 		recordHappyPath(ctx, client, opts, *out)
+	case "batch":
+		recordBatch(ctx, client, opts, *out)
 	case "dispatch":
 		recordDispatch(ctx, client, opts, *receiverURL, *out)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|happypath|dispatch)\n", *kind)
+		fmt.Fprintf(os.Stderr, "unknown kind %q (want errors|happypath|batch|dispatch)\n", *kind)
 		os.Exit(1)
 	}
 }
@@ -121,6 +129,26 @@ func recordHappyPath(ctx context.Context, client *conformance.Client, opts confo
 
 	writeJSON(out, func(path string) error { return conformance.SaveHappyPath(path, snaps) })
 	fmt.Fprintf(os.Stderr, "done: %d observations, %d with errors\n", len(snaps), failed)
+}
+
+func recordBatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, out string) {
+	snaps := conformance.RunBatch(ctx, client, opts)
+
+	withErrors := 0
+	for _, s := range snaps {
+		replayErr := ""
+		if s.Replay != nil {
+			replayErr = s.Replay.Err
+		}
+		if s.Err != "" || s.WaitErr != "" || replayErr != "" {
+			// Errors are data here: several observations probe failures on purpose.
+			withErrors++
+			fmt.Fprintf(os.Stderr, "  %s: err=%q waitErr=%q replayErr=%q listed=%d\n", s.Name, s.Err, s.WaitErr, replayErr, s.Listed)
+		}
+	}
+
+	writeJSON(out, func(path string) error { return conformance.SaveBatch(path, snaps) })
+	fmt.Fprintf(os.Stderr, "done: %d observations, %d recorded an error\n", len(snaps), withErrors)
 }
 
 func recordDispatch(ctx context.Context, client *conformance.Client, opts conformance.RunOptions, receiverURL, out string) {

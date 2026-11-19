@@ -11,88 +11,87 @@ import (
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 )
 
-// errOperationNotFound reports a GetOperation for a name the registry never
-// stored. It is mapped to NotFound by mapErr.
-var errOperationNotFound = errors.New("operation not found")
+var (
+	// errOperationNotFound reports a GetOperation for a name the registry never
+	// stored. It is mapped to NotFound by mapErr.
+	errOperationNotFound = errors.New("operation not found")
+
+	// errDuplicateRequestID reports a BatchCreateTasks request whose request ID
+	// an earlier request for the same queue already used. Real Cloud Tasks
+	// rejects it with InvalidArgument rather than returning the original
+	// operation (see conformance case batch/request-id-replay); it is mapped in
+	// mapErrForBatchCreateTasks, whose message interpolates the ID.
+	errDuplicateRequestID = errors.New("duplicate request id")
+)
 
 // operationRegistry records the long-running operations the server returns, so
-// GetOperation can serve them by name and a retried request carrying the same
-// request ID gets the original operation instead of repeating its work.
-// Long-running operations are an API-level concept the engine does not model,
-// so the registry lives here, holding the operations in their proto form.
-// Operations are never evicted; the emulator is short-lived and each one is
-// small, so the registry stays bounded in practice.
+// GetOperation can serve them by name, and the request IDs those requests
+// used, so a request reusing one is rejected. Long-running operations are an
+// API-level concept the engine does not model, so the registry lives here,
+// holding the operations in their proto form. Nothing is ever evicted; the
+// emulator is short-lived and each entry is small, so the registry stays
+// bounded in practice.
 type operationRegistry struct {
-	mu        sync.Mutex
-	byName    map[string]*longrunningpb.Operation
-	byRequest map[operationRequestKey]*pendingOperation
+	mu         sync.Mutex
+	byName     map[string]*longrunningpb.Operation
+	requestIDs map[operationRequestKey]bool
 }
 
-// operationRequestKey scopes a client-supplied request ID to the resource it
-// was sent for, so the same ID reused against another queue starts a new
-// operation.
+// operationRequestKey scopes a client-supplied request ID to the queue it was
+// sent for. Real Cloud Tasks' scope is not recorded; per queue is the narrower
+// assumption.
 type operationRequestKey struct {
 	parent    string
 	requestID string
 }
 
-// pendingOperation is one request's operation, from the moment the registry
-// hands it to the request that will run it until that request finishes. Other
-// requests carrying the same request ID wait on done instead of repeating the
-// work.
-type pendingOperation struct {
-	key  operationRequestKey
-	done chan struct{}
-	op   *longrunningpb.Operation
-	err  error
-}
-
 func newOperationRegistry() *operationRegistry {
 	return &operationRegistry{
-		byName:    map[string]*longrunningpb.Operation{},
-		byRequest: map[operationRequestKey]*pendingOperation{},
+		byName:     map[string]*longrunningpb.Operation{},
+		requestIDs: map[operationRequestKey]bool{},
 	}
 }
 
-// start returns the operation for parent and requestID. It reports started
-// when the caller must run the work and call finish; otherwise the returned
-// operation belongs to an earlier request with the same request ID, and the
-// caller should wait for it. An empty requestID always starts a new operation.
-// The registry lock is held only to look up and reserve the request ID, never
-// while the work runs.
-func (r *operationRegistry) start(parent, requestID string) (pending *pendingOperation, started bool) {
-	key := operationRequestKey{parent: parent, requestID: requestID}
-	pending = &pendingOperation{key: key, done: make(chan struct{})}
+// reserveRequestID claims requestID for parent, or reports
+// errDuplicateRequestID if an earlier request claimed it. An empty requestID is
+// never claimed. The claim is made before the request runs, so of several
+// concurrent requests with the same ID exactly one proceeds.
+func (r *operationRegistry) reserveRequestID(parent, requestID string) error {
 	if requestID == "" {
-		return pending, true
+		return nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existing, ok := r.byRequest[key]; ok {
-		return existing, false
+	key := operationRequestKey{parent: parent, requestID: requestID}
+	if r.requestIDs[key] {
+		return errDuplicateRequestID
 	}
-	r.byRequest[key] = pending
-	return pending, true
+	r.requestIDs[key] = true
+	return nil
 }
 
-// finish records the outcome of an operation returned by start and releases
-// every request waiting on it. A failed request is forgotten, so a later retry
-// with the same request ID runs again instead of replaying the error.
-func (r *operationRegistry) finish(pending *pendingOperation, op *longrunningpb.Operation, err error) {
+// releaseRequestID frees a request ID whose request was rejected, so a retry
+// with the same ID can run. Whether real Cloud Tasks keeps the ID of a
+// rejected request is not recorded.
+func (r *operationRegistry) releaseRequestID(parent, requestID string) {
+	if requestID == "" {
+		return
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	pending.op, pending.err = op, err
-	if err != nil {
-		if r.byRequest[pending.key] == pending {
-			delete(r.byRequest, pending.key)
-		}
-	} else {
-		r.byName[op.GetName()] = op
-	}
-	close(pending.done)
+	delete(r.requestIDs, operationRequestKey{parent: parent, requestID: requestID})
+}
+
+// add stores an operation so GetOperation can serve it by name.
+func (r *operationRegistry) add(op *longrunningpb.Operation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.byName[op.GetName()] = op
 }
 
 // get returns the named operation, or errOperationNotFound.
@@ -107,25 +106,16 @@ func (r *operationRegistry) get(name string) (*longrunningpb.Operation, error) {
 	return op, nil
 }
 
-// wait blocks until the request running the operation finishes, or ctx ends.
-func (p *pendingOperation) wait(ctx context.Context) (*longrunningpb.Operation, error) {
-	select {
-	case <-p.done:
-		return p.op, p.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
 // newOperationName builds an operation resource name under the location of
-// the given queue: projects/<P>/locations/<L>/operations/<ID>. The ID is a
-// random decimal number, generated the same way as auto-generated task IDs.
+// the given queue: projects/<P>/locations/<L>/operations/<ID>. Real Cloud
+// Tasks' operation IDs are hexadecimal (see the batch/* observations in
+// conformance/golden/batch.json); the emulator's is a random 64-bit value.
 func newOperationName(queueName string) string {
 	location := queueName
 	if i := strings.LastIndex(queueName, "/queues/"); i >= 0 {
 		location = queueName[:i]
 	}
-	return location + "/operations/" + strconv.FormatUint(rand.Uint64(), 10)
+	return location + "/operations/" + strconv.FormatUint(rand.Uint64(), 16)
 }
 
 // operationsServer is the gRPC google.longrunning.Operations implementation. It

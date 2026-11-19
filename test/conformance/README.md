@@ -85,6 +85,14 @@ category, and an `Invoke`; use `Setup`/`Teardown` for preconditions (e.g.
 create-then-delete to reach a "recently deleted" state). Names are golden keys —
 don't rename casually.
 
+`BatchCreateTasks` cases (`batch/create/*`) use `batchCreate`, which waits for
+the returned long-running operation. A batch that Cloud Tasks rejects as a whole
+records the RPC's (or operation's) error, as usual. A task that fails inside an
+accepted batch is reported in the operation's `failed_requests` rather than as
+an RPC error, so for those cases `batchCreate` returns that task's status as the
+case's error. A case that records `OK` means the batch was accepted and the task
+at the probed index was created.
+
 ## Known divergences
 
 `knowndiff.go` is the explicit ledger of cases where the emulator is *knowingly*
@@ -133,6 +141,46 @@ go run ./cmd/record \
 emulator against `golden/happypath.json` (and skips if it's absent). This battery
 is control-plane only; the headers Cloud Tasks puts on the wire when it *dispatches*
 a task are covered by the dispatch battery below.
+
+## BatchCreateTasks battery
+
+The error battery records one status per case, but `BatchCreateTasks` reports
+most of its outcome inside the long-running operation it returns. This battery
+sends whole batches and captures that outcome, to settle what the proto docs
+leave open:
+
+- **Operation shape** - is the operation already done when the RPC returns,
+  what does its name look like, and what does it hold when the batch targets a
+  missing queue?
+- **Which failures reject the batch** - one observation per kind of task
+  failure (already exists, invalid name, another queue, invalid URL, deadline,
+  schedule time), each beside one valid task, shows whether that failure
+  rejects the whole batch or is reported only for its own task in
+  `failed_requests`.
+- **Metadata state** - which state does a batch report when every task is
+  created, when some fail, and when all of them fail?
+- **Response order** - do the created tasks come back in request order? Callers
+  map each created task back to its request by position.
+- **Request-ID replay** - what does resending a batch with the same
+  `request_id` return?
+
+Task and operation names are run-scoped, so they are stored as templates: a
+named task as `{task_path}-a`, a generated one as
+`{queue_path}/tasks/{generated}`, and an operation as `{parent}/operations/`
+followed by its ID's character class (`{digits}`, `{hex}` or `{id}`). A
+`request_id` echoed in an error is stored as `{request_id}`. See `batch.go`.
+
+Record it against real Cloud Tasks:
+
+```sh
+cd test/conformance
+go run ./cmd/record \
+  -target=real -kind=batch -project=$PROJECT -location=us-central1 \
+  -out=golden/batch.json
+```
+
+`TestEmulatorBatch` diffs the emulator against `golden/batch.json` (and skips if
+it's absent).
 
 ## Dispatch-headers battery
 

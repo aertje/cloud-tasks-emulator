@@ -1,0 +1,139 @@
+[
+  {
+    "name": "batch/all-created",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "SUCCEEDED",
+    "tasks": [
+      "{task_path}-c",
+      "{task_path}-a",
+      "{queue_path}/tasks/{generated}",
+      "{task_path}-b"
+    ],
+    "listed": 4
+  },
+  {
+    "name": "batch/all-failed",
+    "err": "AlreadyExists: Requested entity already exists",
+    "doneOnReturn": false,
+    "listed": 2
+  },
+  {
+    "name": "batch/queue-not-found",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "waitErr": "Unknown: unsupported result type \u003cnil\u003e: \u003cnil\u003e",
+    "state": "FAILED",
+    "failed": [
+      "0: NotFound: Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize."
+    ],
+    "listed": -1
+  },
+  {
+    "name": "batch/queue-recently-deleted",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "waitErr": "Unknown: unsupported result type \u003cnil\u003e: \u003cnil\u003e",
+    "state": "FAILED",
+    "failed": [
+      "0: NotFound: Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize."
+    ],
+    "listed": -1
+  },
+  {
+    "name": "batch/request-id-replay",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "SUCCEEDED",
+    "tasks": [
+      "{queue_path}/tasks/{generated}",
+      "{queue_path}/tasks/{generated}"
+    ],
+    "listed": 2,
+    "replay": {
+      "err": "InvalidArgument: Duplicate operation id in the batch request: {request_id}",
+      "sameOperation": false,
+      "sameTasks": false,
+      "listed": 2
+    }
+  },
+  {
+    "name": "batch/some-failed",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "PARTIALLY_SUCCEEDED",
+    "tasks": [
+      "{task_path}-b",
+      "{queue_path}/tasks/{generated}",
+      "{task_path}-a"
+    ],
+    "failed": [
+      "1: AlreadyExists: Requested entity already exists"
+    ],
+    "listed": 4
+  },
+  {
+    "name": "batch/task-already-exists",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "PARTIALLY_SUCCEEDED",
+    "tasks": [
+      "{queue_path}/tasks/{generated}"
+    ],
+    "failed": [
+      "1: AlreadyExists: Requested entity already exists"
+    ],
+    "listed": 2
+  },
+  {
+    "name": "batch/task-deadline-too-short",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "PARTIALLY_SUCCEEDED",
+    "tasks": [
+      "{queue_path}/tasks/{generated}"
+    ],
+    "failed": [
+      "1: InvalidArgument: Task.dispatchDeadline must be between [15s, 30m]."
+    ],
+    "listed": 1
+  },
+  {
+    "name": "batch/task-invalid-name",
+    "err": "InvalidArgument: Task ID \"not a valid id\" can contain only letters ([A-Za-z]), numbers ([0-9]), hyphens (-), or underscores (_). Task ID must between 1 and 500 characters.",
+    "doneOnReturn": false,
+    "listed": 0
+  },
+  {
+    "name": "batch/task-invalid-url",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "PARTIALLY_SUCCEEDED",
+    "tasks": [
+      "{queue_path}/tasks/{generated}"
+    ],
+    "failed": [
+      "1: InvalidArgument: HttpRequest.url is required."
+    ],
+    "listed": 1
+  },
+  {
+    "name": "batch/task-queue-mismatch",
+    "err": "InvalidArgument: The queue name from request ('{queue_path}') must be the same as the queue name in the named task ('{queue_path}-other').",
+    "doneOnReturn": false,
+    "listed": 0
+  },
+  {
+    "name": "batch/task-schedule-too-far",
+    "doneOnReturn": true,
+    "operationName": "{parent}/operations/{hex}",
+    "state": "PARTIALLY_SUCCEEDED",
+    "tasks": [
+      "{queue_path}/tasks/{generated}"
+    ],
+    "failed": [
+      "1: InvalidArgument: The Task.scheduleTime, 2099-12-31T16:00:00-08:00, is too far in the future. Schedule time must be no more than 720h in the future."
+    ],
+    "listed": 1
+  }
+]

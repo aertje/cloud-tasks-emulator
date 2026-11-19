@@ -29,9 +29,6 @@ Known limitations:
 - `BatchDeleteTasks`, `GetCmekConfig` and `UpdateCmekConfig` are not
   implemented. Of the `google.longrunning.Operations` RPCs, only
   `GetOperation` is.
-- `BatchCreateTasks` has no recorded conformance case yet. Its top-level error
-  messages, and the `FAILED` state it reports in the operation metadata when no
-  task could be created, are best guesses at real Cloud Tasks behaviour.
 - Pagination is not supported. `ListQueues` and `ListTasks` ignore the
   `page_size` and `page_token` request fields and return every result in a
   single response with an empty `next_page_token`.

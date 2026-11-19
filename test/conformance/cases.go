@@ -8,6 +8,7 @@ import (
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -140,6 +141,64 @@ func createQueueConfig(rl *taskspb.RateLimits, rc *taskspb.RetryConfig) func(ctx
 		return err
 	}
 }
+
+// batchTaskRequest is one CreateTaskRequest of a batch for the variant's queue:
+// an HTTP task with the given name (empty lets Cloud Tasks generate one),
+// scheduled far out so it never dispatches during the capture window.
+func batchTaskRequest(p Params, name string) *taskspb.CreateTaskRequest {
+	task := httpTask(name)
+	task.ScheduleTime = scheduleFarOut()
+	return &taskspb.CreateTaskRequest{Parent: p.QueuePath(), Task: task}
+}
+
+// batchCreate returns an Invoke that sends a BatchCreateTasks request for the
+// variant's queue carrying the requests built by build, waits for its
+// long-running operation, and returns the error reported for the task at index.
+// When the whole batch is rejected that is the RPC's or the operation's own
+// error; otherwise it is the task's failed_requests status, or nil when the
+// task was created. Capturing a per-task status as the case's error lets the
+// error battery record failures Cloud Tasks reports inside the operation rather
+// than as an RPC error.
+func batchCreate(build func(p Params) []*taskspb.CreateTaskRequest, index int32) func(ctx context.Context, c *Client, p Params) error {
+	return func(ctx context.Context, c *Client, p Params) error {
+		op, err := c.BatchCreateTasks(ctx, &taskspb.BatchCreateTasksRequest{
+			Parent:   p.QueuePath(),
+			Requests: build(p),
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := op.Wait(ctx); err != nil {
+			return err
+		}
+		metadata, err := op.Metadata()
+		if err != nil {
+			return err
+		}
+		if st, ok := metadata.GetFailedRequests()[index]; ok {
+			return status.ErrorProto(st)
+		}
+		return nil
+	}
+}
+
+// batchOf returns a batch builder whose requests carry the given task names,
+// each resolved against the variant's params.
+func batchOf(names ...func(p Params) string) func(p Params) []*taskspb.CreateTaskRequest {
+	return func(p Params) []*taskspb.CreateTaskRequest {
+		requests := make([]*taskspb.CreateTaskRequest, len(names))
+		for i, name := range names {
+			requests[i] = batchTaskRequest(p, name(p))
+		}
+		return requests
+	}
+}
+
+// generatedName leaves a batch task unnamed, so Cloud Tasks generates its name.
+func generatedName(Params) string { return "" }
+
+// variantTaskName names a batch task with the variant's task path.
+func variantTaskName(p Params) string { return p.TaskPath() }
 
 // Cases is the full error-state battery. Names are stable identifiers used as
 // golden keys, so do not rename casually.
@@ -507,6 +566,119 @@ func Cases() []Case {
 				_, err := c.GetTask(ctx, &taskspb.GetTaskRequest{Name: p.TaskPath()})
 				return err
 			},
+			Teardown: deleteQueue,
+		},
+
+		// --- BatchCreateTasks: the whole batch is rejected ---
+		// These capture the BatchCreateTasks RPC's own error (or its operation's),
+		// for batches that are invalid as a whole.
+		{
+			Name: "batch/create/queue-not-found", RPC: "BatchCreateTasks", Category: "queue-not-found",
+			Invoke: batchCreate(batchOf(generatedName), 0),
+		},
+		{
+			Name: "batch/create/queue-recently-deleted", RPC: "BatchCreateTasks", Category: "queue-recently-deleted",
+			Setup: func(ctx context.Context, c *Client, p Params) error {
+				if err := createQueue(ctx, c, p); err != nil {
+					return err
+				}
+				return deleteQueue(ctx, c, p)
+			},
+			Invoke: batchCreate(batchOf(generatedName), 0),
+		},
+		{
+			Name: "batch/create/empty", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(), 0),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "batch/create/too-many", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := make([]*taskspb.CreateTaskRequest, 101)
+				for i := range requests {
+					requests[i] = batchTaskRequest(p, "")
+				}
+				return requests
+			}, 0),
+			Teardown: deleteQueue,
+		},
+		{
+			// One request names a well-formed queue outside the batch's location,
+			// so the message (if it echoes that name) normalizes through the
+			// {mismatch_parent} placeholder.
+			Name: "batch/create/request-queue-mismatch", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := batchOf(generatedName, generatedName)(p)
+				requests[1].Parent = mismatchedQueueName(p)
+				return requests
+			}, 1),
+			Teardown: deleteQueue,
+		},
+		{
+			// A request with no parent: the emulator treats it as the batch's
+			// queue. Records whether real Cloud Tasks accepts it (OK) or rejects
+			// the batch.
+			Name: "batch/create/request-parent-empty", RPC: "BatchCreateTasks", Category: "batch-invalid",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := batchOf(generatedName)(p)
+				requests[0].Parent = ""
+				return requests
+			}, 0),
+			Teardown: deleteQueue,
+		},
+
+		// --- BatchCreateTasks: one task fails inside an accepted batch ---
+		// These capture the failed_requests status Cloud Tasks reports for one
+		// task, or the batch's own error if it rejects the whole batch instead.
+		{
+			Name: "batch/create/task-already-exists", RPC: "BatchCreateTasks", Category: "task-already-exists",
+			Setup: func(ctx context.Context, c *Client, p Params) error {
+				if err := createQueue(ctx, c, p); err != nil {
+					return err
+				}
+				return createTask(ctx, c, p)
+			},
+			Invoke:   batchCreate(batchOf(generatedName, variantTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			// The same name twice in one batch: records whether the second is a
+			// per-task AlreadyExists or the whole batch is rejected.
+			Name: "batch/create/duplicate-in-batch", RPC: "BatchCreateTasks", Category: "task-already-exists",
+			Setup:    createQueue,
+			Invoke:   batchCreate(batchOf(variantTaskName, variantTaskName), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "batch/create/task-invalid-name", RPC: "BatchCreateTasks", Category: "task-invalid-name",
+			Setup: createQueue,
+			Invoke: batchCreate(batchOf(generatedName, func(p Params) string {
+				return p.QueuePath() + "/tasks/not a valid id"
+			}), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "batch/create/task-queue-mismatch", RPC: "BatchCreateTasks", Category: "task-queue-mismatch",
+			Setup: createQueue,
+			Invoke: batchCreate(batchOf(generatedName, func(p Params) string {
+				other := p
+				other.QueueID = p.QueueID + "-other"
+				return other.TaskPath()
+			}), 1),
+			Teardown: deleteQueue,
+		},
+		{
+			Name: "batch/create/task-invalid-url", RPC: "BatchCreateTasks", Category: "task-invalid-url",
+			Setup: createQueue,
+			Invoke: batchCreate(func(p Params) []*taskspb.CreateTaskRequest {
+				requests := batchOf(generatedName, generatedName)(p)
+				requests[1].Task.GetHttpRequest().Url = ""
+				return requests
+			}, 1),
 			Teardown: deleteQueue,
 		},
 	}

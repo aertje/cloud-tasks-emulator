@@ -67,7 +67,7 @@ func TestBatchCreateTasksReportsFailedRequestsByIndex(t *testing.T) {
 	op, err := client.BatchCreateTasks(context.Background(), batchCreateRequest(queue.GetName(),
 		futureTask(queue.GetName()+"/tasks/first-task"),
 		futureTask(existingTask),
-		futureTask(queue.GetName()+"/tasks/invalid.task"),
+		noURLTask(),
 		futureTask(queue.GetName()+"/tasks/last-task"),
 	))
 	require.NoError(t, err)
@@ -87,10 +87,33 @@ func TestBatchCreateTasksReportsFailedRequestsByIndex(t *testing.T) {
 	assert.Equal(t, int32(grpcCodes.AlreadyExists), failed[1].GetCode())
 	assert.Regexp(t, "^Requested entity already exists", failed[1].GetMessage())
 	assert.Equal(t, int32(grpcCodes.InvalidArgument), failed[2].GetCode())
-	assert.Regexp(t, `^Task ID "invalid.task"`, failed[2].GetMessage())
+	assert.Regexp(t, "^HttpRequest.url is required", failed[2].GetMessage())
 }
 
-func TestBatchCreateTasksReportsFailedStateWhenNoTaskIsCreated(t *testing.T) {
+func TestBatchCreateTasksReportsMissingQueueInFailedOperation(t *testing.T) {
+	t.Parallel()
+	_, client := setUp(t, ServerOptions{})
+	queueName := formatQueueName(formattedParent, queueIDForTest(t))
+
+	op, err := client.BatchCreateTasks(context.Background(), batchCreateRequest(queueName, futureTask(""), futureTask("")))
+	require.NoError(t, err)
+	assert.True(t, op.Done())
+
+	_, err = op.Wait(context.Background())
+	assert.ErrorContains(t, err, "unsupported result type <nil>", "an operation that created nothing carries no result")
+
+	metadata, err := op.Metadata()
+	require.NoError(t, err)
+	assert.Equal(t, taskspb.BatchCreateTasksMetadata_FAILED, metadata.GetState())
+	failed := metadata.GetFailedRequests()
+	require.Len(t, failed, 2)
+	for _, index := range []int32{0, 1} {
+		assert.Equal(t, int32(grpcCodes.NotFound), failed[index].GetCode())
+		assert.Regexp(t, "^Queue does not exist", failed[index].GetMessage())
+	}
+}
+
+func TestBatchCreateTasksRejectsBatchWhenEveryTaskFails(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 	queue := createTestQueue(t, client)
@@ -104,85 +127,77 @@ func TestBatchCreateTasksReportsFailedStateWhenNoTaskIsCreated(t *testing.T) {
 
 	op, err := client.BatchCreateTasks(context.Background(), batchCreateRequest(queue.GetName(),
 		futureTask(existingTask),
-		futureTask(queue.GetName()+"/tasks/invalid.task"),
+		noURLTask(),
 	))
-	require.NoError(t, err)
-
-	resp, err := op.Wait(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, resp.GetTasks())
-
-	metadata, err := op.Metadata()
-	require.NoError(t, err)
-	assert.Equal(t, taskspb.BatchCreateTasksMetadata_FAILED, metadata.GetState())
-	assert.Len(t, metadata.GetFailedRequests(), 2)
-}
-
-func TestBatchCreateTasksRejectsMissingQueue(t *testing.T) {
-	t.Parallel()
-	_, client := setUp(t, ServerOptions{})
-	queueName := formatQueueName(formattedParent, queueIDForTest(t))
-
-	op, err := client.BatchCreateTasks(context.Background(), batchCreateRequest(queueName, futureTask("")))
 
 	assert.Nil(t, op)
-	assertIsGrpcError(t, "^Queue does not exist", grpcCodes.NotFound, err)
+	assertIsGrpcError(t, "^Requested entity already exists", grpcCodes.AlreadyExists, err)
+	assert.Len(t, listTaskNames(t, client, queue.GetName()), 1)
 }
 
-func TestBatchCreateTasksRejectsTooManyRequests(t *testing.T) {
+func TestBatchCreateTasksRejectsInvalidBatch(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 	queue := createTestQueue(t, client)
+	otherQueue := formatQueueName(formattedParent, "other-queue")
 
-	tasks := make([]*taskspb.Task, 101)
-	for i := range tasks {
-		tasks[i] = futureTask("")
+	tooMany := make([]*taskspb.Task, 101)
+	for i := range tooMany {
+		tooMany[i] = futureTask("")
+	}
+	withParent := func(request *taskspb.BatchCreateTasksRequest, index int, parent string) *taskspb.BatchCreateTasksRequest {
+		request.Requests[index].Parent = parent
+		return request
 	}
 
-	op, err := client.BatchCreateTasks(context.Background(), batchCreateRequest(queue.GetName(), tasks...))
+	tests := []struct {
+		name        string
+		request     *taskspb.BatchCreateTasksRequest
+		wantMessage string
+	}{
+		{
+			name:        "empty batch",
+			request:     batchCreateRequest(queue.GetName()),
+			wantMessage: `^Request must contain at least one task\.$`,
+		},
+		{
+			name:        "too many tasks",
+			request:     batchCreateRequest(queue.GetName(), tooMany...),
+			wantMessage: `^A maximum of 100 tasks can be created in a single batch, but got 101 tasks\.$`,
+		},
+		{
+			name:        "request for another queue",
+			request:     withParent(batchCreateRequest(queue.GetName(), futureTask(""), futureTask("")), 1, otherQueue),
+			wantMessage: `^All tasks in a batch request must target the same queue\. Found task for queue ` + otherQueue + ` in batch request for queue ` + queue.GetName() + `\.$`,
+		},
+		{
+			name:        "request with no queue",
+			request:     withParent(batchCreateRequest(queue.GetName(), futureTask("")), 0, ""),
+			wantMessage: `^All tasks in a batch request must target the same queue\. Found task for queue  in batch request for queue ` + queue.GetName() + `\.$`,
+		},
+		{
+			name:        "invalid task id",
+			request:     batchCreateRequest(queue.GetName(), futureTask(""), futureTask(queue.GetName()+"/tasks/invalid.task")),
+			wantMessage: `^Task ID "invalid\.task" can contain only letters`,
+		},
+		{
+			name:        "duplicate task name",
+			request:     batchCreateRequest(queue.GetName(), futureTask(queue.GetName()+"/tasks/dupe"), futureTask(queue.GetName()+"/tasks/dupe")),
+			wantMessage: `^Duplicate task name in the batch request: ` + queue.GetName() + `/tasks/dupe$`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			op, err := client.BatchCreateTasks(context.Background(), tc.request)
 
-	assert.Nil(t, op)
-	assertIsGrpcError(t, "less than or equal to 100", grpcCodes.InvalidArgument, err)
-	assert.Empty(t, listTaskNames(t, client, queue.GetName()))
+			assert.Nil(t, op)
+			assertIsGrpcError(t, tc.wantMessage, grpcCodes.InvalidArgument, err)
+		})
+	}
+	assert.Empty(t, listTaskNames(t, client, queue.GetName()), "a rejected batch must create nothing")
 }
 
-func TestBatchCreateTasksRejectsEmptyBatch(t *testing.T) {
-	t.Parallel()
-	_, client := setUp(t, ServerOptions{})
-	queue := createTestQueue(t, client)
-
-	request := batchCreateRequest(queue.GetName())
-	request.RequestId = "c9bf9e57-1685-4c89-bafb-ff5af830be8a"
-
-	op, err := client.BatchCreateTasks(context.Background(), request)
-
-	assert.Nil(t, op)
-	assertIsGrpcError(t, "requests is required", grpcCodes.InvalidArgument, err)
-
-	request.Requests = batchCreateRequest(queue.GetName(), futureTask("")).GetRequests()
-	op, err = client.BatchCreateTasks(context.Background(), request)
-	require.NoError(t, err)
-	resp, err := op.Wait(context.Background())
-	require.NoError(t, err)
-	assert.Len(t, resp.GetTasks(), 1)
-}
-
-func TestBatchCreateTasksRejectsRequestForOtherQueue(t *testing.T) {
-	t.Parallel()
-	_, client := setUp(t, ServerOptions{})
-	queue := createTestQueue(t, client)
-
-	request := batchCreateRequest(queue.GetName(), futureTask(""), futureTask(""))
-	request.Requests[1].Parent = formatQueueName(formattedParent, "other-queue")
-
-	op, err := client.BatchCreateTasks(context.Background(), request)
-
-	assert.Nil(t, op)
-	assertIsGrpcError(t, "must be the same as the queue name of the batch", grpcCodes.InvalidArgument, err)
-	assert.Empty(t, listTaskNames(t, client, queue.GetName()))
-}
-
-func TestBatchCreateTasksDeduplicatesRequestID(t *testing.T) {
+func TestBatchCreateTasksRejectsRepeatedRequestID(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
 	queue := createTestQueue(t, client)
@@ -192,16 +207,11 @@ func TestBatchCreateTasksDeduplicatesRequestID(t *testing.T) {
 
 	first, err := client.BatchCreateTasks(context.Background(), request)
 	require.NoError(t, err)
-	firstResp, err := first.Wait(context.Background())
+	_, err = first.Wait(context.Background())
 	require.NoError(t, err)
 
-	retried, err := client.BatchCreateTasks(context.Background(), request)
-	require.NoError(t, err)
-	retriedResp, err := retried.Wait(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, first.Name(), retried.Name())
-	assert.Equal(t, taskNames(firstResp.GetTasks()), taskNames(retriedResp.GetTasks()))
+	_, err = client.BatchCreateTasks(context.Background(), request)
+	assertIsGrpcError(t, "^Duplicate operation id in the batch request: "+request.RequestId+"$", grpcCodes.InvalidArgument, err)
 	assert.Len(t, listTaskNames(t, client, queue.GetName()), 2)
 
 	request.RequestId = "6f9619ff-8b86-4d01-b42d-00c04fc964ff"
@@ -221,73 +231,44 @@ func TestBatchCreateTasksRunsConcurrentRequestIDOnce(t *testing.T) {
 	request.RequestId = "9b2f6a4e-3c1d-4f8a-b5e7-2d6c8a1f0e93"
 
 	const callers = 8
-	names := make([]string, callers)
 	errs := make([]error, callers)
 	var wg sync.WaitGroup
 	for i := range callers {
 		wg.Go(func() {
-			op, err := client.BatchCreateTasks(context.Background(), request)
-			errs[i] = err
-			if err == nil {
-				names[i] = op.Name()
-			}
+			_, errs[i] = client.BatchCreateTasks(context.Background(), request)
 		})
 	}
 	wg.Wait()
 
-	for i := range callers {
-		require.NoError(t, errs[i])
-		assert.Equal(t, names[0], names[i])
+	succeeded := 0
+	for _, err := range errs {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		assertIsGrpcError(t, "^Duplicate operation id in the batch request", grpcCodes.InvalidArgument, err)
 	}
+	assert.Equal(t, 1, succeeded)
 	assert.Len(t, listTaskNames(t, client, queue.GetName()), 2)
 }
 
-func TestBatchCreateTasksRetriesRequestIDAfterFailure(t *testing.T) {
+func TestBatchCreateTasksReleasesRequestIDOfRejectedBatch(t *testing.T) {
 	t.Parallel()
 	_, client := setUp(t, ServerOptions{})
-	queueName := formatQueueName(formattedParent, queueIDForTest(t))
+	queue := createTestQueue(t, client)
 
-	request := batchCreateRequest(queueName, futureTask(""))
+	request := batchCreateRequest(queue.GetName(), futureTask(queue.GetName()+"/tasks/invalid.task"))
 	request.RequestId = "4c8e2b7a-1f3d-4a6b-9e5c-7d2a8f1b3c64"
 
 	_, err := client.BatchCreateTasks(context.Background(), request)
-	assertIsGrpcError(t, "^Queue does not exist", grpcCodes.NotFound, err)
+	assertIsGrpcError(t, "^Task ID", grpcCodes.InvalidArgument, err)
 
-	createTestQueue(t, client)
-
+	request.Requests = batchCreateRequest(queue.GetName(), futureTask("")).GetRequests()
 	op, err := client.BatchCreateTasks(context.Background(), request)
 	require.NoError(t, err)
 	resp, err := op.Wait(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, resp.GetTasks(), 1)
-}
-
-func TestBatchCreateTasksReturnsStoredOperationAfterQueueDeleted(t *testing.T) {
-	t.Parallel()
-	_, client := setUp(t, ServerOptions{})
-	queue := createTestQueue(t, client)
-
-	request := batchCreateRequest(queue.GetName(), futureTask(""))
-	request.RequestId = "0f8fad5b-d9cb-469f-a165-70867728950e"
-
-	first, err := client.BatchCreateTasks(context.Background(), request)
-	require.NoError(t, err)
-	firstResp, err := first.Wait(context.Background())
-	require.NoError(t, err)
-
-	require.NoError(t, client.DeleteQueue(context.Background(), &taskspb.DeleteQueueRequest{Name: queue.GetName()}))
-
-	retried, err := client.BatchCreateTasks(context.Background(), request)
-	require.NoError(t, err)
-	retriedResp, err := retried.Wait(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, first.Name(), retried.Name())
-	assert.Equal(t, taskNames(firstResp.GetTasks()), taskNames(retriedResp.GetTasks()))
-
-	request.RequestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
-	_, err = client.BatchCreateTasks(context.Background(), request)
-	assertIsGrpcError(t, "^Queue does not exist", grpcCodes.NotFound, err)
 }
 
 func TestGetBatchCreateTasksOperation(t *testing.T) {
@@ -332,6 +313,13 @@ func futureTask(name string) *taskspb.Task {
 			HttpRequest: &taskspb.HttpRequest{Url: "http://localhost/success"},
 		},
 	}
+}
+
+// noURLTask returns an HTTP task with no URL, which CreateTask rejects per task.
+func noURLTask() *taskspb.Task {
+	task := futureTask("")
+	task.GetHttpRequest().Url = ""
+	return task
 }
 
 func batchCreateRequest(queueName string, tasks ...*taskspb.Task) *taskspb.BatchCreateTasksRequest {

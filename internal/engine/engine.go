@@ -686,24 +686,11 @@ func (e *Engine) fetchQueueForTasks(parent string) (*Queue, error) {
 // which must be the live queue named parent. It holds the CreateTask logic
 // shared with BatchCreateTasks, which looks its queue up once for the batch.
 func (e *Engine) createTaskInQueue(queue *Queue, parent string, ts TaskState) (*Task, TaskState, error) {
-	if ts.Name != "" {
-		// If a name is specified, it must be structurally a task resource name,
-		// its task ID must be valid, it must belong to this queue, and it must
-		// be unique. A malformed name and a well-formed name carrying an illegal
-		// task ID are distinct errors (real Cloud Tasks reports them differently).
-		parts, structured := parseTaskName(ts.Name)
-		if !structured {
-			return nil, TaskState{}, ErrInvalidTaskName
-		}
-		if !isValidTaskID(parts.taskId) {
-			return nil, TaskState{}, ErrInvalidTaskID
-		}
-		if !strings.HasPrefix(ts.Name, parent+"/tasks/") {
-			return nil, TaskState{}, ErrTaskQueueMismatch
-		}
-		// Uniqueness and the recently-deleted cooldown are enforced atomically at
-		// insertTaskIfAbsent below, together with the insert, so two concurrent
-		// creates cannot both reserve the same name.
+	// Uniqueness and the recently-deleted cooldown are enforced atomically at
+	// insertTaskIfAbsent below, together with the insert, so two concurrent
+	// creates cannot both reserve the same name.
+	if err := validateTaskName(parent, ts.Name); err != nil {
+		return nil, TaskState{}, err
 	}
 
 	// Cloud Tasks validates an HTTP-target task's URL at create time, but only
@@ -746,6 +733,29 @@ func (e *Engine) createTaskInQueue(queue *Queue, parent string, ts TaskState) (*
 	queue.admitTask(task)
 	queue.logger.Debug("task received", "task", frozen.Name, "queue", parent)
 	return task, frozen, nil
+}
+
+// validateTaskName checks a task name supplied for a create on the queue named
+// parent. An empty name is valid: the task's name is generated. Otherwise it
+// must be structurally a task resource name, its task ID must be valid, and it
+// must belong to this queue. A malformed name and a well-formed name carrying
+// an illegal task ID are distinct errors (real Cloud Tasks reports them
+// differently).
+func validateTaskName(parent, name string) error {
+	if name == "" {
+		return nil
+	}
+	parts, structured := parseTaskName(name)
+	if !structured {
+		return ErrInvalidTaskName
+	}
+	if !isValidTaskID(parts.taskId) {
+		return ErrInvalidTaskID
+	}
+	if !strings.HasPrefix(name, parent+"/tasks/") {
+		return ErrTaskQueueMismatch
+	}
+	return nil
 }
 
 // insertTaskIfAbsent atomically reserves task's name in the live task registry:

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -298,7 +299,9 @@ func batchCreateTasksFromProto(in *tasks.BatchCreateTasksRequest) []engine.Batch
 // is reported in the metadata's failed_requests under its index, with the
 // status CreateTask would have returned for it. The metadata state is
 // SUCCEEDED when every task is created, PARTIALLY_SUCCEEDED when some are, and
-// FAILED when none are.
+// FAILED when none are. Like real Cloud Tasks (see conformance case
+// batch/queue-not-found), an operation that created nothing carries no result
+// at all - neither a response nor an error.
 func batchCreateOperationToProto(name string, in *tasks.BatchCreateTasksRequest, result engine.BatchCreateTasksResult) (*longrunningpb.Operation, error) {
 	response := &tasks.BatchCreateTasksResponse{}
 	failed := map[int32]*rpcstatus.Status{}
@@ -326,25 +329,24 @@ func batchCreateOperationToProto(name string, in *tasks.BatchCreateTasksRequest,
 		FailedRequests: failed,
 	}
 
-	responseAny, err := anypb.New(response)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "marshal batch create response: %v", err)
-	}
 	metadataAny, err := anypb.New(metadata)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal batch create metadata: %v", err)
 	}
-	return &longrunningpb.Operation{
-		Name:     name,
-		Metadata: metadataAny,
-		Done:     true,
-		Result:   &longrunningpb.Operation_Response{Response: responseAny},
-	}, nil
+	op := &longrunningpb.Operation{Name: name, Metadata: metadataAny, Done: true}
+	if len(response.Tasks) > 0 {
+		responseAny, err := anypb.New(response)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "marshal batch create response: %v", err)
+		}
+		op.Result = &longrunningpb.Operation_Response{Response: responseAny}
+	}
+	return op, nil
 }
 
 // batchTaskRequest returns the i-th request of a batch as the CreateTaskRequest
-// the engine ran for it. Its parent is the batch's queue, which is what an
-// empty request parent defaults to and what CreateTask error messages name.
+// the engine ran for it. Its parent is the batch's queue, which every request
+// of an accepted batch names, and which CreateTask error messages name.
 func batchTaskRequest(in *tasks.BatchCreateTasksRequest, i int) *tasks.CreateTaskRequest {
 	req := in.GetRequests()[i]
 	return &tasks.CreateTaskRequest{
@@ -499,13 +501,11 @@ func mapErr(err error) error {
 		return status.Errorf(codes.InvalidArgument, "HttpRequest.url is required.")
 	case engine.ErrHTTPRequestURLScheme:
 		return status.Errorf(codes.InvalidArgument, "HttpTarget.url must start with 'http://' or 'https://'.")
-	// The batch-shape messages are not verified against real Cloud Tasks: no
-	// conformance case records them yet. The queue-mismatch sentinel is mapped
-	// in mapErrForBatchCreateTasks: its message interpolates the request.
+	// Verified against the batch/create/empty case in
+	// conformance/golden/errors.json. The other batch sentinels are mapped in
+	// mapErrForBatchCreateTasks: their messages interpolate the request.
 	case engine.ErrBatchEmpty:
-		return status.Errorf(codes.InvalidArgument, "BatchCreateTasksRequest.requests is required.")
-	case engine.ErrBatchTooLarge:
-		return status.Errorf(codes.InvalidArgument, "The number of requests must be less than or equal to %d.", engine.MaxBatchCreateTasks)
+		return status.Errorf(codes.InvalidArgument, "Request must contain at least one task.")
 	case errOperationNotFound:
 		// The server's operation registry, not the engine, reports this one.
 		return status.Errorf(codes.NotFound, "Requested entity was not found.")
@@ -595,30 +595,39 @@ func mapErrForCreateTask(err error, in *tasks.CreateTaskRequest) error {
 	return mapErr(err)
 }
 
-// BatchCreateTasks needs the request to interpolate the queue-mismatch
-// message, which names the first request whose queue differs from the batch's,
-// and the batch's queue. Every other batch error maps as in mapErr.
+// BatchCreateTasks needs the request to interpolate most of its messages,
+// which are verified against the batch/create/* cases in
+// conformance/golden/errors.json. A *engine.BatchTaskError names the task that
+// made the batch invalid: a queue mismatch or duplicate name interpolates that
+// task's request, and any other task error maps as CreateTask would for it.
 func mapErrForBatchCreateTasks(err error, in *tasks.BatchCreateTasksRequest) error {
+	var taskErr *engine.BatchTaskError
+	if errors.As(err, &taskErr) {
+		req := in.GetRequests()[taskErr.Index]
+		switch taskErr.Err {
+		case engine.ErrBatchQueueMismatch:
+			return status.Errorf(codes.InvalidArgument,
+				"All tasks in a batch request must target the same queue. Found task for queue %s in batch request for queue %s.",
+				req.GetParent(),
+				in.GetParent(),
+			)
+		case engine.ErrBatchDuplicateTaskName:
+			return status.Errorf(codes.InvalidArgument, "Duplicate task name in the batch request: %s", req.GetTask().GetName())
+		}
+		return mapErrForCreateTask(taskErr.Err, batchTaskRequest(in, taskErr.Index))
+	}
+
 	switch err {
-	case engine.ErrBatchQueueMismatch:
+	case engine.ErrBatchTooLarge:
 		return status.Errorf(codes.InvalidArgument,
-			"The queue name from request ('%s') must be the same as the queue name of the batch ('%s').",
-			mismatchedBatchParent(in),
-			in.GetParent(),
+			"A maximum of %d tasks can be created in a single batch, but got %d tasks.",
+			engine.MaxBatchCreateTasks,
+			len(in.GetRequests()),
 		)
+	case errDuplicateRequestID:
+		return status.Errorf(codes.InvalidArgument, "Duplicate operation id in the batch request: %s", in.GetRequestId())
 	}
 	return mapErr(err)
-}
-
-// mismatchedBatchParent returns the first request parent in a batch that names
-// a queue other than the batch's, or "" if there is none.
-func mismatchedBatchParent(in *tasks.BatchCreateTasksRequest) string {
-	for _, req := range in.GetRequests() {
-		if req.GetParent() != "" && req.GetParent() != in.GetParent() {
-			return req.GetParent()
-		}
-	}
-	return ""
 }
 
 // scheduleTimeErrorZone is the zone real Cloud Tasks renders the offending

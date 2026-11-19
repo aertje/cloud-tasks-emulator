@@ -20,6 +20,7 @@ import (
 const (
 	errorsGoldenPath    = "golden/errors.json"
 	happyPathGoldenPath = "golden/happypath.json"
+	batchGoldenPath     = "golden/batch.json"
 	dispatchGoldenPath  = "golden/dispatch.json"
 )
 
@@ -111,6 +112,46 @@ func TestEmulatorHappyPath(t *testing.T) {
 	})
 
 	for _, d := range conformance.CompareHappyPath(golden, snaps) {
+		t.Errorf("%s", d.String())
+	}
+}
+
+// TestEmulatorBatch replays the BatchCreateTasks battery against the emulator
+// and asserts what each batch reports - operation shape, metadata state,
+// created and failed tasks, request_id replay - matches the golden recorded
+// from the real API (see RunBatch for what each observation probes).
+//
+//	go test -tags conformance ./test/conformance/
+//
+// Skips if the batch golden is absent (record it with
+// `cmd/record -kind=batch -target=real`).
+func TestEmulatorBatch(t *testing.T) {
+	if _, err := os.Stat(batchGoldenPath); os.IsNotExist(err) {
+		t.Skipf("no batch golden at %s; record it with cmd/record -kind=batch -target=real", batchGoldenPath)
+	}
+	golden, err := conformance.LoadBatch(batchGoldenPath)
+	if err != nil {
+		t.Fatalf("load batch golden: %v", err)
+	}
+
+	addr := startEmulator(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	client, err := conformance.NewEmulatorClient(ctx, addr)
+	if err != nil {
+		t.Fatalf("dial emulator: %v", err)
+	}
+	defer client.Close()
+
+	snaps := conformance.RunBatch(ctx, client, conformance.RunOptions{
+		Project:  "conformance-test",
+		Location: "us-central1",
+		Prefix:   "emu",
+	})
+
+	for _, d := range conformance.CompareBatch(golden, snaps) {
 		t.Errorf("%s", d.String())
 	}
 }

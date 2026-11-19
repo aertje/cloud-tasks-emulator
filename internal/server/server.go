@@ -175,21 +175,23 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 
 // BatchCreateTasks creates up to 100 tasks in the same queue
 func (s *Server) BatchCreateTasks(ctx context.Context, in *tasks.BatchCreateTasksRequest) (*longrunningpb.Operation, error) {
-	pending, started := s.operations.start(in.GetParent(), in.GetRequestId())
-	if !started {
-		return pending.wait(ctx)
+	if err := s.operations.reserveRequestID(in.GetParent(), in.GetRequestId()); err != nil {
+		return nil, mapErrForBatchCreateTasks(err, in)
 	}
 
 	result, err := s.engine.BatchCreateTasks(ctx, in.GetParent(), batchCreateTasksFromProto(in))
 	if err != nil {
-		err = mapErrForBatchCreateTasks(err, in)
-		s.operations.finish(pending, nil, err)
-		return nil, err
+		s.operations.releaseRequestID(in.GetParent(), in.GetRequestId())
+		return nil, mapErrForBatchCreateTasks(err, in)
 	}
 
 	op, err := batchCreateOperationToProto(newOperationName(in.GetParent()), in, result)
-	s.operations.finish(pending, op, err)
-	return op, err
+	if err != nil {
+		s.operations.releaseRequestID(in.GetParent(), in.GetRequestId())
+		return nil, err
+	}
+	s.operations.add(op)
+	return op, nil
 }
 
 // BatchDeleteTasks deletes a batch of tasks (not implemented yet)

@@ -661,14 +661,31 @@ func (e *Engine) CreateTask(ctx context.Context, parent string, ts TaskState) (*
 	if err := ctx.Err(); err != nil {
 		return nil, TaskState{}, err
 	}
-	queue, ok := e.fetchQueue(parent)
-	if !ok {
-		if e.queueRecentlyDeleted(parent) {
-			return nil, TaskState{}, ErrQueueRecentlyDeleted
-		}
-		return nil, TaskState{}, ErrQueueNotFound
+	queue, err := e.fetchQueueForTasks(parent)
+	if err != nil {
+		return nil, TaskState{}, err
 	}
+	return e.createTaskInQueue(queue, parent, ts)
+}
 
+// fetchQueueForTasks returns the queue tasks are being created on, or the
+// error a task create reports when it is missing: recently-deleted while the
+// name's cooldown is active, not-found otherwise.
+func (e *Engine) fetchQueueForTasks(parent string) (*Queue, error) {
+	queue, ok := e.fetchQueue(parent)
+	if ok {
+		return queue, nil
+	}
+	if e.queueRecentlyDeleted(parent) {
+		return nil, ErrQueueRecentlyDeleted
+	}
+	return nil, ErrQueueNotFound
+}
+
+// createTaskInQueue validates ts, then builds, reserves and admits it on queue,
+// which must be the live queue named parent. It holds the CreateTask logic
+// shared with BatchCreateTasks, which looks its queue up once for the batch.
+func (e *Engine) createTaskInQueue(queue *Queue, parent string, ts TaskState) (*Task, TaskState, error) {
 	if ts.Name != "" {
 		// If a name is specified, it must be structurally a task resource name,
 		// its task ID must be valid, it must belong to this queue, and it must

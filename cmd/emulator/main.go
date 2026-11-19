@@ -146,7 +146,7 @@ func main() {
 	slog.Info("starting cloud tasks emulator", "host", *host, "port", *port)
 
 	grpcServer := grpc.NewServer()
-	tasks.RegisterCloudTasksServer(grpcServer, emulatorServer)
+	emulatorServer.Register(grpcServer)
 
 	for _, queueName := range initialQueues {
 		createInitialQueue(emulatorServer, queueName)

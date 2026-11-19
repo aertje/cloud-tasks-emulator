@@ -7,6 +7,8 @@ import (
 
 	tasks "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -17,9 +19,13 @@ import (
 type ServerOptions = engine.Options
 
 // Server is the gRPC CloudTasksServer implementation. It is a thin handler that
-// translates proto requests and responses on/off the engine.
+// translates proto requests and responses on/off the engine. The one piece of
+// state it keeps is the registry of long-running operations returned by the
+// batch RPCs, which it also serves as the google.longrunning.Operations
+// service; see Register.
 type Server struct {
-	engine *engine.Engine
+	engine     *engine.Engine
+	operations *operationRegistry
 
 	// Options records the options the server was built with. They are consumed by
 	// the engine at construction, so mutating this field afterwards has no effect.
@@ -29,9 +35,17 @@ type Server struct {
 // NewServer creates a new emulator server, backed by its own engine, configured
 // with the given options. Pass the zero ServerOptions for defaults.
 func NewServer(opts ServerOptions) *Server {
-	s := &Server{Options: opts}
+	s := &Server{Options: opts, operations: newOperationRegistry()}
 	s.engine = engine.New(&s.Options)
 	return s
+}
+
+// Register registers the server on a gRPC server: the CloudTasks service, and
+// the google.longrunning.Operations service clients poll for the operations
+// the batch RPCs return.
+func (s *Server) Register(registrar grpc.ServiceRegistrar) {
+	tasks.RegisterCloudTasksServer(registrar, s)
+	longrunningpb.RegisterOperationsServer(registrar, &operationsServer{operations: s.operations})
 }
 
 // Stop cancels all engine queues and tasks so no background goroutine outlives
@@ -157,6 +171,40 @@ func (s *Server) CreateTask(ctx context.Context, in *tasks.CreateTaskRequest) (*
 		return nil, mapErrForCreateTask(err, in)
 	}
 	return taskToProto(frozen, in.GetResponseView()), nil
+}
+
+// BatchCreateTasks creates up to 100 tasks in the same queue
+func (s *Server) BatchCreateTasks(ctx context.Context, in *tasks.BatchCreateTasksRequest) (*longrunningpb.Operation, error) {
+	pending, started := s.operations.start(in.GetParent(), in.GetRequestId())
+	if !started {
+		return pending.wait(ctx)
+	}
+
+	result, err := s.engine.BatchCreateTasks(ctx, in.GetParent(), batchCreateTasksFromProto(in))
+	if err != nil {
+		err = mapErrForBatchCreateTasks(err, in)
+		s.operations.finish(pending, nil, err)
+		return nil, err
+	}
+
+	op, err := batchCreateOperationToProto(newOperationName(in.GetParent()), in, result)
+	s.operations.finish(pending, op, err)
+	return op, err
+}
+
+// BatchDeleteTasks deletes a batch of tasks (not implemented yet)
+func (s *Server) BatchDeleteTasks(ctx context.Context, in *tasks.BatchDeleteTasksRequest) (*longrunningpb.Operation, error) {
+	return nil, mapErr(engine.ErrUnimplemented)
+}
+
+// GetCmekConfig returns the CMEK config of a location (not implemented yet)
+func (s *Server) GetCmekConfig(ctx context.Context, in *tasks.GetCmekConfigRequest) (*tasks.CmekConfig, error) {
+	return nil, mapErr(engine.ErrUnimplemented)
+}
+
+// UpdateCmekConfig updates the CMEK config of a location (not implemented yet)
+func (s *Server) UpdateCmekConfig(ctx context.Context, in *tasks.UpdateCmekConfigRequest) (*tasks.CmekConfig, error) {
+	return nil, mapErr(engine.ErrUnimplemented)
 }
 
 // DeleteTask removes an existing task
